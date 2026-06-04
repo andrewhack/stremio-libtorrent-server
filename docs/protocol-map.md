@@ -114,3 +114,38 @@ torrents. Low priority; many torrents aren't archived. Defer unless fixtures sho
 Capture **response bodies** (shape ⏳) for: `/settings`, `/network-info`, `/device-info`,
 `/:hash/:idx/stats.json`, `/hwaccel-profiler`, `/hlsv2/probe`, a `master.m3u8` + `video0.m3u8`,
 and the Range response headers of `/:hash/:idx`. These become the conformance fixtures.
+
+---
+
+## Captured shapes (Task 0.3 — first pass)
+
+Fixtures in `tests/fixtures/`. **Confirmed:**
+
+- `GET /settings` → `{"options":[…UI descriptors…], "values":{…}, "baseUrl":"http://<ip>:11470"}`.
+  `values` keys include: `serverVersion, appPath, cacheRoot, cacheSize, btMaxConnections,
+  btHandshakeTimeout, btRequestTimeout, btDownloadSpeedSoftLimit, btDownloadSpeedHardLimit,
+  btMinPeersForStable, remoteHttps, localAddonEnabled, transcodeHorsepower, transcodeMaxBitRate,
+  transcodeConcurrency, transcodeTrackConcurrency, transcodeHardwareAccel, transcodeProfile,
+  allTranscodeProfiles, transcodeMaxWidth, proxyStreamsEnabled, btProfile`.
+  **Our `/settings` must return all three keys (`options`/`values`/`baseUrl`), not a flat dict.**
+- `GET /network-info` → `{"availableInterfaces":["<ip>", …]}`.
+- `GET /device-info` → `{"availableHardwareAccelerations":["nvenc-linux","vaapi-renderD128", …]}`.
+- `GET /stats.json` (idle) → `{}`.
+- `GET /casting/` → `[]` (array).
+- `GET /opensubHash?videoUrl=…` → `{"error":null,"result":{"size":<bytes>,"hash":"<16hex>"}}`.
+- `GET /:hash/:idx` (Range) → `206 Partial Content` with `Accept-Ranges: bytes`,
+  `Content-Range: bytes A-B/TOTAL`, `Content-Type: <per-file>`, plus DLNA headers
+  (`transferMode.dlna.org: Streaming`, `contentFeatures.dlna.org: …`), `Connection: keep-alive`.
+
+**Corrections to the route table:**
+- `/status` is **404 at top level** (`Cannot GET /status`) — the line-75852 route lives in a
+  sub-router, not the root. Do **not** implement top-level `/status`.
+
+**Still ⏳ (recapture needed):**
+- `/:hash/stats.json` & `/:hash/:idx/stats.json` — first pass returned `null` (no active engine).
+  Re-capture against a torrent whose **index 0 is the video**, after ~15–20 s with peers, to get
+  the populated object (fields like `downloaded`, `downloadSpeed`, `peers`, `unchoked`).
+- `hlsv2` playlists (`master/video0/audio0.m3u8`, `init.mp4`, a segment) — first pass caught a
+  destroyed converter (`MasterConverter is destroyed`). Re-capture **during live playback**.
+- `/hwaccel-profiler` — first pass caught the flaky failure (`No viable…`); capture a success too
+  (informational only — our server controls HW detection).
