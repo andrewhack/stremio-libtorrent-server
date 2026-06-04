@@ -1,0 +1,12 @@
+HTTP/1.1 206 Partial Content
+transferMode.dlna.org: Streaming
+contentFeatures.dlna.org: DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=017000 00000000000000000000000000
+Accept-Ranges: bytes
+Content-Type: text/plain
+Cache-Control: max-age=0, no-cache
+Content-Length: 33
+Content-Range: bytes 0-32/33
+Date: Thu, 04 Jun 2026 12:09:41 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
