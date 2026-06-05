@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from stremiosrv import health
 from stremiosrv.api import casting, handshake, hls, playback, subs
@@ -14,6 +15,10 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     """
     settings = settings or Settings()
     app = FastAPI(title="stremio-libtorrent-server")
+    # Stremio runs the stock server with NO_CORS=1; mirror that so web/cast clients can call it.
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    )
     app.state.settings = settings
     app.state.engine = engine
     app.state.converter = converter
