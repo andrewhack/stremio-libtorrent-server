@@ -17,7 +17,7 @@ def file_disk_path(save_path: str, handle, idx: int) -> str:
 
 def wait_and_read(
     save_path: str, handle, idx: int, start: int, end: int,
-    timeout: float = 30.0, chunk: int = 262144, window: int = 32, step_ms: int = 60,
+    timeout: float = 30.0, chunk: int = 262144, window: int = 64, step_ms: int = 50,
 ) -> Iterator[bytes]:
     """Yield bytes [start, end] (inclusive, file-relative) of file `idx`, blocking per chunk
     until the covering piece is available. Raises TimeoutError if a piece never arrives.

@@ -67,15 +67,34 @@ class Handle:
 
 
 class Engine:
-    def __init__(self, listen_port: int, cache_root: str, max_connections: int = 200) -> None:
+    def __init__(self, listen_port: int, cache_root: str, max_connections: int = 400) -> None:
         self._ses = lt.session({
             "listen_interfaces": f"0.0.0.0:{listen_port}",  # INBOUND listener (stock server lacks this)
             "enable_dht": True,
             "enable_lsd": True,
             "enable_upnp": True,
             "enable_natpmp": True,
-            "connections_limit": max_connections,
             "download_rate_limit": 0,
+            "upload_rate_limit": 0,
+            # Streaming-tuned (mirrors the stock server's "ultra_fast" profile): ramp peers fast,
+            # keep deep request queues, prefer TCP, suggest from read cache.
+            "connections_limit": max_connections,
+            "connection_speed": 500,
+            "request_queue_time": 1,
+            "max_out_request_queue": 1500,
+            "max_allowed_in_request_queue": 2000,
+            "whole_pieces_threshold": 5,
+            "peer_connect_timeout": 2,
+            "piece_timeout": 10,
+            "aio_threads": 8,
+            "send_buffer_watermark": 4194304,
+            "suggest_mode": 1,            # suggest_read_cache
+            "mixed_mode_algorithm": 0,    # prefer_tcp
+            "active_downloads": -1,
+            "active_limit": -1,
+            "announce_to_all_trackers": True,
+            "announce_to_all_tiers": True,
+            "allow_multiple_connections_per_ip": True,
         })
         self._cache_root = cache_root
         self._torrents: dict[str, Handle] = {}
