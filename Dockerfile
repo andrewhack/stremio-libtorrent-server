@@ -10,15 +10,16 @@ WORKDIR /srv/app
 # Dependency metadata first (better layer caching), then source.
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
+COPY docker ./docker
 # Pin Python 3.12: libtorrent 2.0.11 only publishes cp312/cp313 wheels (no 3.14).
-RUN uv sync --no-dev --python 3.12
+RUN uv sync --no-dev --python 3.12 && chmod +x docker/entrypoint.sh
 
 ENV STREMIOSRV_CACHE_ROOT=/root/.stremio-server
 ENV PATH="/srv/app/.venv/bin:${PATH}"
 
-# 11470 = streaming-server API (proxied by nginx in production); 6881 = BitTorrent peer port.
+# 11470 = HTTP API; 12470 = HTTPS (nginx TLS, if a cert is mounted); 6881 = BitTorrent peer port.
 EXPOSE 11470 12470 6881
 VOLUME ["/root/.stremio-server"]
 
-CMD ["/srv/app/.venv/bin/uvicorn", "stremiosrv.app:build_app", "--factory", \
-     "--host", "0.0.0.0", "--port", "11470"]
+# Entrypoint runs uvicorn (http) + nginx TLS (https, when a cert is present).
+CMD ["/srv/app/docker/entrypoint.sh"]
