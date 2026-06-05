@@ -7,6 +7,10 @@ router = APIRouter()
 def settings(request: Request) -> dict:
     """Streaming-server settings. Shape per docs/protocol-map.md: {options, values, baseUrl}."""
     s = request.app.state.settings
+    # Reflect how the client actually reached us (works behind the nginx TLS front, which sets
+    # X-Forwarded-Proto/Host) so remote clients build stream URLs against the right origin.
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or f"127.0.0.1:{s.http_port}"
     return {
         "options": [],  # UI option descriptors; not required for playback
         "values": {
@@ -29,7 +33,7 @@ def settings(request: Request) -> dict:
             "proxyStreamsEnabled": False,
             "btProfile": "default",
         },
-        "baseUrl": f"http://127.0.0.1:{s.http_port}",
+        "baseUrl": f"{proto}://{host}",
     }
 
 

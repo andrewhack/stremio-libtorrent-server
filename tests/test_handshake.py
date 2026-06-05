@@ -11,6 +11,12 @@ def test_settings_shape():
     assert b["values"]["cacheRoot"].endswith(".stremio-server")
 
 
+def test_base_url_reflects_request():
+    c = TestClient(create_app())
+    b = c.get("/settings", headers={"x-forwarded-proto": "https", "host": "example.com:12470"}).json()
+    assert b["baseUrl"] == "https://example.com:12470"
+
+
 def test_network_and_device_info():
     c = TestClient(create_app())
     assert "availableInterfaces" in c.get("/network-info").json()
