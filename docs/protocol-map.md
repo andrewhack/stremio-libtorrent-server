@@ -168,6 +168,9 @@ SANITIZED — placeholder infoHash/name, redacted peer IPs):
 > drives DHT+tracker discovery. Our libtorrent impl must populate `peers/unchoked/swarmConnections/
 > downloaded/downloadSpeed`, `files[]` (path/name/length/offset), and `wires[]` (per-peer).
 > Peer-ID masquerades as Azureus (`-AZ5340-`).
+>
+> **`GET /:infoHash/:idx/stats.json`** = same object **plus** the per-file fields
+> `streamProgress` (0..1), `streamName` (the selected file's name), `streamLen` (bytes).
 
 **CONFIRMED — `GET /hlsv2/:id/:track.m3u8` media playlist** (Stage 3 contract; fMP4/CMAF):
 ```m3u8
