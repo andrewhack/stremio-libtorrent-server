@@ -17,27 +17,29 @@ def file_disk_path(save_path: str, handle, idx: int) -> str:
 
 def wait_and_read(
     save_path: str, handle, idx: int, start: int, end: int,
-    timeout: float = 30.0, chunk: int = 262144, window: int = 64, step_ms: int = 50,
+    timeout: float = 30.0, chunk: int = 262144, window_bytes: int = 50_331_648, step_ms: int = 50,
 ) -> Iterator[bytes]:
     """Yield bytes [start, end] (inclusive, file-relative) of file `idx`, blocking per chunk
     until the covering piece is available. Raises TimeoutError if a piece never arrives.
 
-    Maintains a sliding window of piece *deadlines* ahead of the read position so libtorrent
-    fetches the playhead region urgently and in order, regardless of where in the file we are."""
+    Maintains a sliding window of boosted+deadlined pieces ahead of the read position. The window
+    is a fixed *byte budget* (not a piece count) so on big torrents with large pieces it stays a
+    tight ~50 MiB region — a seek rushes the first piece at the target instead of spreading
+    bandwidth over ~1 GB."""
     plen = handle.piece_length()
     base = handle.file_offset(idx)
     path = file_disk_path(save_path, handle, idx)
     total = handle.num_pieces()
+    window = max(4, min(total, window_bytes // plen))  # pieces, derived from the byte budget
     pos = start
-    deadlined_to = (base + start) // plen - 1  # last piece we've already set a deadline on
+    deadlined_to = (base + start) // plen - 1  # last piece we've already boosted
     while pos <= end:
         gp = (base + pos) // plen  # global piece index for the current byte position
-        # Slide the deadline window forward so upcoming pieces are rushed in order.
+        # Slide the boost window forward so upcoming pieces are rushed in order.
         far = min(gp + window, total - 1)
         while deadlined_to < far:
             deadlined_to += 1
-            handle.prioritize_pieces([deadlined_to], 7)  # window is the only thing downloading
-            handle.set_piece_deadline(deadlined_to, max(0, deadlined_to - gp) * step_ms)
+            handle.boost_piece(deadlined_to, max(0, deadlined_to - gp) * step_ms)
         deadline = time.time() + timeout
         while not handle.have_piece(gp) and time.time() < deadline:
             time.sleep(0.2)

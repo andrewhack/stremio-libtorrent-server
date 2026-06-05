@@ -5,7 +5,6 @@ from fastapi.responses import StreamingResponse
 
 from stremiosrv.stream.fileserver import wait_and_read
 from stremiosrv.stream.ranges import parse_range
-from stremiosrv.torrent.picker import priority_plan
 
 router = APIRouter()
 
@@ -89,7 +88,7 @@ def remove(info_hash: str, request: Request) -> dict:
 
 @router.api_route("/{info_hash}/{idx:int}", methods=["GET", "HEAD"])
 def serve(info_hash: str, idx: int, request: Request):
-    """Byte-range file streaming with lazy engine create + sequential 'head & holes' priority."""
+    """Byte-range file streaming with lazy engine create + deadline-driven playhead focus."""
     eng = _engine(request)
     if eng is None:
         return Response(status_code=503, content=b"engine unavailable")
@@ -101,7 +100,8 @@ def serve(info_hash: str, idx: int, request: Request):
     if not h.has_metadata():
         return Response(status_code=504, content=b"metadata timeout")
 
-    h.ensure_low_baseline()  # focus bandwidth on the playhead, not the whole torrent
+    h.ensure_low_baseline()  # don't background-fetch the whole torrent
+    h.refocus()              # a new request (often a seek) -> drop the previous window's priorities
     total = h.file_size(idx)
     start, end = parse_range(request.headers.get("Range"), total)
     headers = {
@@ -113,10 +113,7 @@ def serve(info_hash: str, idx: int, request: Request):
     if request.method == "HEAD":
         return Response(status_code=206, headers=headers)
 
-    plen = h.piece_length()
-    first_piece = (h.file_offset(idx) + start) // plen
-    plan = priority_plan(first_piece, readahead=16, total_pieces=h.num_pieces())
-    h.prioritize_pieces([p for p, pr in plan.items() if pr == 7], 7)
+    # The sliding boost window (in wait_and_read) concentrates bandwidth on the playhead.
     return StreamingResponse(
         wait_and_read(eng.save_path(), h, idx, start, end),
         status_code=206, headers=headers,

@@ -62,6 +62,28 @@ class Handle:
             return
         self._h.prioritize_pieces([0] * self.num_pieces())
         self._baselined = True
+        self._boosted: set[int] = set()
+
+    def boost_piece(self, piece: int, deadline_ms: int) -> None:
+        """Mark a playhead piece as top priority + urgent, and remember it so a later seek can
+        drop it (refocus)."""
+        self._h.piece_priority(piece, 7)
+        self.set_piece_deadline(piece, deadline_ms)
+        if not hasattr(self, "_boosted"):
+            self._boosted = set()
+        self._boosted.add(piece)
+
+    def refocus(self) -> None:
+        """Drop the previous playhead window back to priority 0 (unless already downloaded) so a
+        seek concentrates all bandwidth on the new region instead of splitting it."""
+        for p in getattr(self, "_boosted", set()):
+            if not self._h.have_piece(p):
+                self._h.piece_priority(p, 0)
+                try:
+                    self._h.reset_piece_deadline(p)
+                except Exception:  # noqa: BLE001
+                    pass
+        self._boosted = set()
 
     def set_piece_deadline(self, piece: int, ms: int) -> None:
         """Ask libtorrent to fetch this piece within `ms` (urgent, order-independent — enables
