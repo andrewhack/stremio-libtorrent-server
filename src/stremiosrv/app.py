@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from stremiosrv import health
-from stremiosrv.api import handshake, hls, playback
+from stremiosrv.api import casting, handshake, hls, playback, subs
 from stremiosrv.config import Settings
 
 
@@ -21,6 +21,8 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     app.include_router(handshake.router)
     app.include_router(playback.router)
     app.include_router(hls.router)
+    app.include_router(subs.router)
+    app.include_router(casting.router)
     return app
 
 

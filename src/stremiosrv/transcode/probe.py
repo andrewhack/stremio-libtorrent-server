@@ -61,7 +61,9 @@ def map_probe(ffprobe_json: dict) -> dict:
                 hasBFrames=bool(s.get("has_b_frames")),
             )
         elif ct == "audio":
-            entry.update(channels=s.get("channels"))
+            entry.update(channels=s.get("channels"), lang=(s.get("tags") or {}).get("language"))
+        elif ct == "subtitle":
+            entry["lang"] = (s.get("tags") or {}).get("language")
         streams.append(entry)
     duration = fmt.get("duration")
     return {
