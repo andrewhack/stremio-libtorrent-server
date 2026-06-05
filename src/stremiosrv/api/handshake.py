@@ -47,3 +47,10 @@ def device_info(request: Request) -> dict:
 @router.get("/stats.json")
 def global_stats() -> dict:
     return {}
+
+
+@router.get("/hwaccel-profiler")
+def hwaccel_profiler(request: Request) -> dict:
+    """Report the active hardware-transcode profile (set by autodetect at startup)."""
+    p = request.app.state.settings.transcode_profile
+    return {"profile": p, "available": [p] if p else []}
