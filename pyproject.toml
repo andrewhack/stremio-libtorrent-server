@@ -36,3 +36,4 @@ target-version = "py311"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["integration: requires libtorrent and/or network (skipped where unavailable)"]
