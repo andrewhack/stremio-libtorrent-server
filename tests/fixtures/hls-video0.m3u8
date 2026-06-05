@@ -1,1 +1,1 @@
-{"error":{"code":10,"message":"Failed to read hls playlist: MasterConverter is destroyed"}}
+{"error":{"code":1,"message":"Failed to create hls converter: Invalid media url"}}
