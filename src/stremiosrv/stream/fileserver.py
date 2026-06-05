@@ -36,6 +36,7 @@ def wait_and_read(
         far = min(gp + window, total - 1)
         while deadlined_to < far:
             deadlined_to += 1
+            handle.prioritize_pieces([deadlined_to], 7)  # window is the only thing downloading
             handle.set_piece_deadline(deadlined_to, max(0, deadlined_to - gp) * step_ms)
         deadline = time.time() + timeout
         while not handle.have_piece(gp) and time.time() < deadline:

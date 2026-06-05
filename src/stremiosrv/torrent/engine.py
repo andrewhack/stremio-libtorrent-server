@@ -55,11 +55,12 @@ class Handle:
             self._h.piece_priority(i, prio)
 
     def ensure_low_baseline(self) -> None:
-        """Set every piece to a low baseline priority once, so bandwidth is focused on the
-        deadline/high-priority playhead window instead of greedily fetching the whole torrent."""
+        """Set every piece to priority 0 once, so the torrent does NOT background-fetch the whole
+        file. Only the sliding playhead window is raised (in the file server), focusing all
+        bandwidth on what's about to be played — fast start and seeks, no wasted download."""
         if getattr(self, "_baselined", False):
             return
-        self._h.prioritize_pieces([1] * self.num_pieces())
+        self._h.prioritize_pieces([0] * self.num_pieces())
         self._baselined = True
 
     def set_piece_deadline(self, piece: int, ms: int) -> None:
