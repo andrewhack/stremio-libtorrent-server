@@ -171,6 +171,21 @@ wheels = [
 ]
 
 [[package]]
+name = "libtorrent"
+version = "2.0.11"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/99/a4e5711fa26882165e653dd3c661ce1b3542ac9e51c3b660bfd134b43d36/libtorrent-2.0.11-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:fea392e3e0b2f5e84000ec87fd2b3fa11477216875809737ce00c9ba07db4c55", size = 8251384, upload-time = "2025-01-29T11:34:35.699Z" },
+    { url = "https://files.pythonhosted.org/packages/58/bd/475332a05b25de3b6d350144d8c5bfe74c23412c8e7f34dff43f8ded2cdb/libtorrent-2.0.11-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fbf4418471a96158d995c4573697ce2dcf27ca42d0b03c3bf97b0165015bf641", size = 8514680, upload-time = "2025-01-29T11:34:39.211Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/24/178cd82b11e0c989d24123cb0512d15164f7447ffb05f6a631818bd00f68/libtorrent-2.0.11-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:db0bd26b803c21f3d02a455c9521c8aef4418c457b5751493cd464ca336ae11e", size = 12076821, upload-time = "2025-01-29T11:34:42.273Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/a0/f8c79175be62c66e486d5ec72b4d318191583e30fa52b530add07562bc39/libtorrent-2.0.11-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:545bf693844477c42e8d24e0d461c3bec4ab3a71914cb6aea105044994e40a89", size = 12065535, upload-time = "2025-01-29T11:34:46.64Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/85/e067ca5544e79525b80a7a986cb58e28977f274c4f341d1294c0ea35d7c7/libtorrent-2.0.11-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:474e792c52319cc918a007aa61cb34fb7f9236fa6c9603953e8c0fb3e6d922c7", size = 8251482, upload-time = "2025-01-29T11:35:05.522Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/4c/86d834a8bbdd34276e4d87400d105ddab1dd4b8938f2c1229accc03a5b0d/libtorrent-2.0.11-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e234f665c987262d4102f6d2e099d76b12dfa20bcc77b77891184b075ab84ea8", size = 8514771, upload-time = "2025-01-29T11:35:09.604Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/7e/e369802ae56bad9de629d9ad7c719dc4328aecf9aac8f61d33755d20b269/libtorrent-2.0.11-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:8be0e27f40594bfee42e60e7785261834fdaf938267dceee8a08eae08a12a3c2", size = 12076824, upload-time = "2025-01-29T11:35:12.773Z" },
+    { url = "https://files.pythonhosted.org/packages/51/c6/b78e0f1515e65ca1a22383124cd867a1c9eee40053e7971064dd937c4802/libtorrent-2.0.11-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:51daa58d0958ac99d88a1749d6848c6023ea899da98e503b12a1a311189d79fd", size = 12065489, upload-time = "2025-01-29T11:35:16.533Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -429,6 +444,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "libtorrent", marker = "sys_platform == 'linux'" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "uvicorn", extra = ["standard"] },
@@ -445,6 +461,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.136.3" },
+    { name = "libtorrent", marker = "sys_platform == 'linux'", specifier = ">=2.0.11" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.14.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.49.0" },
