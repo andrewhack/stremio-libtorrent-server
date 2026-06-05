@@ -29,6 +29,29 @@ class Handle:
     def info_hash(self) -> str:
         return str(self._h.status().info_hashes.v1)
 
+    # --- file / piece geometry (metadata must be present) ---
+    def piece_length(self) -> int:
+        return self._h.torrent_file().piece_length()
+
+    def num_pieces(self) -> int:
+        return self._h.torrent_file().num_pieces()
+
+    def file_size(self, idx: int) -> int:
+        return self._h.torrent_file().files().file_size(idx)
+
+    def file_offset(self, idx: int) -> int:
+        return self._h.torrent_file().files().file_offset(idx)
+
+    def file_path(self, idx: int) -> str:
+        return self._h.torrent_file().files().file_path(idx)
+
+    def have_piece(self, i: int) -> bool:
+        return self._h.have_piece(i)
+
+    def prioritize_pieces(self, pieces: list[int], prio: int = 7) -> None:
+        for i in pieces:
+            self._h.piece_priority(i, prio)
+
     def raw(self) -> "lt.torrent_handle":
         return self._h
 
@@ -67,6 +90,9 @@ class Engine:
         h = self._torrents.pop(info_hash.lower(), None)
         if h is not None:
             self._ses.remove_torrent(h.raw())
+
+    def save_path(self) -> str:
+        return self._cache_root
 
     def listen_port(self) -> int:
         """The actual TCP port the session is listening on (0 if not yet listening)."""

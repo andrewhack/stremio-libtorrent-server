@@ -1,6 +1,20 @@
-from fastapi import APIRouter, Request
+import time
+
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import StreamingResponse
+
+from stremiosrv.stream.fileserver import wait_and_read
+from stremiosrv.stream.ranges import parse_range
+from stremiosrv.torrent.picker import priority_plan
 
 router = APIRouter()
+
+DLNA_HEADERS = {
+    "transferMode.dlna.org": "Streaming",
+    "contentFeatures.dlna.org": (
+        "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    ),
+}
 
 
 def serialize_stats(handle, idx: int | None = None) -> dict:
@@ -57,5 +71,35 @@ def file_stats(info_hash: str, idx: int, request: Request):
     return serialize_stats(h, idx) if h else None
 
 
-# NOTE: the byte-range file-serving routes (/{info_hash}/{idx} [+ /*]) and lazy engine
-# creation are added in Stage 2 Task 6 (integration; needs libtorrent on the server).
+@router.api_route("/{info_hash}/{idx}", methods=["GET", "HEAD"])
+def serve(info_hash: str, idx: int, request: Request):
+    """Byte-range file streaming with lazy engine create + sequential 'head & holes' priority."""
+    eng = _engine(request)
+    if eng is None:
+        return Response(status_code=503, content=b"engine unavailable")
+    h = eng.get(info_hash) or eng.add(info_hash)  # lazy create
+    deadline = time.time() + 30
+    while not h.has_metadata() and time.time() < deadline:
+        time.sleep(0.2)
+    if not h.has_metadata():
+        return Response(status_code=504, content=b"metadata timeout")
+
+    total = h.file_size(idx)
+    start, end = parse_range(request.headers.get("Range"), total)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Range": f"bytes {start}-{end}/{total}",
+        "Content-Length": str(end - start + 1),
+        **DLNA_HEADERS,
+    }
+    if request.method == "HEAD":
+        return Response(status_code=206, headers=headers)
+
+    plen = h.piece_length()
+    first_piece = (h.file_offset(idx) + start) // plen
+    plan = priority_plan(first_piece, readahead=16, total_pieces=h.num_pieces())
+    h.prioritize_pieces([p for p, pr in plan.items() if pr == 7], 7)
+    return StreamingResponse(
+        wait_and_read(eng.save_path(), h, idx, start, end),
+        status_code=206, headers=headers,
+    )
