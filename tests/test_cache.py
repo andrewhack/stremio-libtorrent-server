@@ -1,4 +1,7 @@
-from stremiosrv.cache import scan_cache, select_evictions
+import os
+import time
+
+from stremiosrv.cache import evict_once, scan_cache, select_evictions
 
 
 def test_select_none_when_under_budget():
@@ -39,3 +42,22 @@ def test_scan_dir_size(tmp_path):
     (d / "ep.mkv").write_bytes(b"z" * 500)
     items = {i["name"]: i for i in scan_cache(str(tmp_path))}
     assert items["show"]["size"] == 500
+
+
+def test_evict_once_keeps_budget_not_everything(tmp_path):
+    old = time.time() - 10_000  # older than grace -> evictable
+    for i in range(5):
+        f = tmp_path / f"f{i}.mkv"
+        f.write_bytes(b"x" * 100)
+        os.utime(f, (old + i, old + i))
+    res = evict_once(str(tmp_path), budget=250, engine=None, grace=300)  # total 500
+    remaining = sum(i["size"] for i in scan_cache(str(tmp_path)))
+    assert 0 < remaining <= 250          # under budget but NOT wiped out
+    assert len(res["deleted"]) >= 1
+
+
+def test_evict_once_protects_recent(tmp_path):
+    for i in range(5):  # just-created files (recent mtime) must be protected
+        (tmp_path / f"f{i}.mkv").write_bytes(b"x" * 100)
+    res = evict_once(str(tmp_path), budget=100, engine=None, grace=300)  # total 500 > budget
+    assert res["deleted"] == []          # all recent -> nothing evicted

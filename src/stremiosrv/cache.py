@@ -114,6 +114,12 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
 
 def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: int = 300) -> None:
     """Background loop: evict over-budget cache every `interval` seconds. Runs forever."""
+    if not logger.handlers:  # ensure visibility (uvicorn doesn't surface our INFO logs by default)
+        h = logging.StreamHandler()
+        h.setFormatter(logging.Formatter("%(asctime)s [cache] %(message)s"))
+        logger.addHandler(h)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
     logger.info("cache evictor started: budget=%.1f GiB, interval=%ss", budget / 1073741824, interval)
     while True:
         time.sleep(interval)  # sleep first: let active streams re-register after a restart
