@@ -54,6 +54,14 @@ class Handle:
         for i in pieces:
             self._h.piece_priority(i, prio)
 
+    def set_piece_deadline(self, piece: int, ms: int) -> None:
+        """Ask libtorrent to fetch this piece within `ms` (urgent, order-independent — enables
+        responsive seeking and fetching a trailing moov atom without downloading the whole file)."""
+        try:
+            self._h.set_piece_deadline(piece, ms)
+        except Exception:  # noqa: BLE001 — deadline is best-effort
+            pass
+
     def raw(self) -> "lt.torrent_handle":
         return self._h
 
@@ -81,7 +89,8 @@ class Engine:
         existing = list(p.trackers) if p.trackers else []
         p.trackers = merge_trackers(existing, trackers)
         p.save_path = self._cache_root
-        p.flags |= lt.torrent_flags.sequential_download
+        # No sequential_download flag: playback uses per-piece deadlines (set on the requested
+        # range) so seeks and trailing-moov fetches are fast instead of waiting for in-order download.
         th = self._ses.add_torrent(p)
         h = Handle(th)
         self._torrents[h.info_hash().lower()] = h

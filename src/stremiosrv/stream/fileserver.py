@@ -17,16 +17,26 @@ def file_disk_path(save_path: str, handle, idx: int) -> str:
 
 def wait_and_read(
     save_path: str, handle, idx: int, start: int, end: int,
-    timeout: float = 30.0, chunk: int = 262144,
+    timeout: float = 30.0, chunk: int = 262144, window: int = 32, step_ms: int = 60,
 ) -> Iterator[bytes]:
     """Yield bytes [start, end] (inclusive, file-relative) of file `idx`, blocking per chunk
-    until the covering piece is available. Raises TimeoutError if a piece never arrives."""
+    until the covering piece is available. Raises TimeoutError if a piece never arrives.
+
+    Maintains a sliding window of piece *deadlines* ahead of the read position so libtorrent
+    fetches the playhead region urgently and in order, regardless of where in the file we are."""
     plen = handle.piece_length()
     base = handle.file_offset(idx)
     path = file_disk_path(save_path, handle, idx)
+    total = handle.num_pieces()
     pos = start
+    deadlined_to = (base + start) // plen - 1  # last piece we've already set a deadline on
     while pos <= end:
         gp = (base + pos) // plen  # global piece index for the current byte position
+        # Slide the deadline window forward so upcoming pieces are rushed in order.
+        far = min(gp + window, total - 1)
+        while deadlined_to < far:
+            deadlined_to += 1
+            handle.set_piece_deadline(deadlined_to, max(0, deadlined_to - gp) * step_ms)
         deadline = time.time() + timeout
         while not handle.have_piece(gp) and time.time() < deadline:
             time.sleep(0.2)
