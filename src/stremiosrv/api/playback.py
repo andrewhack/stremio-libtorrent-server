@@ -93,7 +93,8 @@ def serve(info_hash: str, idx: int, request: Request):
     eng = _engine(request)
     if eng is None:
         return Response(status_code=503, content=b"engine unavailable")
-    h = eng.get(info_hash) or eng.add(info_hash)  # lazy create
+    trackers = request.query_params.getlist("tr")  # client-supplied (Stremio passes magnet trackers)
+    h = eng.get(info_hash) or eng.add(info_hash, trackers=trackers or None)  # lazy create
     deadline = time.time() + 30
     while not h.has_metadata() and time.time() < deadline:
         time.sleep(0.2)

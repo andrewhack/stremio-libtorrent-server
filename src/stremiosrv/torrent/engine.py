@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import libtorrent as lt
 
+from stremiosrv.torrent.trackers import merge_trackers
+
 
 class Handle:
     """Thin wrapper over `lt.torrent_handle` exposing only what the API layer needs."""
@@ -70,12 +72,14 @@ class Engine:
         self._cache_root = cache_root
         self._torrents: dict[str, Handle] = {}
 
-    def add(self, magnet_or_hash: str) -> Handle:
+    def add(self, magnet_or_hash: str, trackers: list[str] | None = None) -> Handle:
         if magnet_or_hash.startswith("magnet:"):
             p = lt.parse_magnet_uri(magnet_or_hash)
         else:
             p = lt.add_torrent_params()
             p.info_hashes = lt.info_hash_t(lt.sha1_hash(bytes.fromhex(magnet_or_hash)))
+        existing = list(p.trackers) if p.trackers else []
+        p.trackers = merge_trackers(existing, trackers)
         p.save_path = self._cache_root
         p.flags |= lt.torrent_flags.sequential_download
         th = self._ses.add_torrent(p)
