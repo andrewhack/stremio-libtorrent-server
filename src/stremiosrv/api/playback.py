@@ -64,7 +64,7 @@ def torrent_stats(info_hash: str, request: Request):
     return serialize_stats(h) if h else None
 
 
-@router.get("/{info_hash}/{idx}/stats.json")
+@router.get("/{info_hash}/{idx:int}/stats.json")
 def file_stats(info_hash: str, idx: int, request: Request):
     eng = _engine(request)
     h = eng.get(info_hash) if eng else None
@@ -87,7 +87,7 @@ def remove(info_hash: str, request: Request) -> dict:
     return {"ok": True}
 
 
-@router.api_route("/{info_hash}/{idx}", methods=["GET", "HEAD"])
+@router.api_route("/{info_hash}/{idx:int}", methods=["GET", "HEAD"])
 def serve(info_hash: str, idx: int, request: Request):
     """Byte-range file streaming with lazy engine create + sequential 'head & holes' priority."""
     eng = _engine(request)
