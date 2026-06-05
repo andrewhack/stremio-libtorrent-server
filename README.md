@@ -54,8 +54,19 @@ The fork keeps building/validating the transcode toolchain + packaging; this rep
 | 1 | FastAPI skeleton · Pydantic config · `/health` (ITCOM contract) | ✅ done |
 | 2 | Torrent core + direct play (libtorrent engine, Range serving, stats, **inbound peers**, head & holes) | ✅ done — verified on hardware (inbound LISTEN; 206 + real bytes from a torrent; live HTTP) |
 | 3 | Transcode / HLS (`hlsv2`, probe, hwaccel-profiler) reusing the dual-GPU ffmpeg | ✅ done — verified in-image (NVENC HEVC→H264 + AAC; fMP4 HLS served over HTTP) |
-| 4 | Subtitles · `opensubHash` · casting | ⏳ planned |
-| 5 | Productionise — Docker/compose, DEVOPS.md, Ansible/Jenkins, AHM | ⏳ planned |
+| 4 | Subtitles · `opensubHash` · casting | ✅ done — verified in-image (opensubHash matches independent calc; embedded sub list + WebVTT extract) |
+| 5 | Productionise — Docker/compose, DEVOPS.md, Ansible/Jenkins, AHM | ✅ done — compose (GPU + AHM labels + healthcheck) + [`docs/DEVOPS.md`](docs/DEVOPS.md) |
+
+## Deploy
+
+```sh
+docker compose build
+docker compose up -d
+curl -fsS http://<host>:11470/health      # ITCOM health contract
+curl http://<host>:11470/hwaccel-profiler # shows the autodetected transcode profile
+```
+
+Full deployment, configuration, ports, and human activities: [`docs/DEVOPS.md`](docs/DEVOPS.md).
 
 ## Architecture (target)
 

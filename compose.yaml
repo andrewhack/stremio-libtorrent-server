@@ -1,0 +1,36 @@
+# Stremio libtorrent streaming server — production compose.
+# Builds the dual-GPU image (jellyfin-ffmpeg NVENC/VAAPI + libtorrent + the FastAPI server).
+services:
+  stremio-libtorrent-server:
+    build: .
+    image: stremio-libtorrent-server:latest
+    container_name: stremio-libtorrent-server
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      STREMIOSRV_BT_LISTEN_PORT: "6881"
+      STREMIOSRV_CACHE_ROOT: /root/.stremio-server
+    devices:
+      - /dev/dri:/dev/dri          # Intel VAAPI render node (NVENC comes via the nvidia runtime)
+    ports:
+      - "11470:11470"              # streaming-server HTTP API
+      - "6881:6881/tcp"            # BitTorrent peer port (this server accepts INBOUND peers)
+      - "6881:6881/udp"            # DHT / uTP
+    volumes:
+      - stremio-cache:/root/.stremio-server
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:11470/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      # Auto-discovery by the Application Health Monitor (AHM).
+      monitor.enabled: "true"
+      monitor.name: "stremio-libtorrent-server"
+      monitor.health.path: "/health"
+      monitor.health.port: "11470"
+
+volumes:
+  stremio-cache:
