@@ -1,1 +1,9 @@
-{"error":{"code":1,"message":"Failed to create hls converter: Invalid media url"}}
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:1
+#EXT-X-MEDIA-SEQUENCE:1
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-MAP:URI="video0/init.mp4?mediaURL=http%3A%2F%2F127.0.0.1%3A11470%2Fsamples%2Fhevc.mkv&profile=vaapi-renderD128&maxWidth=1200"
+#EXTINF:0.200033,
+video0/segment1.m4s?mediaURL=http%3A%2F%2F127.0.0.1%3A11470%2Fsamples%2Fhevc.mkv&profile=vaapi-renderD128&maxWidth=1200
+#EXT-X-ENDLIST

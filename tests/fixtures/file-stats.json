@@ -1,1 +1,220 @@
-{"infoHash":"0000000000000000000000000000000000000000","name":"<redacted>","peers":14,"unchoked":3,"queued":0,"unique":66,"connectionTries":7667,"swarmPaused":false,"swarmConnections":45,"swarmSize":200,"selections":[],"wires":null,"files":[{"path":"<redacted>","name":"<redacted>","length":13256307465,"offset":0,"__cacheEvents":true},{"path":"<redacted>","name":"<redacted>","length":1341,"offset":13256307465},{"path":"<redacted>","name":"<redacted>","length":127,"offset":13256308806}],"downloaded":0,"uploaded":0,"downloadSpeed":0,"uploadSpeed":0,"sources":[{"numFound":1000,"numFoundUniq":53,"numRequests":24,"url":"tracker:udp://tracker.opentrackr.org:1337/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":400,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://open.demonoid.ch:6969/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":690,"numFoundUniq":21,"numRequests":24,"url":"tracker:udp://open.demonii.com:1337/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":0,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://open.tracker.cl:1337/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":1200,"numFoundUniq":46,"numRequests":24,"url":"tracker:udp://open.stealth.si:80/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":850,"numFoundUniq":48,"numRequests":24,"url":"tracker:udp://tracker.torrent.eu.org:451/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":0,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://tracker1.myporn.club:9337/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":0,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://tracker.therarbg.to:6969/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":500,"numFoundUniq":12,"numRequests":24,"url":"tracker:udp://tracker.qu.ax:6969/announce","lastStarted":"2026-06-05T06:01:49.132Z"},{"numFound":293,"numFoundUniq":1,"numRequests":24,"url":"tracker:udp://tracker.dler.org:6969/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":1200,"numFoundUniq":22,"numRequests":24,"url":"tracker:udp://tracker.bittor.pw:1337/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":0,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://tracker.0x7c0.com:6969/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":1728,"numFoundUniq":72,"numRequests":24,"url":"tracker:udp://tracker-udp.gbitt.info:80/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":0,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://run.publictracker.xyz:6969/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":1050,"numFoundUniq":27,"numRequests":24,"url":"tracker:udp://retracker01-msk-virt.corbina.net:80/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":0,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://opentracker.io:6969/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":0,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://open.dstud.io:6969/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":1150,"numFoundUniq":7,"numRequests":24,"url":"tracker:udp://leet-tracker.moe:1337/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":450,"numFoundUniq":3,"numRequests":24,"url":"tracker:udp://explodie.org:6969/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":0,"numFoundUniq":0,"numRequests":24,"url":"tracker:udp://bt.rer.lol:6969/announce","lastStarted":"2026-06-05T06:01:49.133Z"},{"numFound":5400,"numFoundUniq":635,"numRequests":16,"url":"dht:0000000000000000000000000000000000000000","lastStarted":"2026-06-05T06:01:49.133Z"}],"peerSearchRunning":true,"opts":{"peerSearch":{"min":40,"max":150,"sources":["tracker:udp://tracker.opentrackr.org:1337/announce","tracker:udp://open.demonoid.ch:6969/announce","tracker:udp://open.demonii.com:1337/announce","tracker:udp://open.tracker.cl:1337/announce","tracker:udp://open.stealth.si:80/announce","tracker:udp://tracker.torrent.eu.org:451/announce","tracker:udp://tracker1.myporn.club:9337/announce","tracker:udp://tracker.therarbg.to:6969/announce","tracker:udp://tracker.qu.ax:6969/announce","tracker:udp://tracker.dler.org:6969/announce","tracker:udp://tracker.bittor.pw:1337/announce","tracker:udp://tracker.0x7c0.com:6969/announce","tracker:udp://tracker-udp.gbitt.info:80/announce","tracker:udp://run.publictracker.xyz:6969/announce","tracker:udp://retracker01-msk-virt.corbina.net:80/announce","tracker:udp://opentracker.io:6969/announce","tracker:udp://open.dstud.io:6969/announce","tracker:udp://leet-tracker.moe:1337/announce","tracker:udp://explodie.org:6969/announce","tracker:udp://bt.rer.lol:6969/announce","dht:0000000000000000000000000000000000000000"]},"dht":false,"tracker":false,"connections":200,"handshakeTimeout":5000,"timeout":2000,"virtual":true,"swarmCap":{"minPeers":20,"maxSpeed":12582912},"growler":{"flood":0,"pulse":52428800},"path":"/root/.stremio-server/stremio-cache/0000000000000000000000000000000000000000","id":"-AZ5340-0f87e3ba7e13","flood":0,"pulse":9007199254740991},"streamProgress":1,"streamName":"<redacted>","streamLen":13256307465}
+{
+  "infoHash": "0000000000000000000000000000000000000000",
+  "name": "<redacted>",
+  "peers": 14,
+  "unchoked": 3,
+  "queued": 0,
+  "unique": 66,
+  "connectionTries": 7667,
+  "swarmPaused": false,
+  "swarmConnections": 45,
+  "swarmSize": 200,
+  "selections": [],
+  "wires": null,
+  "files": [
+    {
+      "path": "<redacted>",
+      "name": "<redacted>",
+      "length": 13256307465,
+      "offset": 0,
+      "__cacheEvents": true
+    },
+    {
+      "path": "<redacted>",
+      "name": "<redacted>",
+      "length": 1341,
+      "offset": 13256307465
+    },
+    {
+      "path": "<redacted>",
+      "name": "<redacted>",
+      "length": 127,
+      "offset": 13256308806
+    }
+  ],
+  "downloaded": 0,
+  "uploaded": 0,
+  "downloadSpeed": 0,
+  "uploadSpeed": 0,
+  "sources": [
+    {
+      "numFound": 1000,
+      "numFoundUniq": 53,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 400,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 690,
+      "numFoundUniq": 21,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 0,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 1200,
+      "numFoundUniq": 46,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 850,
+      "numFoundUniq": 48,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 0,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 0,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 500,
+      "numFoundUniq": 12,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.132Z"
+    },
+    {
+      "numFound": 293,
+      "numFoundUniq": 1,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 1200,
+      "numFoundUniq": 22,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 0,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 1728,
+      "numFoundUniq": 72,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 0,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 1050,
+      "numFoundUniq": 27,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 0,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 0,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 1150,
+      "numFoundUniq": 7,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 450,
+      "numFoundUniq": 3,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 0,
+      "numFoundUniq": 0,
+      "numRequests": 24,
+      "url": "tracker:udp://redacted/announce",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    },
+    {
+      "numFound": 5400,
+      "numFoundUniq": 635,
+      "numRequests": 16,
+      "url": "dht:0000000000000000000000000000000000000000",
+      "lastStarted": "2026-06-05T06:01:49.133Z"
+    }
+  ],
+  "peerSearchRunning": true,
+  "opts": {
+    "peerSearch": {
+      "min": 40,
+      "max": 150,
+      "sources": [
+        "tracker:udp://redacted/announce",
+        "dht:0000000000000000000000000000000000000000"
+      ]
+    },
+    "dht": false,
+    "tracker": false,
+    "connections": 200,
+    "handshakeTimeout": 5000,
+    "timeout": 2000,
+    "virtual": true,
+    "swarmCap": {
+      "minPeers": 20,
+      "maxSpeed": 12582912
+    },
+    "growler": {
+      "flood": 0,
+      "pulse": 52428800
+    },
+    "path": "/cache/<redacted>",
+    "id": "-AZ5340-redacted",
+    "flood": 0,
+    "pulse": 9007199254740991
+  },
+  "streamProgress": 1,
+  "streamName": "<redacted>",
+  "streamLen": 13256307465
+}
