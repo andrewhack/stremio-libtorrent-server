@@ -114,7 +114,8 @@ def serve(info_hash: str, idx: int, request: Request):
         return Response(status_code=206, headers=headers)
 
     # The sliding boost window (in wait_and_read) concentrates bandwidth on the playhead.
+    readahead = request.app.state.settings.readahead_bytes
     return StreamingResponse(
-        wait_and_read(eng.save_path(), h, idx, start, end),
+        wait_and_read(eng.save_path(), h, idx, start, end, window_bytes=readahead),
         status_code=206, headers=headers,
     )

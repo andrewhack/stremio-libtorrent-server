@@ -45,7 +45,10 @@ def wait_and_read(
             time.sleep(0.2)
         if not handle.have_piece(gp):
             raise TimeoutError(f"piece {gp} not available within {timeout}s")
-        n = min(chunk, end - pos + 1)
+        # Never read past the end of the current (verified) piece: the next piece may not be
+        # downloaded yet, and reading into it would return sparse/zero bytes -> corrupt frames.
+        piece_last = (gp + 1) * plen - 1 - base  # last file-relative byte still in piece gp
+        n = min(chunk, end - pos + 1, piece_last - pos + 1)
         with open(path, "rb") as f:
             f.seek(pos)
             data = f.read(n)
