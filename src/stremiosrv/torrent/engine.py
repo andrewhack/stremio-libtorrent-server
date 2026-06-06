@@ -37,6 +37,41 @@ class Handle:
         ti = self._h.torrent_file()
         return ti.name() if ti else ""
 
+    def peer_wires(self) -> tuple[list[dict], int]:
+        """Per-peer connection list (Stremio `wires` shape) + count of peers that have unchoked us."""
+        wires: list[dict] = []
+        unchoked = 0
+        for p in self._h.get_peer_info():
+            if not (p.flags & lt.peer_info.remote_choked):
+                unchoked += 1
+            try:
+                addr = f"{p.ip[0]}:{p.ip[1]}"
+            except Exception:  # noqa: BLE001
+                addr = str(getattr(p, "ip", ""))
+            wires.append({
+                "requests": p.download_queue_length,
+                "address": addr,
+                "amInterested": bool(p.flags & lt.peer_info.interesting),
+                "isSeeder": bool(p.flags & lt.peer_info.seed),
+                "downSpeed": p.payload_down_speed,
+                "upSpeed": p.payload_up_speed,
+            })
+        return wires, unchoked
+
+    def tracker_sources(self) -> list[dict]:
+        """Stremio `sources` shape: one entry per tracker + a DHT entry."""
+        out: list[dict] = []
+        try:
+            for t in self._h.trackers():
+                url = t["url"] if isinstance(t, dict) else getattr(t, "url", "")
+                out.append({"numFound": -1, "numFoundUniq": -1, "numRequests": -1,
+                            "url": f"tracker:{url}", "lastStarted": ""})
+        except Exception:  # noqa: BLE001
+            pass
+        out.append({"numFound": -1, "numFoundUniq": -1, "numRequests": -1,
+                    "url": f"dht:{self.info_hash()}", "lastStarted": ""})
+        return out
+
     # --- file / piece geometry (metadata must be present) ---
     def piece_length(self) -> int:
         return self._h.torrent_file().piece_length()

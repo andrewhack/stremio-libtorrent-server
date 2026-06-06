@@ -24,6 +24,7 @@ def serialize_stats(handle, idx: int | None = None) -> dict:
     """
     st = handle.status()
     ti = handle.torrent_file()
+    wires, unchoked = handle.peer_wires()
     files = []
     if ti:
         fs = ti.files()
@@ -35,13 +36,13 @@ def serialize_stats(handle, idx: int | None = None) -> dict:
             })
     out = {
         "infoHash": str(st.info_hashes.v1), "name": (ti.name() if ti else ""),
-        "peers": st.num_peers, "unchoked": 0, "queued": 0, "unique": 0,
+        "peers": st.num_peers, "unchoked": unchoked, "queued": 0, "unique": st.num_peers,
         "connectionTries": 0, "swarmPaused": False,
         "swarmConnections": st.num_peers, "swarmSize": st.list_peers,
-        "selections": [], "wires": [], "files": files,
+        "selections": [], "wires": wires, "files": files,
         "downloaded": st.total_done, "uploaded": st.total_upload,
         "downloadSpeed": st.download_rate, "uploadSpeed": st.upload_rate,
-        "sources": [], "peerSearchRunning": True, "opts": {},
+        "sources": handle.tracker_sources(), "peerSearchRunning": True, "opts": {},
     }
     if idx is not None and ti:
         fs = ti.files()
