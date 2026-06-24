@@ -47,8 +47,20 @@ docker compose ps          # STATUS should show (healthy) once the healthcheck p
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `200` | libtorrent connection cap |
 | `STREMIOSRV_TRANSCODE_PROFILE` | autodetect | force a HW profile |
 
+### Web player (all-in-one)
+The image bundles the Stremio **web player** and serves it on the same origin as the streaming API
+(nginx serves the static build and reverse-proxies the API to uvicorn). A browser gets the full
+Stremio UI playing through our engine — no separate client needed.
+- Open **`http://<host>:8080`** (LAN, no cert) or **`https://<host>:12470`** (cert).
+- Set **`SERVER_URL`** to the origin clients use (e.g. `https://<host>:12470`) so the player targets
+  the right streaming server. TLS options: see [`cert-guide.md`](cert-guide.md) (self-signed default /
+  bring-your-own / Let's Encrypt).
+- **Login & addons** are handled by the web player against Stremio's cloud — not by this server.
+
 ### Ports / networking
-- **11470** — streaming-server API. Put a reverse proxy (TLS) in front for remote clients.
+- **8080** — web player + API (HTTP/LAN, no cert).
+- **12470** — web player + API (HTTPS; cert from the cache dir, auto self-signed if absent).
+- **11470** — direct streaming-server API (for native clients that bypass the bundled player).
 - **6881 TCP+UDP** — BitTorrent peer port. Unlike the stock engine (outbound-only), **this server
   binds an inbound listener**, so forwarding 6881 to the host improves peer connectivity and speeds.
 
