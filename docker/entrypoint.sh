@@ -11,7 +11,9 @@ mkdir -p "$CACHE"
 if [ ! -f "$CERT" ]; then
     echo "[entrypoint] no cert at $CERT -> generating self-signed (CN=${DOMAIN:-localhost})"
     openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout "$CERT" -out "$CERT" -subj "/CN=${DOMAIN:-localhost}" >/dev/null 2>&1
+        -keyout "${CERT}.key" -out "${CERT}.crt" -subj "/CN=${DOMAIN:-localhost}" >/dev/null 2>&1
+    cat "${CERT}.crt" "${CERT}.key" > "$CERT"        # nginx reads cert+key from one file
+    rm -f "${CERT}.key" "${CERT}.crt"
 else
     echo "[entrypoint] using cert $CERT"
 fi
