@@ -11,8 +11,10 @@ services:
     environment:
       STREMIOSRV_BT_LISTEN_PORT: "6881"
       STREMIOSRV_CACHE_ROOT: /root/.stremio-server
-      CERT_FILE: certificates.pem    # full-chain+key PEM in the cache dir -> enables HTTPS on 12470
+      CERT_FILE: certificates.pem    # full-chain+key PEM in the cache dir; auto self-signed if absent
+      SERVER_URL: ${SERVER_URL:-}    # web-player target; set to your public origin (e.g. https://host:12470)
     ports:
+      - "8080:8080"                  # web player + API (HTTP/LAN)
       - "11470:11470"              # streaming-server HTTP API
       - "12470:12470"              # HTTPS (nginx TLS, when a cert is present)
       - "6881:6881/tcp"            # BitTorrent peer port (this server accepts INBOUND peers)
