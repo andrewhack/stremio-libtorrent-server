@@ -6,16 +6,35 @@ set -e
 CACHE="${STREMIOSRV_CACHE_ROOT:-/root/.stremio-server}"
 CERT="$CACHE/${CERT_FILE:-certificates.pem}"
 
-# 1) TLS cert: use a mounted one, else auto-generate a self-signed cert so HTTPS always starts.
+# 1) TLS cert for HTTPS :12470. TVs require a TRUSTED cert; priority:
+#    a. IPADDRESS set -> fetch/refresh a trusted Let's Encrypt *.stremio.rocks cert (TV-compatible,
+#       zero config; the dashed-IP subdomain resolves to your IP via Stremio's magic DNS).
+#    b. else a cert already at $CERT -> bring-your-own.
+#    c. else -> self-signed (HTTPS still starts, but browsers warn and TVs reject).
 mkdir -p "$CACHE"
-if [ ! -f "$CERT" ]; then
-    echo "[entrypoint] no cert at $CERT -> generating self-signed (CN=${DOMAIN:-localhost})"
+if [ -n "${IPADDRESS}" ]; then
+    echo "[entrypoint] IPADDRESS=$IPADDRESS -> fetching trusted stremio.rocks cert"
+    if (cd /srv/stremio-server && node certificate.js --action fetch); then
+        IPD=$(echo "$IPADDRESS" | sed "s/[.]/-/g")
+        SROCKS_DOMAIN="${IPD}.519b6502d940.stremio.rocks"
+        cp /srv/stremio-server/certificates.pem "$CERT"
+        grep -q "$SROCKS_DOMAIN" /etc/hosts 2>/dev/null || echo "${IPADDRESS} ${SROCKS_DOMAIN}" >> /etc/hosts
+        (cd /srv/stremio-server && node certificate.js --action load \
+            --pem-path "$CERT" --domain "$SROCKS_DOMAIN" --json-path "$CACHE/httpsCert.json") || true
+        echo "[entrypoint] trusted cert for $SROCKS_DOMAIN"
+        [ -z "${SERVER_URL}" ] && SERVER_URL="https://${SROCKS_DOMAIN}:12470/"
+    else
+        echo "[entrypoint] stremio.rocks fetch failed -> falling back to existing/self-signed cert"
+    fi
+fi
+if [ -f "$CERT" ]; then
+    [ -n "${IPADDRESS}" ] || echo "[entrypoint] using existing cert $CERT (bring-your-own)"
+else
+    echo "[entrypoint] no trusted cert -> self-signed (CN=${DOMAIN:-localhost}); TVs may reject it"
     openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
         -keyout "${CERT}.key" -out "${CERT}.crt" -subj "/CN=${DOMAIN:-localhost}" >/dev/null 2>&1
-    cat "${CERT}.crt" "${CERT}.key" > "$CERT"        # nginx reads cert+key from one file
+    cat "${CERT}.crt" "${CERT}.key" > "$CERT"
     rm -f "${CERT}.key" "${CERT}.crt"
-else
-    echo "[entrypoint] using cert $CERT"
 fi
 
 # 2) Point the bundled web player at the streaming server (stock localStorage mechanism).
