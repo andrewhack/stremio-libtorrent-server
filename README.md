@@ -27,6 +27,10 @@ No subscription. No tracking. No black box. **100% free and open — our gift to
 
 ## 🚀 Quick Start — anyone can do this
 
+> **Architecture:** the published image is **`linux/amd64` (x86-64) only**. It runs on any normal
+> PC/server/NAS. ARM hosts (Raspberry Pi, most ARM TV boxes, Apple Silicon) aren't supported by the
+> prebuilt image — build from source on those.
+
 **1.** Install [Docker](https://docs.docker.com/get-docker/).
 **2.** Run one command — swap `YOUR_SERVER_IP` for your machine's LAN IP (e.g. `192.168.1.50`):
 

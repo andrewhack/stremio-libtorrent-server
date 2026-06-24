@@ -2,6 +2,9 @@
 
 Self-host Stremio (web player + streaming engine) in one container. No build, no accounts beyond Docker.
 
+> **Requires an `amd64` (x86-64) host.** The prebuilt image is `linux/amd64` only — ARM devices
+> (Raspberry Pi, ARM TV boxes, Apple Silicon) must build from source.
+
 ## 1. Install Docker
 Windows/Mac: Docker Desktop. Linux: `curl -fsSL https://get.docker.com | sh`.
 
