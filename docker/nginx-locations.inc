@@ -22,7 +22,11 @@ location = /casting            { proxy_pass http://127.0.0.1:11470; }
 location = /opensubHash        { proxy_pass http://127.0.0.1:11470; }
 location = /removeAll          { proxy_pass http://127.0.0.1:11470; }
 location ^~ /hlsv2/            { proxy_pass http://127.0.0.1:11470; }
-location ~ "^/[0-9a-fA-F]{40}" { proxy_pass http://127.0.0.1:11470; }
+# Torrent routes are /<40-hex-infohash>/<idx|stats.json|remove>. The second segment MUST be
+# anchored: the bundled web build serves its JS/CSS from a 40-hex-named dir
+# (e.g. /<hash>/scripts/main.js, /<hash>/styles/main.css), which an unanchored ^/<40hex> would
+# wrongly proxy to uvicorn -> the SPA never boots (blank page). Keep these as static.
+location ~ "^/[0-9a-fA-F]{40}/([0-9]+|stats\.json|remove)" { proxy_pass http://127.0.0.1:11470; }
 
 # --- web player (static SPA; hash-routed, so / -> index.html) ---
 location / { try_files $uri $uri/ /index.html; }
