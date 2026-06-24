@@ -152,6 +152,44 @@ uv run ruff check .       # lint
 uv run uvicorn stremiosrv.app:create_app --factory --host 0.0.0.0 --port 11470
 ```
 
+## 🔐 Appendix — how the TV HTTPS URL works (`*.stremio.rocks`)
+
+*Skip this unless you're curious or customizing certs — the Quick Start needs none of it.*
+
+When you set `IPADDRESS`, the container prints a TV-ready HTTPS URL like:
+
+```
+https://192-168-1-50.519b6502d940.stremio.rocks:12470
+        └────┬─────┘ └────┬─────┘ └─────┬─────┘ └─┬─┘
+          your IP,     shared ID     Stremio's    HTTPS
+          dashed       (see below)   free DNS     port
+```
+
+- **`192-168-1-50`** — your server's IP with dots turned into dashes.
+- **`…stremio.rocks`** — a free service Stremio runs that (a) resolves `<dashed-ip>.…stremio.rocks`
+  back to that IP (even a LAN IP — no DNS setup by you), and (b) carries a **trusted Let's Encrypt
+  wildcard cert**, so TVs/browsers accept the HTTPS connection with no warning.
+- **`:12470`** — the container's HTTPS port.
+
+A TV opening it → resolves to your server's IP → connects on `12470` → sees a trusted cert → connects.
+The name resolves to your **internal** IP, so the TV must be on the **same network** (normal home
+setup). For **remote** access, use your **public** IP in the URL and forward port `12470`.
+
+### About `519b6502d940` — a shared, third-party dependency
+
+This ID is **inherited from the upstream [tsaridas/stremio-docker](https://github.com/tsaridas/stremio-docker)**
+and is **not unique to your install**. Everyone running this (or the upstream) image shares the same
+`*.519b6502d940.stremio.rocks` wildcard cert, fetched from **Stremio's free certificate service**.
+
+- ✅ Zero-config trusted HTTPS for TVs.
+- ⚠️ It depends on Stremio's cert service keeping that wildcard alive; if it's ever rotated or taken
+  down, the automatic cert path stops working (your stream still runs — only the trusted-HTTPS URL is affected).
+
+**Independent fallback — bring your own cert** (no reliance on stremio.rocks): put a full-chain + key
+PEM as `certificates.pem` in the data volume, set `-e SERVER_URL=https://yourdomain:12470`, and **leave
+`IPADDRESS` unset** — the server uses your cert as-is. Or, on a trusted LAN, skip HTTPS entirely and
+use `http://<your-server-ip>:8080`.
+
 ## 📜 License & spirit
 
 **MIT** — built on the MIT-licensed [stremio-docker](https://github.com/tsaridas/stremio-docker) fork.
