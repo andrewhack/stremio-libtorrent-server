@@ -12,7 +12,10 @@ services:
       STREMIOSRV_BT_LISTEN_PORT: "6881"
       STREMIOSRV_CACHE_ROOT: /root/.stremio-server
       CERT_FILE: certificates.pem    # full-chain+key PEM in the cache dir; auto self-signed if absent
-      SERVER_URL: ${SERVER_URL:-}    # web-player target; set to your public origin (e.g. https://host:12470)
+      # Set IPADDRESS to your server's LAN IP for a TRUSTED, TV-compatible cert (Let's Encrypt via
+      # *.stremio.rocks). Leave empty to use a bring-your-own cert or self-signed.
+      IPADDRESS: ${IPADDRESS:-}
+      SERVER_URL: ${SERVER_URL:-}    # web-player target; auto-set to the stremio.rocks URL when IPADDRESS is set
     ports:
       - "8080:8080"                  # web player + API (HTTP/LAN)
       - "11470:11470"              # streaming-server HTTP API

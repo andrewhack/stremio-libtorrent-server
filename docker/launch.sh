@@ -22,6 +22,12 @@ CACHE_SIZE="${STREMIOSRV_CACHE_SIZE:-19327352832}"
 ENV_ARGS=""
 [ -n "${SERVER_URL}" ] && ENV_ARGS="-e SERVER_URL=$SERVER_URL"
 
+# Auto-detect the host LAN IP so the container fetches a trusted *.stremio.rocks cert (TV-compatible)
+# with zero input. Override with IPADDRESS=<ip> (e.g. your public IP for remote), or IPADDRESS="" to
+# skip (use a bring-your-own cert / self-signed instead).
+IPADDRESS="${IPADDRESS-$(ip route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | cut -d' ' -f2)}"
+[ -n "${IPADDRESS}" ] && ENV_ARGS="$ENV_ARGS -e IPADDRESS=$IPADDRESS" && echo "[launch] IPADDRESS=$IPADDRESS -> trusted stremio.rocks cert"
+
 GPU_ARGS=""
 
 # NVIDIA: authoritative probe — does `--gpus all` actually work with this image right now?
