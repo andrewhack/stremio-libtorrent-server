@@ -2,3 +2,4 @@
 *.conf text eol=lf
 Dockerfile text eol=lf
 .dockerignore text eol=lf
+*.inc text eol=lf
