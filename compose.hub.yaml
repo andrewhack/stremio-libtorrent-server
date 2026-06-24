@@ -1,0 +1,24 @@
+# Regular-user compose — uses the PUBLISHED image (no build, no source needed).
+#   IPADDRESS=<your-server-LAN-IP> docker compose -f compose.hub.yaml up -d
+# Then open http://<server-ip>:8080  (or the trusted HTTPS URL shown in `docker logs stremio`).
+#
+# CPU/VAAPI-safe (no GPU requirement). For Intel VAAPI add `--device /dev/dri` (or a devices: entry);
+# for NVIDIA NVENC use the launcher (docker/launch.sh) which probes the GPU.
+services:
+  stremio:
+    image: androshack/stremio-libtorrent-server:latest
+    container_name: stremio
+    restart: unless-stopped
+    environment:
+      # Your server's LAN IP -> a TRUSTED, TV-compatible cert (Let's Encrypt via *.stremio.rocks).
+      # Leave empty to use a self-signed cert (browser works, TVs reject) or a bring-your-own cert.
+      IPADDRESS: ${IPADDRESS:-}
+    ports:
+      - "8080:8080"          # web player + API (HTTP/LAN)
+      - "12470:12470"        # web player + API (HTTPS, trusted cert when IPADDRESS set)
+      - "6881:6881/tcp"      # BitTorrent peer port (inbound)
+      - "6881:6881/udp"
+    volumes:
+      - stremio-data:/root/.stremio-server
+volumes:
+  stremio-data:
