@@ -17,8 +17,9 @@ RUN uv sync --no-dev --python 3.12 && chmod +x docker/entrypoint.sh
 ENV STREMIOSRV_CACHE_ROOT=/root/.stremio-server
 ENV PATH="/srv/app/.venv/bin:${PATH}"
 
-# 11470 = HTTP API; 12470 = HTTPS (nginx TLS, if a cert is mounted); 6881 = BitTorrent peer port.
-EXPOSE 11470 12470 6881
+# 8080 = web player + API (HTTP/LAN); 11470 = direct API; 12470 = web player + API (HTTPS);
+# 6881 = BitTorrent peer port.
+EXPOSE 8080 11470 12470 6881
 VOLUME ["/root/.stremio-server"]
 
 # Entrypoint runs uvicorn (http) + nginx TLS (https, when a cert is present).
