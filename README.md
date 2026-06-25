@@ -103,7 +103,8 @@ Everything is a plain `-e NAME=value` environment variable:
 **GPU transcode** (only for clients that can't direct-play):
 - Intel VAAPI → add `--device /dev/dri:/dev/dri`
 - NVIDIA NVENC → use the **[`docker/launch.sh`](docker/launch.sh)** launcher, which probes the GPU and
-  degrades gracefully (a broken or absent driver never blocks startup).
+  degrades gracefully (a broken or absent driver never blocks startup). Full NVIDIA driver + **Proxmox
+  passthrough** setup: [NVIDIA-GPU.md](https://github.com/andrewhack/stremio-docker/blob/main/NVIDIA-GPU.md) (companion fork).
 
 **Your own domain instead of stremio.rocks:** put a full-chain+key PEM as `certificates.pem` in the
 data volume, set `-e SERVER_URL=https://yourdomain:12470`, and leave `IPADDRESS` unset.
@@ -142,7 +143,7 @@ fork) and layers the open server on top:
 ```
 
 Companion fork: **[andrewhack/stremio-docker](https://github.com/andrewhack/stremio-docker)**
-(builds the `stremio-docker-dual` image; see its `NVIDIA-GPU.md` for GPU/Proxmox setup).
+(builds the `stremio-docker-dual` image; see its [`NVIDIA-GPU.md`](https://github.com/andrewhack/stremio-docker/blob/main/NVIDIA-GPU.md) for GPU/Proxmox setup).
 
 Modules: `api/` (Stremio HTTP API) · `torrent/` (libtorrent + piece-picker) · `stream/` (Range file
 server) · `transcode/` (ffmpeg NVENC/VAAPI → HLS) · `config.py` · `health.py`. Protocol reference:
