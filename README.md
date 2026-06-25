@@ -32,11 +32,44 @@ No subscription. No tracking. No black box. **100% free and open — our gift to
 > prebuilt image — build from source on those.
 
 **1.** Install [Docker](https://docs.docker.com/get-docker/).
-**2.** Run one command — swap `YOUR_SERVER_IP` for your machine's LAN IP (e.g. `192.168.1.50`):
+**2.** Copy **one** command below — whichever matches your hardware — and replace `YOUR_SERVER_IP`
+with your machine's LAN IP (e.g. `192.168.1.50`). **Not sure which? Use the first one — it works on
+everything.** *(The GPU options only speed up the occasional video that needs converting; they're not required.)*
 
+**💻 No GPU — works everywhere (start here)**
 ```sh
 docker run -d --name stremio --restart unless-stopped \
   -e IPADDRESS=YOUR_SERVER_IP \
+  -p 8080:8080 -p 12470:12470 -p 6881:6881/tcp -p 6881:6881/udp \
+  -v stremio-data:/root/.stremio-server \
+  androshack/stremio-libtorrent-server
+```
+
+**🟦 Intel / AMD GPU (VAAPI)** — same, plus `--device /dev/dri`
+```sh
+docker run -d --name stremio --restart unless-stopped \
+  -e IPADDRESS=YOUR_SERVER_IP \
+  --device /dev/dri:/dev/dri \
+  -p 8080:8080 -p 12470:12470 -p 6881:6881/tcp -p 6881:6881/udp \
+  -v stremio-data:/root/.stremio-server \
+  androshack/stremio-libtorrent-server
+```
+
+**🟩 NVIDIA GPU (NVENC)** — plus `--gpus all` (first install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host)
+```sh
+docker run -d --name stremio --restart unless-stopped \
+  -e IPADDRESS=YOUR_SERVER_IP \
+  --gpus all \
+  -p 8080:8080 -p 12470:12470 -p 6881:6881/tcp -p 6881:6881/udp \
+  -v stremio-data:/root/.stremio-server \
+  androshack/stremio-libtorrent-server
+```
+
+**🟦🟩 Both Intel + NVIDIA** — both flags
+```sh
+docker run -d --name stremio --restart unless-stopped \
+  -e IPADDRESS=YOUR_SERVER_IP \
+  --gpus all --device /dev/dri:/dev/dri \
   -p 8080:8080 -p 12470:12470 -p 6881:6881/tcp -p 6881:6881/udp \
   -v stremio-data:/root/.stremio-server \
   androshack/stremio-libtorrent-server
