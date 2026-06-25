@@ -22,5 +22,10 @@ ENV PATH="/srv/app/.venv/bin:${PATH}"
 EXPOSE 8080 11470 12470 6881
 VOLUME ["/root/.stremio-server"]
 
+# Container health: the streaming API's /health (uvicorn on :11470). Baked into the image so any run
+# — bare `docker run`, compose, etc. — reports healthy/unhealthy in `docker ps` with no extra flags.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:11470/health || exit 1
+
 # Entrypoint runs uvicorn (http) + nginx TLS (https, when a cert is present).
 CMD ["/srv/app/docker/entrypoint.sh"]
