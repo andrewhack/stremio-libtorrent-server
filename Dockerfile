@@ -1,7 +1,9 @@
 # Runtime image: the libtorrent streaming server on the dual-GPU base
 # (jellyfin-ffmpeg with NVENC/VAAPI, nginx, GPU runtime). The base provides ffmpeg/ffprobe;
 # uv manages its own Python 3.12 venv (the system python on the 22.04 base is 3.10).
-FROM stremio-docker-dual:latest
+# Base is published to Docker Hub so a clean from-scratch build works on any host (built from the
+# companion fork andrewhack/stremio-docker, Dockerfile.nvidia).
+FROM androshack/stremio-docker-dual:latest
 
 # uv (standalone binary; brings its own Python toolchain)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
