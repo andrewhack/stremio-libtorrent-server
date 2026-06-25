@@ -49,6 +49,8 @@ def build_app() -> FastAPI:
         listen_port=settings.bt_listen_port,
         cache_root=settings.cache_root,
         max_connections=settings.bt_max_connections,
+        download_rate_limit=settings.download_rate_limit,
+        upload_rate_limit=settings.upload_rate_limit,
     )
     converter = Converter(settings.cache_root, settings.transcode_profile)
     # Background cache eviction so the download cache stays under budget during long real-world use.

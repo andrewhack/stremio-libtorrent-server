@@ -1,7 +1,7 @@
 [project]
 name = "stremiosrv"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Open, self-hosted Stremio streaming server (libtorrent engine + bundled web player)"
 readme = "README.md"
 authors = [
     { name = "Andrey Karadimov", email = "karadimov@gmail.com" }

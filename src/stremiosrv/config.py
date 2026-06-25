@@ -14,5 +14,7 @@ class Settings(BaseSettings):
     cache_evict_interval: int = 60  # seconds between eviction sweeps
     cache_evict_grace: int = 300  # don't evict torrents served within this many seconds
     bt_max_connections: int = 400
+    download_rate_limit: int = 0  # bytes/sec cap on torrent download (0 = unlimited)
+    upload_rate_limit: int = 0  # bytes/sec cap on torrent upload (0 = unlimited)
     readahead_bytes: int = 134_217_728  # 128 MiB playhead buffer (deeper = fewer rebuffers)
     transcode_profile: str | None = None  # set by HW autodetect (later stage)

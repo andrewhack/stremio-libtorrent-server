@@ -97,6 +97,8 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_READAHEAD_BYTES` | `134217728` (128 MiB) | Playhead buffer — bigger absorbs more swarm jitter (fewer rebuffers). |
 | `STREMIOSRV_BT_LISTEN_PORT` | `6881` | BitTorrent peer port (the one to forward). |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | Max peer connections. |
+| `STREMIOSRV_DOWNLOAD_RATE_LIMIT` | `0` | Cap download throughput in **bytes/sec** (`0` = unlimited). E.g. `12500000` ≈ 100 Mbit/s. |
+| `STREMIOSRV_UPLOAD_RATE_LIMIT` | `0` | Cap upload throughput in **bytes/sec** (`0` = unlimited). Handy so seeding doesn't saturate your line. |
 | `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
 | `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
 
@@ -108,6 +110,13 @@ Everything is a plain `-e NAME=value` environment variable:
 
 **Your own domain instead of stremio.rocks:** put a full-chain+key PEM as `certificates.pem` in the
 data volume, set `-e SERVER_URL=https://yourdomain:12470`, and leave `IPADDRESS` unset.
+
+**Tailscale (zero port-forwarding, trusted HTTPS):** if you reach the server over a [Tailscale](https://tailscale.com)
+tailnet, you can skip both port-forwarding *and* the `*.stremio.rocks` dependency. Provision a cert for the
+node's MagicDNS name (`tailscale cert <node>.<tailnet>.ts.net`), concatenate the cert + key into one PEM,
+drop it in the data volume as `certificates.pem`, and set `-e SERVER_URL=https://<node>.<tailnet>.ts.net:12470`
+with `IPADDRESS` unset. Point your devices' Stremio **Streaming Server URL** at that tailnet address — works
+across your own devices and anyone you share the tailnet with, with a browser/TV-trusted cert.
 
 **Ports:** `8080` web+API (HTTP/LAN) · `12470` web+API (HTTPS) · `11470` direct API · `6881` BitTorrent.
 

@@ -125,15 +125,16 @@ class Handle:
 
 
 class Engine:
-    def __init__(self, listen_port: int, cache_root: str, max_connections: int = 400) -> None:
+    def __init__(self, listen_port: int, cache_root: str, max_connections: int = 400,
+                 download_rate_limit: int = 0, upload_rate_limit: int = 0) -> None:
         self._ses = lt.session({
             "listen_interfaces": f"0.0.0.0:{listen_port}",  # INBOUND listener (stock server lacks this)
             "enable_dht": True,
             "enable_lsd": True,
             "enable_upnp": True,
             "enable_natpmp": True,
-            "download_rate_limit": 0,
-            "upload_rate_limit": 0,
+            "download_rate_limit": download_rate_limit,  # bytes/sec, 0 = unlimited
+            "upload_rate_limit": upload_rate_limit,      # bytes/sec, 0 = unlimited
             # Streaming-tuned (mirrors the stock server's "ultra_fast" profile): ramp peers fast,
             # keep deep request queues, prefer TCP, suggest from read cache.
             "connections_limit": max_connections,
