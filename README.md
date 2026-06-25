@@ -19,7 +19,7 @@ No subscription. No tracking. No black box. **100% free and open — our gift to
 - **📺 Just works on TVs.** Automatic **trusted HTTPS** (a real Let's Encrypt cert) that smart TVs actually accept — zero certificate headaches.
 - **⚡ Faster, more reliable.** Unlike the closed stock server, this one **accepts inbound peers** and fetches **playhead-first**, so streams start quicker and hold up on thin swarms.
 - **🎛️ Truly yours to control.** Real dials for cache, buffering, peers, and transcode — tune deeply, or never touch a thing.
-- **🖥️ Hardware transcode, optional.** Intel **VAAPI** / NVIDIA **NVENC** when available, graceful CPU fallback — and a missing GPU never stops it from starting.
+- **🖥️ Hardware transcode, optional.** Intel **VAAPI** / NVIDIA **NVENC** when you expose a GPU to the container (opt-in — see [Advanced](#-advanced--tune-it-your-way)), with graceful CPU fallback — and a missing GPU never stops it from starting.
 - **🧩 Your addons, your choice.** It's **neutral infrastructure**: it streams whatever a Stremio addon hands it. It bundles no content and is not a source.
 - **🔓 Open source.** Read it, change it, trust it.
 
@@ -102,10 +102,13 @@ Everything is a plain `-e NAME=value` environment variable:
 | `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
 | `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
 
-**GPU transcode** (only for clients that can't direct-play):
-- Intel VAAPI → add `--device /dev/dri:/dev/dri`
-- NVIDIA NVENC → use the **[`docker/launch.sh`](docker/launch.sh)** launcher, which probes the GPU and
-  degrades gracefully (a broken or absent driver never blocks startup). Full NVIDIA driver + **Proxmox
+**GPU transcode** (only for clients that can't direct-play). Docker does **not** expose the host GPU to a
+container by default, so the one-command install above is **CPU-only**. The server *auto-detects* a GPU,
+but only one you've handed in — so opt in at launch:
+- **Intel/AMD VAAPI** → add `--device /dev/dri:/dev/dri`
+- **NVIDIA NVENC** → add `--gpus all` (requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host)
+- **Or just use [`docker/launch.sh`](docker/launch.sh)** — it probes the host and adds the right flags for you,
+  degrading gracefully (a broken or absent driver never blocks startup). Full NVIDIA driver + **Proxmox
   passthrough** setup: [NVIDIA-GPU.md](https://github.com/andrewhack/stremio-docker/blob/main/NVIDIA-GPU.md) (companion fork).
 
 **Your own domain instead of stremio.rocks:** put a full-chain+key PEM as `certificates.pem` in the
