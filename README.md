@@ -44,11 +44,25 @@ docker run -d --name stremio --restart unless-stopped \
 
 **3.** Open it:
 - 🌐 **In a browser (same network):** `http://YOUR_SERVER_IP:8080`
-- 🔒 **Trusted HTTPS (and TVs):** run `docker logs stremio` and use the printed URL — it looks like
-  `https://192-168-1-50.519b6502d940.stremio.rocks:12470`.
+- 🔒 **Trusted HTTPS (and TVs):** run `docker logs stremio` and use the printed URL — **it looks like**
+  `https://192-168-1-50.519b6502d940.stremio.rocks:12470` *(replace `192-168-1-50` with your internal IP, dots written as dashes)*.
 
 Sign into Stremio, add your addons, press play. 🍿
 *(Prefer a file? Grab [`compose.hub.yaml`](compose.hub.yaml) → `IPADDRESS=YOUR_SERVER_IP docker compose -f compose.hub.yaml up -d`.)*
+
+---
+
+## 🧰 Minimum hardware
+
+It's light — direct play (most content) barely touches the CPU; the GPU only matters for transcoding.
+
+| Resource | Minimum | Recommended | Notes |
+|---|---|---|---|
+| **CPU** | 2 cores, x86-64 | 4+ cores | `amd64` only. Transcoding (clients that can't direct-play) is the only heavy load. |
+| **RAM** | 1 GB | 2 GB+ | Engine + buffers + nginx; transcoding adds ~0.5–1 GB. |
+| **Disk** | ~3 GB + cache | SSD, cache ≥ largest file | Image ~1.5 GB; download cache defaults to **18 GiB** (tune with `STREMIOSRV_CACHE_SIZE`). Keep free space ≥ your biggest single file. |
+| **GPU** | none | Intel VAAPI / NVIDIA NVENC | Optional — only speeds up transcoding; a missing/broken GPU never blocks startup. |
+| **Network** | any | wired + `6881` forwarded | Wired beats Wi-Fi for 4K; forward port `6881` for the full swarm (see below). |
 
 ---
 
