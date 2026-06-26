@@ -241,9 +241,12 @@ setup). For **remote** access, use your **public** IP in the URL and forward por
 
 ### About `519b6502d940` — a shared, third-party dependency
 
-This ID is **inherited from the upstream [tsaridas/stremio-docker](https://github.com/tsaridas/stremio-docker)**
-and is **not unique to your install**. Everyone running this (or the upstream) image shares the same
-`*.519b6502d940.stremio.rocks` wildcard cert, fetched from **Stremio's free certificate service**.
+This ID belongs to **Stremio's own certificate service**, not to any docker image: the cert is fetched
+from Stremio's API (`api.strem.io/api/certificateGet`), which issues it for a subdomain of Stremio's
+`stremio.rocks` domain. It is **not unique to your install** — everyone running this (or the upstream
+[tsaridas/stremio-docker](https://github.com/tsaridas/stremio-docker)) image shares the same
+`*.519b6502d940.stremio.rocks` wildcard cert from **Stremio's free certificate service**. The image
+only *calls* that Stremio API; it didn't create the ID.
 
 - ✅ Zero-config trusted HTTPS for TVs.
 - ⚠️ It depends on Stremio's cert service keeping that wildcard alive; if it's ever rotated or taken
