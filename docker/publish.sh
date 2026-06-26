@@ -5,7 +5,7 @@ set -e
 
 LOCAL="${LOCAL:-stremio-libtorrent-server:dev}"
 REPO="${REPO:-androshack/stremio-libtorrent-server}"
-VERSION="${VERSION:-0.2.3}"
+VERSION="${VERSION:-0.2.4}"
 
 docker tag "$LOCAL" "$REPO:$VERSION"
 docker tag "$LOCAL" "$REPO:latest"

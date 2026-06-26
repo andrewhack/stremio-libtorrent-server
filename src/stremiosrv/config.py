@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     bt_listen_port: int = 6881
     enable_upnp: bool = True
     cache_root: str = "/root/.stremio-server"
+    cert_file: str = "certificates.pem"  # active TLS cert (in cache_root); watched by /health
     cache_size: int = 19_327_352_832  # 18 GiB download-cache budget (must exceed your largest file)
     cache_evict_interval: int = 60  # seconds between eviction sweeps
     cache_evict_grace: int = 300  # don't evict torrents served within this many seconds
