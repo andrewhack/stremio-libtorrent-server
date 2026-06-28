@@ -59,6 +59,18 @@ def scan_cache(root: str, protected: frozenset[str] = PROTECTED) -> list[dict]:
     return items
 
 
+def usage(root: str, budget: int) -> dict:
+    """Cache footprint vs budget + free disk — for the appliance suggestion advisor.
+    `cacheUsed` sums the same evictable entries the evictor manages (protected names excluded)."""
+    used = sum(i["size"] for i in scan_cache(root))
+    try:
+        du = shutil.disk_usage(root)
+        free, total = du.free, du.total
+    except OSError:
+        free, total = 0, 0
+    return {"cacheUsed": used, "cacheSize": budget, "diskFree": free, "diskTotal": total}
+
+
 def select_evictions(
     items: list[dict], budget: int, in_use: frozenset[str] = frozenset(), target_ratio: float = 0.9,
 ) -> list[dict]:

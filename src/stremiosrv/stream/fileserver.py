@@ -11,6 +11,8 @@ import os
 import time
 from collections.abc import Iterator
 
+from stremiosrv import metrics
+
 # Browser <video> needs a recognized media type or it refuses the source ("video not supported").
 # mimetypes doesn't know some container extensions (e.g. .mkv), so map the common ones explicitly.
 _VIDEO_TYPES = {
@@ -57,10 +59,15 @@ def wait_and_read(
             deadlined_to += 1
             handle.boost_piece(deadlined_to, max(0, deadlined_to - gp) * step_ms)
         deadline = time.time() + timeout
+        wait_start = time.time()
+        had_to_wait = not handle.have_piece(gp)  # piece not ready = playback waits for data
         while not handle.have_piece(gp) and time.time() < deadline:
             time.sleep(0.2)
         if not handle.have_piece(gp):
+            metrics.record_timeout()
             raise TimeoutError(f"piece {gp} not available within {timeout}s")
+        if had_to_wait:
+            metrics.record_stall(time.time() - wait_start)
         # Never read past the end of the current (verified) piece: the next piece may not be
         # downloaded yet, and reading into it would return sparse/zero bytes -> corrupt frames.
         piece_last = (gp + 1) * plen - 1 - base  # last file-relative byte still in piece gp

@@ -23,6 +23,9 @@ def test_network_and_device_info():
     assert "availableHardwareAccelerations" in c.get("/device-info").json()
 
 
-def test_global_stats_empty():
+def test_global_stats_shape():
     c = TestClient(create_app())
-    assert c.get("/stats.json").json() == {}
+    b = c.get("/stats.json").json()
+    assert set(b) >= {"cache", "playback"}
+    assert set(b["cache"]) >= {"cacheUsed", "cacheSize", "diskFree", "diskTotal"}
+    assert set(b["playback"]) >= {"stalls", "stallSeconds", "timeouts"}

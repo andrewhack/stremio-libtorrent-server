@@ -1,5 +1,8 @@
 from fastapi import APIRouter, Request
 
+from stremiosrv import metrics
+from stremiosrv.cache import usage
+
 router = APIRouter()
 
 
@@ -49,8 +52,14 @@ def device_info(request: Request) -> dict:
 
 
 @router.get("/stats.json")
-def global_stats() -> dict:
-    return {}
+def global_stats(request: Request) -> dict:
+    """Global server metrics for the appliance suggestion advisor: cache footprint vs budget +
+    free disk, and playback stalls. (Per-torrent stats are at /{infoHash}/stats.json.)"""
+    s = request.app.state.settings
+    return {
+        "cache": usage(s.cache_root, s.cache_size),
+        "playback": metrics.playback_stats(),
+    }
 
 
 @router.get("/hwaccel-profiler")
