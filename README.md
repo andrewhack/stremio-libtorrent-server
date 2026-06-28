@@ -107,11 +107,21 @@ and this server fetches a real Let's Encrypt certificate for you automatically (
 In the TV's Stremio app, set the **Streaming Server URL** to the `…stremio.rocks:12470` address shown
 by `docker logs stremio`.
 
-> **Note — the Stremio _desktop_ app** (v6) bundles its own streaming server and re‑selects
-> `127.0.0.1` on restart even when you point it at a remote, so it won't reliably use this server.
-> Use a **TV app** (Samsung/LG — the URL sticks) or the **browser** to use this server as your
-> backend; on desktop it keeps its built‑in server. (Reporting a stock `serverVersion` doesn't change
-> this — it's the desktop's own preference for its bundled server.)
+> **Note — the Stremio _desktop_ app (v6).** The desktop shell launches its own bundled streaming
+> server and re‑points itself at `127.0.0.1:11470` on **every** start — it injects a
+> `?streamingServerUrl=` parameter that overwrites the saved URL — so simply setting the Streaming
+> Server URL doesn't stick. (This is the shell's behaviour, not a `serverVersion` gate — that part is
+> already correct.) Two ways to use **this** box from the desktop:
+>
+> - **Best — launch with a flag** *(native player, full MKV/HEVC):* start Stremio with
+>   `--development --webui-url=<your …stremio.rocks:12470 URL>` (the trusted URL from
+>   `docker logs stremio`). A non‑default `--webui-url` skips the localhost injection and loads the
+>   player from this box; `--development` also skips the unused bundled server. Add the flag to your
+>   shortcut and launch from it each time. It **must** be the **trusted** `:12470` URL — a self‑signed
+>   cert is refused. After signing into your account, relaunch via the shortcut (login resets the URL).
+> - **Zero‑install** *(MP4/H.264 only):* open the `:12470` URL in a browser, or install it as an app.
+>
+> **TVs are unaffected** — Samsung/LG accept the `:12470` URL directly and it sticks.
 
 ---
 

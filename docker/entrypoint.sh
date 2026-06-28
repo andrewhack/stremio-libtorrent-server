@@ -46,6 +46,10 @@ if [ -f "$SEED_SRC" ]; then
         case "$SERVER_URL" in */) ;; *) SERVER_URL="$SERVER_URL/" ;; esac
         sed -i "s|http://127.0.0.1:11470/|${SERVER_URL}|g" "$SEED_DST"
         echo "[entrypoint] web player -> $SERVER_URL"
+        # The v6 desktop app re-points itself at its bundled 127.0.0.1 server on every launch, so the
+        # Streaming Server URL won't stick. Launching it with a non-default --webui-url skips that
+        # injection; --development also stops the bundled server. Trusted (:12470) URL only.
+        echo "[entrypoint] desktop app -> add launch flags: --development --webui-url=$SERVER_URL"
     else
         echo "[entrypoint] web player -> default 127.0.0.1:11470 (set SERVER_URL for remote clients)"
     fi
