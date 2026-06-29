@@ -13,6 +13,31 @@ DEBIAN_MAGNET = (
 )
 
 
+def test_pin_is_pinned_and_pinned_status(tmp_path):
+    import json
+    from stremiosrv.torrent.engine import Engine
+    eng = Engine(listen_port=0, cache_root=str(tmp_path), cache_size=10 * 1024 ** 3)
+    h = eng.add(DEBIAN_MAGNET)
+    # wait for metadata so we have a name and can set piece priorities
+    deadline = time.time() + 60
+    while not h.has_metadata() and time.time() < deadline:
+        time.sleep(0.5)
+    assert h.has_metadata(), "metadata never arrived (network?)"
+    ih = h.info_hash().lower()
+    eng.pin(ih)
+    assert eng.is_pinned(ih)
+    names = eng.pinned_names()
+    assert len(names) >= 1
+    pins_file = tmp_path / "pins.json"
+    assert pins_file.exists()
+    saved = json.loads(pins_file.read_text())
+    assert any((e.get("infoHash") or "").lower() == ih for e in saved)
+    status = eng.pinned_status()
+    assert len(status) >= 1
+    assert status[0]["infoHash"] == ih
+    eng.shutdown()
+
+
 def test_resume_file_written_and_skips_recheck(tmp_path):
     from stremiosrv.torrent.engine import Engine
     eng = Engine(listen_port=0, cache_root=str(tmp_path))

@@ -14,7 +14,16 @@ import time
 
 import libtorrent as lt
 
+from stremiosrv import pins as pinsmod
 from stremiosrv.torrent.trackers import merge_trackers
+
+
+class PinSpaceError(Exception):
+    """Raised when pinning a torrent would leave too little free disk for streaming."""
+    def __init__(self, needed: int, free: int) -> None:
+        super().__init__("insufficient space to pin")
+        self.needed = needed
+        self.free = free
 
 
 class Handle:
@@ -85,12 +94,14 @@ class Handle:
             self._h.piece_priority(i, prio)
 
     def ensure_low_baseline(self) -> None:
-        """Set every piece to priority 0 once, so the torrent does NOT background-fetch the whole
-        file. Only the sliding playhead window is raised (in the file server), focusing all
-        bandwidth on what's about to be played — fast start and seeks, no wasted download."""
+        """Set every piece to priority 0 (or 1 if pinned) once, so un-pinned torrents do NOT
+        background-fetch the whole file. Only the sliding playhead window is raised (in the file
+        server), focusing all bandwidth on what's about to be played — fast start and seeks, no
+        wasted download. Pinned torrents keep priority 1 so libtorrent continues filling them."""
         if getattr(self, "_baselined", False):
             return
-        self._h.prioritize_pieces([0] * self.num_pieces())
+        baseline = 1 if getattr(self, "pinned", False) else 0
+        self._h.prioritize_pieces([baseline] * self.num_pieces())
         self._baselined = True
         self._boosted: set[int] = set()
 
@@ -129,7 +140,8 @@ class Handle:
 
 class Engine:
     def __init__(self, listen_port: int, cache_root: str, max_connections: int = 400,
-                 download_rate_limit: int = 0, upload_rate_limit: int = 0) -> None:
+                 download_rate_limit: int = 0, upload_rate_limit: int = 0,
+                 cache_size: int = 0) -> None:
         self._ses = lt.session({
             "listen_interfaces": f"0.0.0.0:{listen_port}",  # INBOUND listener (stock server lacks this)
             "enable_dht": True,
@@ -164,6 +176,7 @@ class Engine:
         self._resume_dir = os.path.join(cache_root, ".resume")
         os.makedirs(self._resume_dir, exist_ok=True)
         self._pinned: set[str] = set()  # lowercased infohashes; populated by caller/pin()
+        self._cache_size = cache_size
         self._stop = threading.Event()
         self._alerts = threading.Thread(target=self._alerts_loop, daemon=True)
         self._alerts.start()
@@ -216,6 +229,88 @@ class Engine:
     def name_to_hash(self) -> dict[str, str]:
         """Map on-disk torrent name -> infohash for active torrents (so eviction can stop them)."""
         return {h.name(): ih for ih, h in self._torrents.items() if h.has_metadata()}
+
+    def load_pins_into_session(self) -> None:
+        """At startup: re-add every pinned torrent from resume data and resume seeding."""
+        self._pinned = pinsmod.pinned_hashes(self._cache_root)
+        for e in pinsmod.load_pins(self._cache_root):
+            ih = (e.get("infoHash") or "").lower()
+            if not ih:
+                continue
+            h = self.add(ih, trackers=e.get("trackers"))
+            h.pinned = True
+            self._full_priority(h)
+
+    def _full_priority(self, h: "Handle") -> None:
+        n = h.num_pieces() if h.has_metadata() else 0
+        if n:
+            h.raw().prioritize_pieces([1] * n)
+
+    def _remaining_bytes(self, h: "Handle") -> int:
+        st = h.status()
+        return max(0, st.total_wanted - st.total_done)
+
+    def is_pinned(self, info_hash: str) -> bool:
+        return info_hash.lower() in self._pinned
+
+    def pinned_names(self) -> set[str]:
+        return {h.name() for ih, h in self._torrents.items()
+                if ih in self._pinned and h.has_metadata()}
+
+    def pin(self, info_hash: str) -> dict:
+        import shutil
+        ih = info_hash.lower()
+        h = self.get(info_hash) or self.add(info_hash)
+        # disk guard: existing incomplete pins + this candidate must still leave headroom
+        free = shutil.disk_usage(self._cache_root).free
+        pinned_remaining = sum(self._remaining_bytes(self._torrents[p])
+                               for p in self._pinned if p in self._torrents)
+        candidate_remaining = self._remaining_bytes(h)
+        if not pinsmod.pin_fits(free, pinned_remaining, candidate_remaining, self._cache_size):
+            raise PinSpaceError(pinsmod.headroom(self._cache_size), free)
+        self._pinned.add(ih)
+        h.pinned = True
+        self._full_priority(h)
+        entry = {"infoHash": ih, "name": h.name() if h.has_metadata() else "",
+                 "trackers": [], "addedAt": int(time.time())}
+        existing = [e for e in pinsmod.load_pins(self._cache_root)
+                    if (e.get("infoHash") or "").lower() != ih]
+        existing.append(entry)
+        pinsmod.save_pins(self._cache_root, existing)
+        self.save_all_resume()
+        return entry
+
+    def unpin(self, info_hash: str) -> None:
+        ih = info_hash.lower()
+        self._pinned.discard(ih)
+        h = self._torrents.get(ih)
+        if h is not None:
+            h.pinned = False
+        remaining = [e for e in pinsmod.load_pins(self._cache_root)
+                     if (e.get("infoHash") or "").lower() != ih]
+        pinsmod.save_pins(self._cache_root, remaining)
+
+    def pinned_status(self) -> list[dict]:
+        out = []
+        for ih in self._pinned:
+            h = self._torrents.get(ih)
+            if h is None or not h.has_metadata():
+                continue
+            st = h.status()
+            down = st.all_time_download or st.total_done or 0
+            up = st.all_time_upload or st.total_upload or 0
+            out.append({
+                "infoHash": ih,
+                "name": h.name(),
+                "progress": round(st.progress, 4),
+                "state": "seeding" if st.is_seeding else "downloading",
+                "downloaded": down,
+                "uploaded": up,
+                "ratio": round(up / down, 3) if down else 0.0,
+                "uploadSpeed": st.upload_rate,
+                "peers": st.num_peers,
+            })
+        return out
 
     def add(self, magnet_or_hash: str, trackers: list[str] | None = None) -> Handle:
         if magnet_or_hash.startswith("magnet:"):

@@ -61,3 +61,29 @@ def test_evict_once_protects_recent(tmp_path):
         (tmp_path / f"f{i}.mkv").write_bytes(b"x" * 100)
     res = evict_once(str(tmp_path), budget=100, engine=None, grace=300)  # total 500 > budget
     assert res["deleted"] == []          # all recent -> nothing evicted
+
+
+def test_evict_skips_pinned_names(tmp_path, monkeypatch):
+    from stremiosrv import cache
+    # two oversize entries; one is pinned -> only the unpinned one is evicted
+    import os
+    import time
+    old = time.time() - 10_000
+    for name in ("pinned-movie", "other-movie"):
+        d = tmp_path / name
+        d.mkdir()
+        f = d / "f"
+        f.write_bytes(b"x" * 2_000_000)
+        os.utime(f, (old, old))   # file mtime must be old so grace=0 doesn't protect it
+        os.utime(d, (old, old))
+
+    class FakeEngine:
+        def recent_names(self, grace): return set()
+        def name_to_hash(self): return {}
+        def pinned_names(self): return {"pinned-movie"}
+
+    removed = []
+    monkeypatch.setattr(cache, "_remove", lambda p: removed.append(os.path.basename(p)))
+    cache.evict_once(str(tmp_path), budget=1_000_000, engine=FakeEngine(), grace=0)
+    assert "pinned-movie" not in removed
+    assert "other-movie" in removed

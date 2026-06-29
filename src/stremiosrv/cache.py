@@ -113,6 +113,8 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
     name_hash: dict[str, str] = {}
     if engine is not None:
         in_use |= set(engine.recent_names(grace))
+        if hasattr(engine, "pinned_names"):
+            in_use |= set(engine.pinned_names())
         name_hash = engine.name_to_hash()
     victims = select_evictions(items, budget, frozenset(in_use))
     deleted = []
