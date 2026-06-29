@@ -32,14 +32,23 @@ def test_read_never_crosses_into_unavailable_piece(tmp_path):
     plen = 1024
     (tmp_path / "f.bin").write_bytes(b"A" * plen + b"\x00" * plen)  # piece0=real, piece1=sparse
     h = FakeHandle(plen, have={0})
-    # Range starts mid-piece-0 and extends into piece-1; piece-1 is not available.
-    chunks = []
-    try:
-        for c in wait_and_read(str(tmp_path), h, 0, 512, 1500, timeout=0.5, chunk=1024):
-            chunks.append(c)
-    except TimeoutError:
-        pass  # expected once we reach the unavailable piece
+    # Range starts mid-piece-0 and extends into piece-1; piece-1 is not available -> the stream
+    # ends cleanly at the piece boundary (no raise), yielding only the valid tail of piece 0.
+    chunks = list(wait_and_read(str(tmp_path), h, 0, 512, 1500, timeout=0.5, first_timeout=0.5, chunk=1024))
     data = b"".join(chunks)
     # Must yield ONLY the valid tail of piece 0 — never the sparse zeros of piece 1.
     assert data == b"A" * 512
     assert b"\x00" not in data
+
+
+def test_timeout_ends_stream_gracefully_without_raising(tmp_path, monkeypatch):
+    """Cold-start: no piece ever arrives -> generator ends cleanly (no ASGI ExceptionGroup) and
+    records a timeout, so the player retries instead of seeing a stack trace."""
+    from stremiosrv import metrics
+    timeouts = []
+    monkeypatch.setattr(metrics, "record_timeout", lambda: timeouts.append(1))
+    (tmp_path / "f.bin").write_bytes(b"\x00" * 4096)
+    h = FakeHandle(plen=1024, have=set())  # nothing downloaded
+    chunks = list(wait_and_read(str(tmp_path), h, 0, 0, 2000, timeout=0.2, first_timeout=0.2, chunk=1024))
+    assert chunks == []          # no data, but...
+    assert timeouts == [1]       # ...recorded the timeout and returned (did NOT raise)
