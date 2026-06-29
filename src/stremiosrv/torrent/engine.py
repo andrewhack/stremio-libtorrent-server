@@ -13,7 +13,10 @@ import shutil
 import threading
 import time
 
-import libtorrent as lt
+try:
+    import libtorrent as lt
+except ImportError:  # libtorrent not installed (e.g. test environments without the C extension)
+    lt = None  # type: ignore[assignment]
 
 from stremiosrv import pins as pinsmod
 from stremiosrv.torrent.trackers import merge_trackers

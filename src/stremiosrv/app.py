@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from stremiosrv import health
-from stremiosrv.api import casting, handshake, hls, playback, subs
+from stremiosrv.api import casting, handshake, hls, pins, playback, subs
 from stremiosrv.api import cache as cache_api
 from stremiosrv.config import Settings
 
@@ -25,6 +25,7 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     app.state.converter = converter
     app.include_router(health.router)
     app.include_router(handshake.router)
+    app.include_router(pins.router)
     app.include_router(playback.router)
     app.include_router(cache_api.router)
     app.include_router(hls.router)
@@ -55,6 +56,7 @@ def build_app() -> FastAPI:
         upload_rate_limit=settings.upload_rate_limit,
         cache_size=settings.cache_size,
     )
+    engine.load_pins_into_session()
     converter = Converter(settings.cache_root, settings.transcode_profile)
     # Background cache eviction so the download cache stays under budget during long real-world use.
     threading.Thread(
