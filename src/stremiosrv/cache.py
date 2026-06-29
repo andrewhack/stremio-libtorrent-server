@@ -22,6 +22,8 @@ PROTECTED = frozenset({
     ".server-settings.json.swp",
     "stremio-cache",
     "transcode",
+    ".resume",
+    "pins.json",
 })
 
 
