@@ -83,6 +83,11 @@ class Converter:
             self._jobs[job_id] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
             return d
 
+    def active_count(self) -> int:
+        """Number of ffmpeg transcode jobs currently running (for the admin transcode/GPU card)."""
+        with self._lock:
+            return sum(1 for p in self._jobs.values() if p.poll() is None)
+
     def stop(self, job_id: str) -> None:
         with self._lock:
             p = self._jobs.pop(job_id, None)

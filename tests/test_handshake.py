@@ -32,3 +32,21 @@ def test_global_stats_shape():
     assert set(b) >= {"cache", "playback"}
     assert set(b["cache"]) >= {"cacheUsed", "cacheSize", "diskFree", "diskTotal"}
     assert set(b["playback"]) >= {"stalls", "stallSeconds", "timeouts"}
+
+
+def test_transcode_stats_no_gpu():
+    c = TestClient(create_app())  # no converter, no profile -> CPU/direct-play only
+    assert c.get("/transcode.json").json() == {"hwAccel": False, "profile": None, "activeTranscodes": 0}
+
+
+def test_transcode_stats_with_profile_and_jobs():
+    from stremiosrv.config import Settings
+
+    class FakeConv:
+        def active_count(self):
+            return 2
+
+    s = Settings()
+    s.transcode_profile = "nvenc-linux"
+    b = TestClient(create_app(settings=s, converter=FakeConv())).get("/transcode.json").json()
+    assert b == {"hwAccel": True, "profile": "nvenc-linux", "activeTranscodes": 2}

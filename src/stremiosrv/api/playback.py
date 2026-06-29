@@ -136,8 +136,8 @@ def serve(info_hash: str, idx: int, request: Request):
     if not h.has_metadata():
         return Response(status_code=504, content=b"metadata timeout")
 
-    h.ensure_low_baseline()  # don't background-fetch the whole torrent
-    h.refocus()              # a new request (often a seek) -> drop the previous window's priorities
+    h.focus_file(idx)        # download the full played file (not other files in a pack); seek-friendly
+    h.refocus()              # a new request (often a seek) -> drop the previous window's deadlines
     total = h.file_size(idx)
     start, end = parse_range(request.headers.get("Range"), total)
     headers = {

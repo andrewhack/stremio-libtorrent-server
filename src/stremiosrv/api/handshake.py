@@ -70,3 +70,17 @@ def hwaccel_profiler(request: Request) -> dict:
     """Report the active hardware-transcode profile (set by autodetect at startup)."""
     p = request.app.state.settings.transcode_profile
     return {"profile": p, "available": [p] if p else []}
+
+
+@router.get("/transcode.json")
+def transcode_stats(request: Request) -> dict:
+    """Transcoding / GPU status for the admin card: whether HW accel is active, the detected
+    profile (e.g. nvenc-linux / vaapi*; None = CPU/direct-play only), and how many transcodes are
+    running right now. Most playback is direct-play and uses no transcoder at all."""
+    p = request.app.state.settings.transcode_profile
+    conv = getattr(request.app.state, "converter", None)
+    return {
+        "hwAccel": p is not None,
+        "profile": p,
+        "activeTranscodes": conv.active_count() if conv is not None else 0,
+    }

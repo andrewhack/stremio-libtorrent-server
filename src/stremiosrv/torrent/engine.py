@@ -98,17 +98,33 @@ class Handle:
         for i in pieces:
             self._h.piece_priority(i, prio)
 
-    def ensure_low_baseline(self) -> None:
-        """Set every piece to priority 0 (or 1 if pinned) once, so un-pinned torrents do NOT
-        background-fetch the whole file. Only the sliding playhead window is raised (in the file
-        server), focusing all bandwidth on what's about to be played — fast start and seeks, no
-        wasted download. Pinned torrents keep priority 1 so libtorrent continues filling them."""
-        if getattr(self, "_baselined", False):
+    def focus_file(self, idx: int) -> None:
+        """Download the FULL file being played (sequentially) so seeks/fast-forward land in cached
+        data — but NOT the other files in the torrent. A torrent is often a multi-episode pack, so
+        we want only the episode/movie being watched, not the whole pack. The played file is wanted;
+        other files are priority 0 (skipped). A *pinned* torrent instead wants every file (it's kept
+        and seeded). The playhead window is still rushed via per-piece deadlines on top.
+
+        Re-applied only when the focused file changes (cheap + idempotent across a file's many range
+        requests)."""
+        if getattr(self, "_focused_idx", None) == idx:
             return
-        baseline = 1 if getattr(self, "pinned", False) else 0
-        self._h.prioritize_pieces([baseline] * self.num_pieces())
-        self._baselined = True
-        self._boosted: set[int] = set()
+        ti = self._h.torrent_file()
+        if ti is None:
+            return
+        nfiles = ti.files().num_files()
+        base = 1 if getattr(self, "pinned", False) else 0  # pinned: seed all files; else only this one
+        prios = [base] * nfiles
+        if 0 <= idx < nfiles:
+            prios[idx] = 4  # the played file: download it fully
+        try:
+            self._h.prioritize_files(prios)
+            self._h.set_sequential_download(True)  # fill the wanted file contiguously, front->end
+        except Exception:  # noqa: BLE001 — best-effort; deadlines still drive the playhead
+            pass
+        self._focused_idx = idx
+        if not hasattr(self, "_boosted"):
+            self._boosted = set()
 
     def boost_piece(self, piece: int, deadline_ms: int) -> None:
         """Mark a playhead piece as top priority + urgent, and remember it so a later seek can
@@ -120,11 +136,12 @@ class Handle:
         self._boosted.add(piece)
 
     def refocus(self) -> None:
-        """Drop the previous playhead window back to priority 0 (unless already downloaded) so a
-        seek concentrates all bandwidth on the new region instead of splitting it."""
+        """Drop the previous playhead window from rushed (7) back to normal priority (4) and clear
+        its deadline, so a new seek's window gets the bandwidth focus. Pieces are NOT dropped to 0 —
+        they keep downloading as part of the full background fill (so a later seek back finds them)."""
         for p in getattr(self, "_boosted", set()):
             if not self._h.have_piece(p):
-                self._h.piece_priority(p, 0)
+                self._h.piece_priority(p, 4)  # normal/wanted (keep downloading), not 0
                 try:
                     self._h.reset_piece_deadline(p)
                 except Exception:  # noqa: BLE001
@@ -146,7 +163,8 @@ class Handle:
 class Engine:
     def __init__(self, listen_port: int, cache_root: str, max_connections: int = 400,
                  download_rate_limit: int = 0, upload_rate_limit: int = 0,
-                 cache_size: int = 0) -> None:  # 0 = guard disabled; build_app passes settings.cache_size
+                 cache_size: int = 0,  # 0 = guard disabled; build_app passes settings.cache_size
+                 resume_save_interval: int = 30) -> None:
         self._ses = lt.session({
             "listen_interfaces": f"0.0.0.0:{listen_port}",  # INBOUND listener (stock server lacks this)
             "enable_dht": True,
@@ -188,6 +206,12 @@ class Engine:
         self._stop = threading.Event()
         self._alerts = threading.Thread(target=self._alerts_loop, daemon=True)
         self._alerts.start()
+        # Periodically persist fast-resume so an ungraceful container stop (SIGKILL, power loss)
+        # still leaves recent resume data -> next play re-adds without a full recheck -> no black
+        # first-play after restart. shutdown() also saves on a graceful stop.
+        self._resume_save_interval = resume_save_interval
+        self._saver = threading.Thread(target=self._resume_saver_loop, daemon=True)
+        self._saver.start()
 
     def _touch(self, info_hash: str) -> None:
         self._last_access[info_hash.lower()] = time.monotonic()
@@ -236,6 +260,18 @@ class Engine:
                 else:
                     h.raw().save_resume_data()
             except Exception:  # noqa: BLE001
+                pass
+
+    def _resume_saver_loop(self) -> None:
+        """Background loop: periodically persist resume data so a crash/kill loses < interval of
+        progress (avoids the recheck/black-first-play after a non-graceful restart)."""
+        while not self._stop.is_set():
+            self._stop.wait(self._resume_save_interval)
+            if self._stop.is_set():
+                break
+            try:
+                self.save_all_resume()
+            except Exception:  # noqa: BLE001 — never let the saver thread die
                 pass
 
     def recent_names(self, grace: int) -> set[str]:

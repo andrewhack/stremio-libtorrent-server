@@ -17,5 +17,7 @@ class Settings(BaseSettings):
     bt_max_connections: int = 400
     download_rate_limit: int = 0  # bytes/sec cap on torrent download (0 = unlimited)
     upload_rate_limit: int = 0  # bytes/sec cap on torrent upload (0 = unlimited)
-    readahead_bytes: int = 134_217_728  # 128 MiB playhead buffer (deeper = fewer rebuffers)
+    readahead_bytes: int = 268_435_456  # 256 MiB rushed playhead window (deeper = fewer rebuffers);
+    # the rest of the played file fills via the full sequential background download (engine.focus_file)
+    resume_save_interval: int = 30  # seconds between periodic fast-resume saves (survives ungraceful stop)
     transcode_profile: str | None = None  # set by HW autodetect (later stage)
