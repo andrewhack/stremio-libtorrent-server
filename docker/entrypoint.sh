@@ -60,7 +60,11 @@ mkdir -p /tmp/nx-proxy /tmp/nx-body
 # Render the cert path into the nginx config (honors a custom STREMIOSRV_CACHE_ROOT).
 sed "s#/root/.stremio-server/certificates.pem#${CERT}#g" \
     /srv/app/docker/nginx-allinone.conf > /tmp/nginx-allinone.conf
-/srv/app/.venv/bin/uvicorn stremiosrv.app:build_app --factory --host 0.0.0.0 --port 11470 &
+# --no-access-log: don't log every request — those lines include infohash/stream paths (a
+# content-neutrality + privacy concern, like nginx's access_log off) and would otherwise bury real
+# warnings/errors so the admin Logs card surfaces nothing.
+/srv/app/.venv/bin/uvicorn stremiosrv.app:build_app --factory --host 0.0.0.0 --port 11470 \
+  --no-access-log &
 APP_PID=$!
 nginx -c /tmp/nginx-allinone.conf -g 'daemon off;' &
 wait "$APP_PID"
