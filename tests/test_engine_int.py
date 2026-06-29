@@ -5,6 +5,10 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
+# engine.py now imports cleanly without libtorrent (lt=None) so the app stays importable; skip these
+# real-session tests when the binding is actually absent (dev laptops / CI without libtorrent).
+pytest.importorskip("libtorrent")
+
 
 def _engine_or_skip(port: int):
     try:
