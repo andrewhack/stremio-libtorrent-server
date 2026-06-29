@@ -182,6 +182,9 @@ class Engine:
         os.makedirs(self._resume_dir, exist_ok=True)
         self._pinned: set[str] = set()  # lowercased infohashes; populated by caller/pin()
         self._cache_size = cache_size
+        # Latest UPnP/NAT-PMP port-map result (best-effort; populated by the alerts loop if the
+        # router auto-forwards). {"mapped": bool, "transport": str|None, "externalPort": int|None}
+        self._portmap = {"mapped": False, "transport": None, "externalPort": None}
         self._stop = threading.Event()
         self._alerts = threading.Thread(target=self._alerts_loop, daemon=True)
         self._alerts.start()
@@ -215,6 +218,13 @@ class Engine:
                             cachemod.save_name_index(self._cache_root, index)
                     except Exception:  # noqa: BLE001 — index is best-effort
                         pass
+                elif isinstance(a, lt.portmap_alert):
+                    # router auto-forwarded our BT port (UPnP / NAT-PMP)
+                    self._portmap = {"mapped": True, "transport": str(a.map_transport),
+                                     "externalPort": int(a.external_port)}
+                elif isinstance(a, lt.portmap_error_alert):
+                    self._portmap = {"mapped": False, "transport": str(a.map_transport),
+                                     "externalPort": None}
 
     def save_all_resume(self) -> None:
         """Ask libtorrent to persist resume data for every torrent (alerts loop writes the files)."""
@@ -376,6 +386,29 @@ class Engine:
     def listen_port(self) -> int:
         """The actual TCP port the session is listening on (0 if not yet listening)."""
         return self._ses.listen_port()
+
+    def peer_count(self) -> int:
+        """Total peers connected across all torrents."""
+        return sum(h.status().num_peers for h in self._torrents.values())
+
+    def inbound_peer_count(self) -> int:
+        """Connected peers that THEY initiated (remote-initiated). Any inbound peer proves the
+        BT listen port is reachable from the internet — the core signal for 'is 6881 forwarded'."""
+        if lt is None:
+            return 0
+        n = 0
+        for h in self._torrents.values():
+            try:
+                for p in h.raw().get_peer_info():
+                    if not (p.flags & lt.peer_info.local_connection):
+                        n += 1
+            except Exception:  # noqa: BLE001
+                pass
+        return n
+
+    def portmap_status(self) -> dict:
+        """Latest UPnP/NAT-PMP auto-forward result for the BT port (best-effort)."""
+        return dict(self._portmap)
 
     def shutdown(self) -> None:
         self.save_all_resume()
