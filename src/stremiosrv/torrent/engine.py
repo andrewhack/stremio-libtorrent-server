@@ -8,6 +8,8 @@ Targets libtorrent 2.0.x (python bindings).
 """
 from __future__ import annotations
 
+import os
+import threading
 import time
 
 import libtorrent as lt
@@ -20,6 +22,7 @@ class Handle:
 
     def __init__(self, h: "lt.torrent_handle") -> None:
         self._h = h
+        self.pinned = False
 
     def status(self):
         return self._h.status()
@@ -158,9 +161,46 @@ class Engine:
         self._cache_root = cache_root
         self._torrents: dict[str, Handle] = {}
         self._last_access: dict[str, float] = {}  # infohash -> monotonic time of last serve
+        self._resume_dir = os.path.join(cache_root, ".resume")
+        os.makedirs(self._resume_dir, exist_ok=True)
+        self._pinned: set[str] = set()  # lowercased infohashes; populated by caller/pin()
+        self._stop = threading.Event()
+        self._alerts = threading.Thread(target=self._alerts_loop, daemon=True)
+        self._alerts.start()
 
     def _touch(self, info_hash: str) -> None:
         self._last_access[info_hash.lower()] = time.monotonic()
+
+    def _resume_file(self, info_hash: str) -> str:
+        return os.path.join(self._resume_dir, info_hash.lower() + ".fastresume")
+
+    def _alerts_loop(self) -> None:
+        while not self._stop.is_set():
+            self._ses.wait_for_alert(1000)
+            for a in self._ses.pop_alerts():
+                if isinstance(a, lt.save_resume_data_alert):
+                    try:
+                        ih = str(a.params.info_hashes.v1)
+                        buf = lt.write_resume_data_buf(a.params)
+                        path = self._resume_file(ih)
+                        tmp = path + ".tmp"
+                        with open(tmp, "wb") as f:
+                            f.write(buf)
+                        os.replace(tmp, path)
+                    except Exception:  # noqa: BLE001 — never let the alerts thread die
+                        pass
+
+    def save_all_resume(self) -> None:
+        """Ask libtorrent to persist resume data for every torrent (alerts loop writes the files)."""
+        flags = getattr(lt, "save_resume_flags_t", None)
+        for h in self._torrents.values():
+            try:
+                if flags is not None and hasattr(flags, "save_info_dict"):
+                    h.raw().save_resume_data(flags.save_info_dict)
+                else:
+                    h.raw().save_resume_data()
+            except Exception:  # noqa: BLE001
+                pass
 
     def recent_names(self, grace: int) -> set[str]:
         """Torrent file/dir names served within `grace` seconds — protected from eviction."""
@@ -183,6 +223,14 @@ class Engine:
         else:
             p = lt.add_torrent_params()
             p.info_hashes = lt.info_hash_t(lt.sha1_hash(bytes.fromhex(magnet_or_hash)))
+        info_hash = str(p.info_hashes.v1)
+        resume_path = self._resume_file(info_hash)
+        if os.path.exists(resume_path):
+            try:
+                with open(resume_path, "rb") as f:
+                    p = lt.read_resume_data(f.read())  # trusts on-disk pieces -> no recheck
+            except Exception:  # noqa: BLE001 — corrupt resume: fall back to a fresh add
+                pass
         existing = list(p.trackers) if p.trackers else []
         p.trackers = merge_trackers(existing, trackers)
         p.save_path = self._cache_root
@@ -190,6 +238,7 @@ class Engine:
         # range) so seeks and trailing-moov fetches are fast instead of waiting for in-order download.
         th = self._ses.add_torrent(p)
         h = Handle(th)
+        h.pinned = info_hash.lower() in self._pinned
         self._torrents[h.info_hash().lower()] = h
         self._touch(h.info_hash())
         return h
@@ -222,5 +271,8 @@ class Engine:
         return self._ses.listen_port()
 
     def shutdown(self) -> None:
+        self.save_all_resume()
+        time.sleep(2)  # let the alerts loop flush resume files
+        self._stop.set()
         for ih in list(self._torrents):
             self.remove(ih)
