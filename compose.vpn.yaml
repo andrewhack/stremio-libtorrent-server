@@ -16,7 +16,7 @@ services:
       - "8080:8080"
       - "11470:11470"
       - "12470:12470"
-      - "8000:8000"   # gluetun control API (LAN only)
+      - "127.0.0.1:8000:8000"   # gluetun control API (localhost only)
   stremio:
     image: androshack/stremio-libtorrent-server:latest
     network_mode: "service:gluetun"
