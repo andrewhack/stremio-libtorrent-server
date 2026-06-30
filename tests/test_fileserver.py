@@ -52,3 +52,17 @@ def test_timeout_ends_stream_gracefully_without_raising(tmp_path, monkeypatch):
     chunks = list(wait_and_read(str(tmp_path), h, 0, 0, 2000, timeout=0.2, first_timeout=0.2, chunk=1024))
     assert chunks == []          # no data, but...
     assert timeouts == [1]       # ...recorded the timeout and returned (did NOT raise)
+
+
+def test_disk_error_ends_stream_gracefully(tmp_path, monkeypatch):
+    """A mid-stream failure (file not on disk yet, handle removed by the evictor, or disk I/O) must
+    end the stream cleanly — NOT raise into the ASGI layer, which surfaces as an ExceptionGroup +
+    nginx 'upstream prematurely closed connection'."""
+    from stremiosrv import metrics
+    timeouts = []
+    monkeypatch.setattr(metrics, "record_timeout", lambda: timeouts.append(1))
+    h = FakeHandle(plen=1024, have={0})  # piece 0 reported available...
+    # ...but no f.bin on disk -> open() raises FileNotFoundError inside the generator.
+    chunks = list(wait_and_read(str(tmp_path), h, 0, 0, 2000, timeout=0.5, first_timeout=0.5, chunk=1024))
+    assert chunks == []        # ended cleanly (no raise)...
+    assert timeouts == [1]     # ...recorded + returned

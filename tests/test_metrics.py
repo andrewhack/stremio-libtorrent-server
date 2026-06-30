@@ -62,10 +62,11 @@ def test_wait_and_read_records_timeout(tmp_path):
     plen = 1024
     (tmp_path / "f.bin").write_bytes(b"A" * plen)
     h = _Handle(plen, ready_at=time.time() + 9999)  # never arrives within the timeout
-    try:
-        list(wait_and_read(str(tmp_path), h, 0, 0, plen - 1, timeout=0.4, chunk=plen))
-    except TimeoutError:
-        pass
+    # first_timeout too (the first piece uses it) so the test is fast, not 120s. wait_and_read no
+    # longer raises — it ends the stream cleanly — so we just drain it.
+    chunks = list(wait_and_read(str(tmp_path), h, 0, 0, plen - 1,
+                                timeout=0.4, first_timeout=0.4, chunk=plen))
+    assert chunks == []  # ended cleanly (graceful), did not raise
     snap = metrics.playback_stats()
     assert snap["timeouts"] == 1
     assert snap["stalls"] == 0  # a timeout is not also counted as a (recovered) stall

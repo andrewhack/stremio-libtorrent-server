@@ -56,44 +56,55 @@ def wait_and_read(
     is a fixed *byte budget* (not a piece count) so on big torrents with large pieces it stays a
     tight ~50 MiB region — a seek rushes the first piece at the target instead of spreading
     bandwidth over ~1 GB."""
-    plen = handle.piece_length()
-    base = handle.file_offset(idx)
-    path = file_disk_path(save_path, handle, idx)
-    total = handle.num_pieces()
-    window = max(4, min(total, window_bytes // plen))  # pieces, derived from the byte budget
-    pos = start
-    deadlined_to = (base + start) // plen - 1  # last piece we've already boosted
-    yielded = False  # the first piece (cold start) gets the longer first_timeout budget
-    while pos <= end:
-        gp = (base + pos) // plen  # global piece index for the current byte position
-        # Slide the boost window forward so upcoming pieces are rushed in order.
-        far = min(gp + window, total - 1)
-        while deadlined_to < far:
-            deadlined_to += 1
-            handle.boost_piece(deadlined_to, max(0, deadlined_to - gp) * step_ms)
-        budget = timeout if yielded else first_timeout
-        deadline = time.time() + budget
-        wait_start = time.time()
-        had_to_wait = not handle.have_piece(gp)  # piece not ready = playback waits for data
-        while not handle.have_piece(gp) and time.time() < deadline:
-            time.sleep(0.2)
-        if not handle.have_piece(gp):
-            # Give up gracefully: end the stream (no raise) so the player retries instead of seeing
-            # an ASGI error. Common on peer-starved boxes — surfaced via /netcheck + the timeout metric.
-            metrics.record_timeout()
-            logger.warning("piece %d not available within %.0fs (peer-starved?); ending stream", gp, budget)
-            return
-        if had_to_wait:
-            metrics.record_stall(time.time() - wait_start)
-        # Never read past the end of the current (verified) piece: the next piece may not be
-        # downloaded yet, and reading into it would return sparse/zero bytes -> corrupt frames.
-        piece_last = (gp + 1) * plen - 1 - base  # last file-relative byte still in piece gp
-        n = min(chunk, end - pos + 1, piece_last - pos + 1)
-        with open(path, "rb") as f:
-            f.seek(pos)
-            data = f.read(n)
-        if not data:
-            break
-        yield data
-        yielded = True
-        pos += len(data)
+    try:
+        plen = handle.piece_length()
+        base = handle.file_offset(idx)
+        path = file_disk_path(save_path, handle, idx)
+        total = handle.num_pieces()
+        window = max(4, min(total, window_bytes // plen))  # pieces, derived from the byte budget
+        pos = start
+        deadlined_to = (base + start) // plen - 1  # last piece we've already boosted
+        yielded = False  # the first piece (cold start) gets the longer first_timeout budget
+        while pos <= end:
+            gp = (base + pos) // plen  # global piece index for the current byte position
+            # Slide the boost window forward so upcoming pieces are rushed in order.
+            far = min(gp + window, total - 1)
+            while deadlined_to < far:
+                deadlined_to += 1
+                handle.boost_piece(deadlined_to, max(0, deadlined_to - gp) * step_ms)
+            budget = timeout if yielded else first_timeout
+            deadline = time.time() + budget
+            wait_start = time.time()
+            had_to_wait = not handle.have_piece(gp)  # piece not ready = playback waits for data
+            while not handle.have_piece(gp) and time.time() < deadline:
+                time.sleep(0.2)
+            if not handle.have_piece(gp):
+                # Give up gracefully: end the stream (no raise) so the player retries instead of
+                # seeing an ASGI error. Common on peer-starved boxes — surfaced via /netcheck.
+                metrics.record_timeout()
+                logger.warning("piece %d not available within %.0fs (peer-starved?); ending stream", gp, budget)
+                return
+            if had_to_wait:
+                metrics.record_stall(time.time() - wait_start)
+            # Never read past the end of the current (verified) piece: the next piece may not be
+            # downloaded yet, and reading into it would return sparse/zero bytes -> corrupt frames.
+            piece_last = (gp + 1) * plen - 1 - base  # last file-relative byte still in piece gp
+            n = min(chunk, end - pos + 1, piece_last - pos + 1)
+            with open(path, "rb") as f:
+                f.seek(pos)
+                data = f.read(n)
+            if not data:
+                break
+            yield data
+            yielded = True
+            pos += len(data)
+    except Exception as e:  # noqa: BLE001 — must NEVER bubble into the ASGI layer
+        # Any mid-stream error — file not on disk yet (FileNotFoundError), the torrent handle removed
+        # by the evictor mid-stream (invalid-handle), or a transient disk I/O error — would otherwise
+        # surface as an ugly ASGI ExceptionGroup + nginx "upstream prematurely closed connection" and
+        # alarm the user. End the stream cleanly instead; the player simply re-requests the range and
+        # succeeds once the data is present. (Client disconnects raise GeneratorExit, not Exception,
+        # so they pass through and close the generator normally.)
+        metrics.record_timeout()
+        logger.warning("stream ended early (%s: %s); player will retry", type(e).__name__, e)
+        return
