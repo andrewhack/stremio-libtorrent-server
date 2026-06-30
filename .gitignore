@@ -4,3 +4,4 @@
 .venv/
 __pycache__/
 docs/server.reference.js
+.superpowers/
