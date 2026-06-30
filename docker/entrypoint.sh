@@ -14,7 +14,10 @@ CERT="$CACHE/${CERT_FILE:-certificates.pem}"
 mkdir -p "$CACHE"
 if [ -n "${IPADDRESS}" ]; then
     echo "[entrypoint] IPADDRESS=$IPADDRESS -> fetching trusted stremio.rocks cert"
-    if (cd /srv/stremio-server && node certificate.js --action fetch); then
+    # Time-box the fetch: on an offline / isolated (LAN-only, static-IP) network it would otherwise
+    # hang on DNS/HTTP timeouts and block uvicorn from ever starting. On timeout we fall through to
+    # the existing/self-signed cert so the server still comes up on the LAN.
+    if (cd /srv/stremio-server && timeout 30 node certificate.js --action fetch); then
         IPD=$(echo "$IPADDRESS" | sed "s/[.]/-/g")
         SROCKS_DOMAIN="${IPD}.519b6502d940.stremio.rocks"
         cp /srv/stremio-server/certificates.pem "$CERT"
