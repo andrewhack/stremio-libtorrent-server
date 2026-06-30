@@ -1,4 +1,6 @@
 import os
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 from fastapi import APIRouter, Request, Response
 
@@ -7,6 +9,11 @@ from stremiosrv.certcheck import cert_days_left
 router = APIRouter()
 
 CERT_WARN_DAYS = 14  # flag the trusted cert as degraded once it's within this window of expiry
+
+try:
+    _VERSION: str | None = _pkg_version("stremiosrv")  # the running server version, for the admin card
+except PackageNotFoundError:  # pragma: no cover - only when not installed as a package
+    _VERSION = None
 
 
 @router.get("/health")
@@ -31,4 +38,4 @@ def health(request: Request, response: Response) -> dict:
                 extra["certDaysLeft"] = days
     status = "healthy" if all(v == "ok" for v in components.values()) else "degraded"
     response.status_code = 200 if status == "healthy" else 503
-    return {"status": status, "components": components, **extra}
+    return {"status": status, "components": components, "version": _VERSION, **extra}
