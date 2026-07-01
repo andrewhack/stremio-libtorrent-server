@@ -37,6 +37,11 @@ class Handle:
     def __init__(self, h: "lt.torrent_handle") -> None:
         self._h = h
         self.pinned = False
+        # Playhead pieces rushed to priority 7 (see boost_piece). Mutated from the streaming thread
+        # (boost_piece) and read/cleared from request threads (refocus), so guard with a lock —
+        # iterating it live crashed refocus with "Set changed size during iteration".
+        self._boosted: set[int] = set()
+        self._boosted_lock = threading.Lock()
 
     def status(self):
         return self._h.status()
@@ -123,30 +128,33 @@ class Handle:
         except Exception:  # noqa: BLE001 — best-effort; deadlines still drive the playhead
             pass
         self._focused_idx = idx
-        if not hasattr(self, "_boosted"):
-            self._boosted = set()
 
     def boost_piece(self, piece: int, deadline_ms: int) -> None:
         """Mark a playhead piece as top priority + urgent, and remember it so a later seek can
         drop it (refocus)."""
         self._h.piece_priority(piece, 7)
         self.set_piece_deadline(piece, deadline_ms)
-        if not hasattr(self, "_boosted"):
-            self._boosted = set()
-        self._boosted.add(piece)
+        with self._boosted_lock:
+            self._boosted.add(piece)
 
     def refocus(self) -> None:
         """Drop the previous playhead window from rushed (7) back to normal priority (4) and clear
         its deadline, so a new seek's window gets the bandwidth focus. Pieces are NOT dropped to 0 —
         they keep downloading as part of the full background fill (so a later seek back finds them)."""
-        for p in getattr(self, "_boosted", set()):
+        # Snapshot-and-swap under the lock so we never iterate the live set while the streaming
+        # thread is adding to it (that raced -> "Set changed size during iteration", which aborted
+        # the request and stopped a new episode/seek from starting). Pieces boosted after the swap
+        # land in the fresh set and are handled by the next refocus.
+        with self._boosted_lock:
+            boosted = self._boosted
+            self._boosted = set()
+        for p in boosted:
             if not self._h.have_piece(p):
                 self._h.piece_priority(p, 4)  # normal/wanted (keep downloading), not 0
                 try:
                     self._h.reset_piece_deadline(p)
                 except Exception:  # noqa: BLE001
                     pass
-        self._boosted = set()
 
     def set_piece_deadline(self, piece: int, ms: int) -> None:
         """Ask libtorrent to fetch this piece within `ms` (urgent, order-independent — enables
