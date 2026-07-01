@@ -9,11 +9,11 @@ Point any Stremio client (browser, Android TV, Tizen, webOS, desktop) at it and 
 
 No subscription. No tracking. No black box. **100% free and open — our gift to the community.** 💛
 
-> **Heads-up — it keeps working after you stop.** Because it's a real torrent client, a title you
-> started can keep **downloading to completion and seeding (uploading) to other peers** after you
-> close the player — that's normal BitTorrent activity, not a bug. Unpinned titles are cleared
-> automatically by cache eviction; **pinned** ones stay and seed until you unpin. Cap up/down
-> bandwidth in the settings if you want to limit it.
+> **Sharing back with the community. 💛** This is a real torrent client, so a title you started keeps
+> **downloading to completion and seeding (uploading) back to other Stremio users** even after you
+> close the player — that's how you help keep the swarm fast and healthy **for everyone**. Unpinned
+> titles are cleared automatically; **pin** the ones you'd like to keep sharing. Prefer to limit it?
+> Cap up/down bandwidth in the settings any time — your box, your call.
 
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-androshack%2Fstremio--libtorrent--server-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/androshack/stremio-libtorrent-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-3DA639.svg)](LICENSE)
