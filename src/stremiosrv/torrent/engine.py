@@ -31,6 +31,14 @@ class PinSpaceError(Exception):
         self.free = free
 
 
+# Priority of the *played* file. A file being actively streamed downloads at ACTIVE_FILE_PRIO so it
+# beats the background fill of torrents nobody is watching; when no stream is open on it, it drops to
+# IDLE_FILE_PRIO — still downloading to completion (the "full torrent client" behaviour), but yielding
+# bandwidth to whatever is being watched now. (Non-played files in a pack stay 0 / skipped.)
+ACTIVE_FILE_PRIO = 4
+IDLE_FILE_PRIO = 1
+
+
 class Handle:
     """Thin wrapper over `lt.torrent_handle` exposing only what the API layer needs."""
 
@@ -42,6 +50,11 @@ class Handle:
         # iterating it live crashed refocus with "Set changed size during iteration".
         self._boosted: set[int] = set()
         self._boosted_lock = threading.Lock()
+        # Which file is being played, and how many streams are open on this torrent right now.
+        # >0 = actively watched (played file at ACTIVE_FILE_PRIO); 0 = idle (drops to IDLE_FILE_PRIO).
+        self._focused_idx: int | None = None
+        self._active = 0
+        self._active_lock = threading.Lock()
 
     def status(self):
         return self._h.status()
@@ -112,22 +125,55 @@ class Handle:
 
         Re-applied only when the focused file changes (cheap + idempotent across a file's many range
         requests)."""
-        if getattr(self, "_focused_idx", None) == idx:
+        if self._focused_idx == idx:
             return
         ti = self._h.torrent_file()
         if ti is None:
             return
         nfiles = ti.files().num_files()
-        base = 1 if getattr(self, "pinned", False) else 0  # pinned: seed all files; else only this one
+        base = 1 if self.pinned else 0  # pinned: seed all files; else only this one
         prios = [base] * nfiles
         if 0 <= idx < nfiles:
-            prios[idx] = 4  # the played file: download it fully
+            # High priority only while a stream is actually open on this torrent; otherwise idle-low
+            # so it keeps downloading but yields to whatever is being watched now.
+            prios[idx] = ACTIVE_FILE_PRIO if self._active else IDLE_FILE_PRIO
         try:
             self._h.prioritize_files(prios)
             self._h.set_sequential_download(True)  # fill the wanted file contiguously, front->end
         except Exception:  # noqa: BLE001 — best-effort; deadlines still drive the playhead
             pass
         self._focused_idx = idx
+
+    def _set_focused_priority(self, prio: int) -> None:
+        idx = self._focused_idx
+        if idx is None:
+            return
+        try:
+            self._h.file_priority(idx, prio)
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+    def mark_active(self) -> None:
+        """A stream opened on this torrent. The first concurrent stream promotes the played file to
+        full (active) priority so it out-competes the background fill of unwatched torrents."""
+        with self._active_lock:
+            self._active += 1
+            promote = self._active == 1
+        if promote:
+            self._set_focused_priority(ACTIVE_FILE_PRIO)
+
+    def mark_idle(self) -> None:
+        """A stream closed. When the last one closes, drop the played file to idle-low priority — it
+        keeps downloading to completion but yields bandwidth to torrents being watched now."""
+        with self._active_lock:
+            if self._active > 0:
+                self._active -= 1
+            demote = self._active == 0
+        if demote:
+            self._set_focused_priority(IDLE_FILE_PRIO)
+
+    def is_active(self) -> bool:
+        return self._active > 0
 
     def boost_piece(self, piece: int, deadline_ms: int) -> None:
         """Mark a playhead piece as top priority + urgent, and remember it so a later seek can

@@ -154,7 +154,15 @@ def serve(info_hash: str, idx: int, request: Request):
 
     # The sliding boost window (in wait_and_read) concentrates bandwidth on the playhead.
     readahead = request.app.state.settings.readahead_bytes
-    return StreamingResponse(
-        wait_and_read(eng.save_path(), h, idx, start, end, window_bytes=readahead),
-        status_code=206, headers=headers,
-    )
+
+    def tracked_stream():
+        # Mark the torrent active for the life of the stream so its played file gets full download
+        # priority; on close (normal end, client disconnect, or error) drop back to idle-low so it
+        # no longer competes with other active streams. finally covers GeneratorExit on disconnect.
+        h.mark_active()
+        try:
+            yield from wait_and_read(eng.save_path(), h, idx, start, end, window_bytes=readahead)
+        finally:
+            h.mark_idle()
+
+    return StreamingResponse(tracked_stream(), status_code=206, headers=headers)
