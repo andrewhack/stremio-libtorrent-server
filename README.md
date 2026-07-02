@@ -174,6 +174,10 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | Max peer connections. |
 | `STREMIOSRV_DOWNLOAD_RATE_LIMIT` | `0` | Cap download throughput in **bytes/sec** (`0` = unlimited). E.g. `12500000` ≈ 100 Mbit/s. |
 | `STREMIOSRV_UPLOAD_RATE_LIMIT` | `0` | Cap upload throughput in **bytes/sec** (`0` = unlimited). Handy so seeding doesn't saturate your line. |
+| `STREMIOSRV_IDLE_DOWNLOAD_RATE_LIMIT` | `1048576` (1 MiB/s) | **Cross-torrent playback priority.** While *anything* is being streamed, every *other* (idle) torrent is capped to this many bytes/sec so the torrent you're watching wins the bandwidth. `0` disables it (idle torrents compete freely). |
+| `STREMIOSRV_MAX_STREAMS` | `0` | Max **concurrent playbacks** (distinct torrents being streamed). A new play past the cap gets `503`. `0` = unlimited. |
+| `STREMIOSRV_SEED_ON_COMPLETE` | `true` | Keep seeding after a torrent finishes (full torrent-client behaviour). `false` = **stop seeding + drop peers** the moment it completes. Pinned items always keep seeding. |
+| `STREMIOSRV_MAX_SEED_MINUTES` | `0` | Stop seeding this many **minutes after completion** (`0` = seed forever). Applies on top of `SEED_ON_COMPLETE`. |
 | `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
 | `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
 
