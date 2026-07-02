@@ -6,6 +6,49 @@ from stremiosrv.api import casting, handshake, hls, netcheck, pins, playback, su
 from stremiosrv.api import cache as cache_api
 from stremiosrv.config import Settings
 
+# Exception leaf types that mean "the client went away mid-stream" (vs a real server bug). Matched by
+# name so the check is a pure function (no running event loop needed): asyncio/anyio cancellation is
+# 'CancelledError'/'Cancelled'; a broken/closed socket is the rest.
+_DISCONNECT_NAMES = frozenset({
+    "CancelledError", "Cancelled", "ClientDisconnect", "BrokenResourceError", "ClosedResourceError",
+    "EndOfStream", "ConnectionResetError", "BrokenPipeError",
+})
+
+
+def _all_client_disconnect(exc: BaseException) -> bool:
+    """True only if `exc` (unwrapping ExceptionGroups) consists *entirely* of client-disconnect /
+    cancellation leaves — so a real error mixed in still propagates and gets logged."""
+    leaves: list[BaseException] = []
+
+    def walk(e: BaseException) -> None:
+        if isinstance(e, BaseExceptionGroup):
+            for sub in e.exceptions:
+                walk(sub)
+        else:
+            leaves.append(e)
+
+    walk(exc)
+    return bool(leaves) and all(type(leaf).__name__ in _DISCONNECT_NAMES for leaf in leaves)
+
+
+class SuppressClientDisconnect:
+    """Outermost ASGI wrapper. When a player disconnects mid-`StreamingResponse` (seek / buffer-ahead
+    / stop), Starlette's anyio task group surfaces the aborted send() as an ExceptionGroup that
+    uvicorn logs as a scary 'Exception in ASGI application' (nginx: 'upstream prematurely closed').
+    Playback is unaffected — the player just reconnects — so swallow disconnect-ONLY exceptions to
+    keep the log readable. Any group containing a genuine error propagates unchanged."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await self.app(scope, receive, send)
+        except BaseException as exc:  # noqa: BLE001 — re-raised below unless it's a pure disconnect
+            if scope.get("type") == "http" and _all_client_disconnect(exc):
+                return
+            raise
+
 
 def create_app(settings: Settings | None = None, engine=None, converter=None) -> FastAPI:
     """Application factory. Wires the Stremio streaming-server routers.
@@ -71,4 +114,8 @@ def build_app() -> FastAPI:
         kwargs={"interval": settings.cache_evict_interval, "grace": settings.cache_evict_grace},
         daemon=True,
     ).start()
-    return create_app(settings=settings, engine=engine, converter=converter)
+    # Wrap outermost so a mid-stream client disconnect doesn't spam the ASGI error log (see
+    # SuppressClientDisconnect). create_app stays a plain FastAPI app for tests.
+    return SuppressClientDisconnect(
+        create_app(settings=settings, engine=engine, converter=converter)
+    )
