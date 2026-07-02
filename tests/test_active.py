@@ -34,6 +34,12 @@ class _Handle:
     def has_metadata(self):
         return True
 
+    def is_active(self):
+        return True
+
+    def is_paused(self):
+        return False
+
 
 class _Engine:
     def active(self):
@@ -50,6 +56,8 @@ def test_serialize_active_shape():
         "downloaded": 5_000_000,
         "uploaded": 250_000,
         "progress": 0.4237,
+        "active": True,
+        "paused": False,
     }
 
 

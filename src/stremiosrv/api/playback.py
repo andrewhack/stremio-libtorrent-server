@@ -75,6 +75,10 @@ def serialize_active(handle) -> dict:
         "downloaded": st.total_done,
         "uploaded": st.total_upload,
         "progress": round(st.progress, 4),  # overall torrent completion, 0..1
+        # Which torrent is actually being played (open stream) vs merely downloading — so the card can
+        # LABEL it instead of guessing from throughput. paused = seeding stopped by the seed policy.
+        "active": bool(handle.is_active()),
+        "paused": bool(handle.is_paused()),
     }
 
 
@@ -136,6 +140,12 @@ def serve(info_hash: str, idx: int, request: Request):
     if not h.has_metadata():
         return Response(status_code=504, content=b"metadata timeout")
 
+    # Concurrent-stream cap: count distinct torrents being watched. A new connection to an
+    # already-playing torrent (e.g. a seek) doesn't count against the limit.
+    max_streams = request.app.state.settings.max_streams
+    if max_streams and not h.is_active() and eng.active_torrent_count() >= max_streams:
+        return Response(status_code=503, content=b"max concurrent streams reached")
+
     h.focus_file(idx)        # download the full played file (not other files in a pack); seek-friendly
     h.refocus()              # a new request (often a seek) -> drop the previous window's deadlines
     total = h.file_size(idx)
@@ -157,12 +167,13 @@ def serve(info_hash: str, idx: int, request: Request):
 
     def tracked_stream():
         # Mark the torrent active for the life of the stream so its played file gets full download
-        # priority; on close (normal end, client disconnect, or error) drop back to idle-low so it
-        # no longer competes with other active streams. finally covers GeneratorExit on disconnect.
-        h.mark_active()
+        # priority AND idle torrents get throttled (engine.note_stream_open re-applies the
+        # cross-torrent bandwidth policy); on close (normal end, client disconnect, or error) demote
+        # + lift the throttle. finally covers GeneratorExit on disconnect.
+        eng.note_stream_open(h)
         try:
             yield from wait_and_read(eng.save_path(), h, idx, start, end, window_bytes=readahead)
         finally:
-            h.mark_idle()
+            eng.note_stream_close(h)
 
     return StreamingResponse(tracked_stream(), status_code=206, headers=headers)

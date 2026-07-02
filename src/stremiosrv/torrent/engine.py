@@ -39,6 +39,31 @@ ACTIVE_FILE_PRIO = 4
 IDLE_FILE_PRIO = 1
 
 
+def idle_download_limit(*, this_active: bool, any_active: bool, idle_limit: int) -> int:
+    """Per-torrent download cap (bytes/sec) for CROSS-torrent active prioritization. While any torrent
+    has an open stream, the non-active torrents are capped to `idle_limit` so active playback wins the
+    pipe; the active torrent(s) and the everything-idle case stay uncapped (0). idle_limit<=0 disables
+    the feature. (file_priority only ranks pieces WITHIN a torrent — it can't make one torrent beat
+    another, so a busy idle torrent could otherwise starve the one being watched.)"""
+    if idle_limit > 0 and any_active and not this_active:
+        return idle_limit
+    return 0
+
+
+def should_stop_seeding(*, pinned: bool, seeding: bool, completed_at: float | None, now: float,
+                        seed_on_complete: bool, max_seed_minutes: int) -> bool:
+    """Whether a completed torrent should stop seeding now. Pinned torrents always keep seeding (the
+    owner asked to keep them). seed_on_complete=False stops as soon as it completes; otherwise stop
+    max_seed_minutes after completion (0 = seed forever)."""
+    if pinned or not seeding or completed_at is None:
+        return False
+    if not seed_on_complete:
+        return True
+    if max_seed_minutes > 0 and (now - completed_at) >= max_seed_minutes * 60:
+        return True
+    return False
+
+
 class Handle:
     """Thin wrapper over `lt.torrent_handle` exposing only what the API layer needs."""
 
@@ -55,6 +80,10 @@ class Handle:
         self._focused_idx: int | None = None
         self._active = 0
         self._active_lock = threading.Lock()
+        # Monotonic time this torrent was first observed complete (seeding), or None while incomplete.
+        # Drives the stop-seeding-on-complete / max-seed-time policy. Paused = we stopped its seeding.
+        self.completed_at: float | None = None
+        self._paused = False
 
     def status(self):
         return self._h.status()
@@ -175,6 +204,41 @@ class Handle:
     def is_active(self) -> bool:
         return self._active > 0
 
+    def is_seeding(self) -> bool:
+        """True once the wanted data is complete (libtorrent 'seeding' state)."""
+        try:
+            return bool(self._h.status().is_seeding)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def pause(self) -> None:
+        """Stop the torrent — halts seeding and disconnects peers. Used by the seeding policy on a
+        completed torrent (stop-seeding-on-complete / max-seed-time). Playback still serves the
+        finished file straight from disk, so pausing a complete torrent doesn't break watching it."""
+        try:
+            self._h.pause()
+        except Exception:  # noqa: BLE001
+            pass
+        self._paused = True
+
+    def resume(self) -> None:
+        try:
+            self._h.resume()
+        except Exception:  # noqa: BLE001
+            pass
+        self._paused = False
+
+    def set_download_limit(self, limit: int) -> None:
+        """Per-torrent download cap in bytes/sec (0 = unlimited). Used for cross-torrent active
+        prioritization — throttle idle torrents while something is being watched."""
+        try:
+            self._h.set_download_limit(limit)
+        except Exception:  # noqa: BLE001
+            pass
+
     def boost_piece(self, piece: int, deadline_ms: int) -> None:
         """Mark a playhead piece as top priority + urgent, and remember it so a later seek can
         drop it (refocus)."""
@@ -218,7 +282,10 @@ class Engine:
     def __init__(self, listen_port: int, cache_root: str, max_connections: int = 400,
                  download_rate_limit: int = 0, upload_rate_limit: int = 0,
                  cache_size: int = 0,  # 0 = guard disabled; build_app passes settings.cache_size
-                 resume_save_interval: int = 30) -> None:
+                 resume_save_interval: int = 30,
+                 idle_download_rate_limit: int = 0,  # cross-torrent active prioritization (0 = off)
+                 seed_on_complete: bool = True, max_seed_minutes: int = 0,
+                 seed_policy_interval: int = 15) -> None:
         self._ses = lt.session({
             "listen_interfaces": f"0.0.0.0:{listen_port}",  # INBOUND listener (stock server lacks this)
             "enable_dht": True,
@@ -266,6 +333,13 @@ class Engine:
         self._resume_save_interval = resume_save_interval
         self._saver = threading.Thread(target=self._resume_saver_loop, daemon=True)
         self._saver.start()
+        # Seeding policy (stop-seeding-on-complete / max-seed-time) + cross-torrent bandwidth policy.
+        self._idle_download_rate_limit = idle_download_rate_limit
+        self._seed_on_complete = seed_on_complete
+        self._max_seed_minutes = max_seed_minutes
+        self._seed_policy_interval = seed_policy_interval
+        self._policy = threading.Thread(target=self._seed_policy_loop, daemon=True)
+        self._policy.start()
 
     def _touch(self, info_hash: str) -> None:
         self._last_access[info_hash.lower()] = time.monotonic()
@@ -453,6 +527,65 @@ class Engine:
     def active(self) -> list[Handle]:
         """Live torrent handles that have metadata — for the 'now playing' / active-streams view."""
         return [h for h in self._torrents.values() if h.has_metadata()]
+
+    def active_torrent_count(self) -> int:
+        """Number of distinct torrents currently being streamed (for the max-concurrent-streams cap)."""
+        return sum(1 for h in self._torrents.values() if h.is_active())
+
+    def _apply_bandwidth_policy(self) -> None:
+        """Cross-torrent active prioritization: while any torrent is being streamed, cap the download
+        rate of the OTHERS so active playback isn't crowded by background fills; lift the cap when
+        nothing is playing. No-op when idle_download_rate_limit is 0."""
+        if self._idle_download_rate_limit <= 0:
+            return
+        handles = list(self._torrents.values())
+        any_active = any(h.is_active() for h in handles)
+        for h in handles:
+            h.set_download_limit(idle_download_limit(
+                this_active=h.is_active(), any_active=any_active,
+                idle_limit=self._idle_download_rate_limit,
+            ))
+
+    def note_stream_open(self, h: "Handle") -> None:
+        """A playback stream opened: promote its played file to active priority and re-apply the
+        cross-torrent bandwidth caps so idle torrents yield to it."""
+        h.mark_active()
+        self._apply_bandwidth_policy()
+
+    def note_stream_close(self, h: "Handle") -> None:
+        """A playback stream closed: demote to idle-low and re-apply cross-torrent bandwidth caps."""
+        h.mark_idle()
+        self._apply_bandwidth_policy()
+
+    def _seed_policy_loop(self) -> None:
+        """Background loop enforcing stop-seeding-on-complete / max-seed-time (pausing disconnects
+        peers too). Pinned torrents always keep seeding."""
+        while not self._stop.is_set():
+            self._stop.wait(self._seed_policy_interval)
+            if self._stop.is_set():
+                break
+            try:
+                self._enforce_seed_policy()
+            except Exception:  # noqa: BLE001 — never let the policy thread die
+                pass
+
+    def _enforce_seed_policy(self) -> None:
+        if self._seed_on_complete and self._max_seed_minutes <= 0:
+            return  # seed forever -> nothing to enforce
+        now = time.monotonic()
+        for h in list(self._torrents.values()):
+            if not h.has_metadata():
+                continue
+            seeding = h.is_seeding()
+            if seeding and h.completed_at is None:
+                h.completed_at = now
+            elif not seeding:
+                h.completed_at = None
+            if not h.is_paused() and should_stop_seeding(
+                pinned=h.pinned, seeding=seeding, completed_at=h.completed_at, now=now,
+                seed_on_complete=self._seed_on_complete, max_seed_minutes=self._max_seed_minutes,
+            ):
+                h.pause()
 
     def get(self, info_hash: str) -> Handle | None:
         h = self._torrents.get(info_hash.lower())

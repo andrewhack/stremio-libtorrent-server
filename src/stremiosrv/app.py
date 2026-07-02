@@ -57,6 +57,10 @@ def build_app() -> FastAPI:
         upload_rate_limit=settings.upload_rate_limit,
         cache_size=settings.cache_size,
         resume_save_interval=settings.resume_save_interval,
+        idle_download_rate_limit=settings.idle_download_rate_limit,
+        seed_on_complete=settings.seed_on_complete,
+        max_seed_minutes=settings.max_seed_minutes,
+        seed_policy_interval=settings.seed_policy_interval,
     )
     engine.load_pins_into_session()
     converter = Converter(settings.cache_root, settings.transcode_profile)

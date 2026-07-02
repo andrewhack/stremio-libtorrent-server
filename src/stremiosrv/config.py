@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     bt_max_connections: int = 400
     download_rate_limit: int = 0  # bytes/sec cap on torrent download (0 = unlimited)
     upload_rate_limit: int = 0  # bytes/sec cap on torrent upload (0 = unlimited)
+    # Cross-torrent active prioritization: while ANY torrent has an open playback stream, cap each
+    # OTHER (idle) torrent's download to this many bytes/sec so background fills yield the pipe to what
+    # is being watched now. Within-torrent file priority alone can't rank one torrent over another.
+    # 0 = disabled. Default 1 MiB/s.
+    idle_download_rate_limit: int = 1_048_576
+    max_streams: int = 0  # max concurrent playbacks (distinct torrents being streamed); 0 = unlimited
+    seed_on_complete: bool = True  # keep seeding after a torrent finishes; False = stop seeding on complete
+    max_seed_minutes: int = 0  # stop seeding this many minutes after completion; 0 = unlimited
+    seed_policy_interval: int = 15  # seconds between seeding-policy sweeps
     readahead_bytes: int = 268_435_456  # 256 MiB rushed playhead window (deeper = fewer rebuffers);
     # the rest of the played file fills via the full sequential background download (engine.focus_file)
     resume_save_interval: int = 30  # seconds between periodic fast-resume saves (survives ungraceful stop)
