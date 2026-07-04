@@ -101,6 +101,26 @@ class Handle:
         ti = self._h.torrent_file()
         return ti.name() if ti else ""
 
+    def add_trackers(self, urls: list[str]) -> int:
+        """Add announce URLs not already present (a later stream request may carry new `tr=` for a
+        torrent we already added). Returns the count newly added. Best-effort — never raises."""
+        if not urls:
+            return 0
+        try:
+            have = {t.url for t in self._h.trackers()}
+        except Exception:  # noqa: BLE001
+            have = set()
+        added = 0
+        for u in urls:
+            if u and u not in have:
+                try:
+                    self._h.add_tracker({"url": u})
+                    have.add(u)
+                    added += 1
+                except Exception:  # noqa: BLE001 — one bad URL shouldn't abort the rest
+                    pass
+        return added
+
     def peer_wires(self) -> tuple[list[dict], int]:
         """Per-peer connection list (Stremio `wires` shape) + count of peers that have unchoked us."""
         wires: list[dict] = []
@@ -285,7 +305,9 @@ class Engine:
                  resume_save_interval: int = 30,
                  idle_download_rate_limit: int = 0,  # cross-torrent active prioritization (0 = off)
                  seed_on_complete: bool = True, max_seed_minutes: int = 0,
-                 seed_policy_interval: int = 15) -> None:
+                 seed_policy_interval: int = 15,
+                 extra_trackers: list[str] | None = None,  # operator env trackers, added to every add()
+                 tracker_source=None) -> None:  # optional TrackerSource (live list); None = static only
         self._ses = lt.session({
             "listen_interfaces": f"0.0.0.0:{listen_port}",  # INBOUND listener (stock server lacks this)
             "enable_dht": True,
@@ -315,6 +337,10 @@ class Engine:
             "allow_multiple_connections_per_ip": True,
         })
         self._cache_root = cache_root
+        # Extra trackers injected into every torrent: operator-supplied (env) + an optional live
+        # source. Both feed merge_trackers; the source is read (never awaited) on each add().
+        self._extra_trackers = list(extra_trackers or [])
+        self._tracker_source = tracker_source
         self._torrents: dict[str, Handle] = {}
         self._last_access: dict[str, float] = {}  # infohash -> monotonic time of last serve
         self._resume_dir = os.path.join(cache_root, ".resume")
@@ -513,7 +539,8 @@ class Engine:
             except Exception:  # noqa: BLE001 — corrupt resume: fall back to a fresh add
                 pass
         existing = list(p.trackers) if p.trackers else []
-        p.trackers = merge_trackers(existing, trackers)
+        live = self._tracker_source.current() if self._tracker_source else None
+        p.trackers = merge_trackers(existing, trackers, env=self._extra_trackers, live=live)
         p.save_path = self._cache_root
         # No sequential_download flag: playback uses per-piece deadlines (set on the requested
         # range) so seeks and trailing-moov fetches are fast instead of waiting for in-order download.

@@ -29,3 +29,17 @@ def test_seed_and_stream_policy_env(monkeypatch):
     assert s.seed_on_complete is False
     assert s.max_seed_minutes == 60
     assert s.idle_download_rate_limit == 0
+
+
+def test_tracker_defaults_and_env(monkeypatch):
+    s = Settings()
+    assert s.extra_trackers == ""  # no extra trackers by default
+    assert s.tracker_list_url == ""  # live-fetch OFF by default (offline-safe)
+    assert s.tracker_list_refresh_hours == 24.0
+    monkeypatch.setenv("STREMIOSRV_EXTRA_TRACKERS", "udp://a/announce udp://b/announce")
+    monkeypatch.setenv("STREMIOSRV_TRACKER_LIST_URL", "https://x/best.txt")
+    monkeypatch.setenv("STREMIOSRV_TRACKER_LIST_REFRESH_HOURS", "6")
+    s = Settings()
+    assert s.extra_trackers == "udp://a/announce udp://b/announce"
+    assert s.tracker_list_url == "https://x/best.txt"
+    assert s.tracker_list_refresh_hours == 6.0

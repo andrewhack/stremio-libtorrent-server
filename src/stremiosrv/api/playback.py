@@ -133,7 +133,11 @@ def serve(info_hash: str, idx: int, request: Request):
     if eng is None:
         return Response(status_code=503, content=b"engine unavailable")
     trackers = request.query_params.getlist("tr")  # client-supplied (Stremio passes magnet trackers)
-    h = eng.get(info_hash) or eng.add(info_hash, trackers=trackers or None)  # lazy create
+    h = eng.get(info_hash)
+    if h is None:
+        h = eng.add(info_hash, trackers=trackers or None)  # lazy create (also injects defaults/env/live)
+    elif trackers:
+        h.add_trackers(trackers)  # already running: fold in any newly-supplied trackers
     deadline = time.time() + 30
     while not h.has_metadata() and time.time() < deadline:
         time.sleep(0.2)

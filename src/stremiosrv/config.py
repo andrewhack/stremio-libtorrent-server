@@ -30,3 +30,11 @@ class Settings(BaseSettings):
     # the rest of the played file fills via the full sequential background download (engine.focus_file)
     resume_save_interval: int = 30  # seconds between periodic fast-resume saves (survives ungraceful stop)
     transcode_profile: str | None = None  # set by HW autodetect (later stage)
+    # Operator-supplied extra trackers appended to every torrent's announce list (in addition to the
+    # built-in DEFAULT_TRACKERS). Comma/space/newline separated; udp/http(s)/ws(s) URLs only.
+    extra_trackers: str = ""
+    # Optional URL of a community tracker list (e.g. the raw ngosang/trackerslist "best" file). When
+    # set, it is fetched in a background thread (best-effort, never blocks) to keep the list current;
+    # empty = disabled (fully static, offline-safe default).
+    tracker_list_url: str = ""
+    tracker_list_refresh_hours: float = 24.0  # how often the background source re-fetches

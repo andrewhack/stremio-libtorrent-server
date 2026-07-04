@@ -178,8 +178,20 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_MAX_STREAMS` | `0` | Max **concurrent playbacks** (distinct torrents being streamed). A new play past the cap gets `503`. `0` = unlimited. |
 | `STREMIOSRV_SEED_ON_COMPLETE` | `true` | Keep seeding after a torrent finishes (full torrent-client behaviour). `false` = **stop seeding + drop peers** the moment it completes. Pinned items always keep seeding. |
 | `STREMIOSRV_MAX_SEED_MINUTES` | `0` | Stop seeding this many **minutes after completion** (`0` = seed forever). Applies on top of `SEED_ON_COMPLETE`. |
+| `STREMIOSRV_EXTRA_TRACKERS` | *(empty)* | Extra trackers appended to **every** torrent (on top of the built-in defaults). Comma/space/newline-separated `udp://`/`http(s)://`/`ws(s)://` URLs. |
+| `STREMIOSRV_TRACKER_LIST_URL` | *(empty)* | Optional URL of a community tracker list (e.g. the raw [ngosang/trackerslist](https://github.com/ngosang/trackerslist) `trackers_best.txt`). Fetched in a **background thread** to keep the list current — best-effort, **never blocks startup or playback**; offline falls back to the last cached list, then the built-in defaults. Empty = fully static. |
+| `STREMIOSRV_TRACKER_LIST_REFRESH_HOURS` | `24` | How often the background tracker-list source re-fetches (only when a URL is set). |
 | `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
 | `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
+
+**Trackers & peer discovery.** Every torrent is announced to a curated set of public trackers (baked-in
+defaults) **plus DHT, LSD and PEX** — so a bare infohash finds peers even when the magnet carries no
+tracker, exactly like the stock Stremio server. Extend it two ways: add your own with
+`STREMIOSRV_EXTRA_TRACKERS`, or point `STREMIOSRV_TRACKER_LIST_URL` at a maintained list (e.g.
+[ngosang/trackerslist](https://github.com/ngosang/trackerslist)) to keep the set current — that fetch
+runs in a background thread and **never blocks startup or playback** (offline → last cached list → the
+built-in defaults). The bigger peering win, though, is **inbound connectivity**: forward
+`STREMIOSRV_BT_LISTEN_PORT` (6881) so you reach the whole swarm, not just what trackers hand back.
 
 **GPU transcode** (only for clients that can't direct-play). Docker does **not** expose the host GPU to a
 container by default, so the one-command install above is **CPU-only**. The server *auto-detects* a GPU,

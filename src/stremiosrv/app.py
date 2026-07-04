@@ -90,8 +90,21 @@ def build_app() -> FastAPI:
     from stremiosrv.transcode.converter import Converter
     from stremiosrv.transcode.profiler import detect_profile
 
+    import os
+
+    from stremiosrv.torrent.tracker_source import TrackerSource
+    from stremiosrv.torrent.trackers import parse_tracker_string
+
     settings = Settings()
     settings.transcode_profile = settings.transcode_profile or detect_profile()
+    # Optional live tracker list: fetched in a daemon thread (best-effort, never blocks startup or
+    # the request path). start() is a no-op when no URL is configured -> fully static/offline-safe.
+    tracker_source = TrackerSource(
+        settings.tracker_list_url,
+        cache_path=os.path.join(settings.cache_root, ".resume", "trackers.remote"),
+        refresh_hours=settings.tracker_list_refresh_hours,
+    )
+    tracker_source.start()
     engine = Engine(
         listen_port=settings.bt_listen_port,
         cache_root=settings.cache_root,
@@ -104,6 +117,8 @@ def build_app() -> FastAPI:
         seed_on_complete=settings.seed_on_complete,
         max_seed_minutes=settings.max_seed_minutes,
         seed_policy_interval=settings.seed_policy_interval,
+        extra_trackers=parse_tracker_string(settings.extra_trackers),
+        tracker_source=tracker_source,
     )
     engine.load_pins_into_session()
     converter = Converter(settings.cache_root, settings.transcode_profile)
