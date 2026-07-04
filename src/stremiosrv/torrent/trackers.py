@@ -35,11 +35,6 @@ DEFAULT_TRACKERS = [
     "udp://t.overflow.biz:6969/announce",
     "udp://open.demonoid.ch:6969/announce",
     "udp://leet-tracker.moe:1337/announce",
-    # Parity with the stock server's default set (name-neutral entries only).
-    "udp://bt.rer.lol:6969/announce",
-    "udp://open.dstud.io:6969/announce",
-    "udp://run.publictracker.xyz:6969/announce",
-    "udp://retracker01-msk-virt.corbina.net:80/announce",
     "https://tracker.tamersunion.org:443/announce",
     "https://tracker.gbitt.info:443/announce",
 ]
