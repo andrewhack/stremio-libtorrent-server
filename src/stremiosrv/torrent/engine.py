@@ -106,8 +106,14 @@ class Handle:
         torrent we already added). Returns the count newly added. Best-effort — never raises."""
         if not urls:
             return 0
+        # libtorrent 2.0's torrent_handle.trackers() returns a list of dicts ({"url", "tier", ...});
+        # be defensive about an announce_entry-object form too.
         try:
-            have = {t.url for t in self._h.trackers()}
+            have = set()
+            for t in self._h.trackers():
+                u = t["url"] if isinstance(t, dict) else getattr(t, "url", None)
+                if u:
+                    have.add(u)
         except Exception:  # noqa: BLE001
             have = set()
         added = 0

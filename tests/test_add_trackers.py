@@ -1,23 +1,22 @@
-"""Unit tests for Handle.add_trackers using a fake libtorrent handle (no C extension needed)."""
+"""Unit tests for Handle.add_trackers using a fake libtorrent handle (no C extension needed).
+
+The fake mirrors libtorrent 2.0: torrent_handle.trackers() returns a list of dicts, and
+add_tracker() takes a dict — verified against real lt 2.0.11 on the build host.
+"""
 from stremiosrv.torrent.engine import Handle
-
-
-class _Entry:
-    def __init__(self, url):
-        self.url = url
 
 
 class _FakeHandle:
     def __init__(self, existing=()):
-        self._trackers = [_Entry(u) for u in existing]
+        self._urls = list(existing)
         self.added = []
 
     def trackers(self):
-        return list(self._trackers)
+        return [{"url": u, "tier": 0} for u in self._urls]
 
     def add_tracker(self, d):
         self.added.append(d["url"])
-        self._trackers.append(_Entry(d["url"]))
+        self._urls.append(d["url"])
 
 
 def test_add_trackers_only_new_ones():
