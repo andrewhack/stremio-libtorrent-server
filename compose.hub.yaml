@@ -13,11 +13,13 @@ services:
       # Your server's LAN IP -> a TRUSTED, TV-compatible cert (Let's Encrypt via *.stremio.rocks).
       # Leave empty to use a self-signed cert (browser works, TVs reject) or a bring-your-own cert.
       IPADDRESS: ${IPADDRESS:-}
+      # BitTorrent peer port; the published port below follows it so listen and forward stay in sync.
+      STREMIOSRV_BT_LISTEN_PORT: "${STREMIOSRV_BT_LISTEN_PORT:-6881}"
     ports:
       - "8080:8080"          # web player + API (HTTP/LAN)
       - "12470:12470"        # web player + API (HTTPS, trusted cert when IPADDRESS set)
-      - "6881:6881/tcp"      # BitTorrent peer port (inbound)
-      - "6881:6881/udp"
+      - "${STREMIOSRV_BT_LISTEN_PORT:-6881}:${STREMIOSRV_BT_LISTEN_PORT:-6881}/tcp"  # BT peer port (inbound)
+      - "${STREMIOSRV_BT_LISTEN_PORT:-6881}:${STREMIOSRV_BT_LISTEN_PORT:-6881}/udp"
     volumes:
       - stremio-data:/root/.stremio-server
 volumes:

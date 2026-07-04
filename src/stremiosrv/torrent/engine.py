@@ -315,7 +315,9 @@ class Engine:
                  extra_trackers: list[str] | None = None,  # operator env trackers, added to every add()
                  tracker_source=None) -> None:  # optional TrackerSource (live list); None = static only
         self._ses = lt.session({
-            "listen_interfaces": f"0.0.0.0:{listen_port}",  # INBOUND listener (stock server lacks this)
+            # INBOUND listener (stock server lacks this) — dual-stack so IPv6 peers can reach us too;
+            # a host without IPv6 just fails that bind and keeps IPv4 (libtorrent degrades gracefully).
+            "listen_interfaces": f"0.0.0.0:{listen_port},[::]:{listen_port}",
             "enable_dht": True,
             "enable_lsd": True,
             "enable_upnp": True,
