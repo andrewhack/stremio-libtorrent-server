@@ -20,6 +20,15 @@ explanation, the evidence it's based on, and a concrete fix/mitigation.
   account)** as primary, with the **own Ollama infra** (local GPU models) also available. The appliance
   stays light; the hosted chatbot pulls the box's diagnostics within the user's authenticated session.
 
+  **Failure isolation (HARD REQUIREMENT):** the LLM must NEVER be able to block the deterministic
+  layer. The rule engine (`/diagnose.json` + config-web panel) is the source of truth and has **zero
+  dependency** on the LLM/MCP/chatbot/Ollama or any network. If Ollama Cloud is down, the entitlement
+  check can't be reached, the MCP is unreachable, or inference times out, the box still returns full
+  findings + fixes; even on the paid tier the chatbot **degrades to rendering the raw structured
+  findings** (never an error, never a spinner-of-death). The LLM is a presentation/conversation layer
+  on top of data that already stands on its own — same pattern as the offline-cert and
+  tracker-source fallbacks elsewhere in the project.
+
 This generalizes the existing config-web "Suggestions" advisor, refocused on playback health.
 
 ---
