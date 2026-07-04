@@ -35,6 +35,13 @@ DEFAULT_TRACKERS = [
     "udp://t.overflow.biz:6969/announce",
     "udp://open.demonoid.ch:6969/announce",
     "udp://leet-tracker.moe:1337/announce",
+    # Parity with the stock Stremio server's default set (the entries it ships that we lacked).
+    "udp://bt.rer.lol:6969/announce",
+    "udp://open.dstud.io:6969/announce",
+    "udp://run.publictracker.xyz:6969/announce",
+    "udp://retracker01-msk-virt.corbina.net:80/announce",
+    "udp://tracker.therarbg.to:6969/announce",
+    "udp://tracker1.myporn.club:9337/announce",
     "https://tracker.tamersunion.org:443/announce",
     "https://tracker.gbitt.info:443/announce",
 ]
