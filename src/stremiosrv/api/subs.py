@@ -1,11 +1,13 @@
 """Subtitle + opensub-hash API: matching key for subtitle addons, embedded-track listing/extraction."""
 from __future__ import annotations
 
+import gzip
 import os
 import re
 import subprocess
 import time
 import urllib.request
+import zlib
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
@@ -13,7 +15,49 @@ from stremiosrv.stream.fileserver import file_disk_path
 from stremiosrv.subs.opensub import opensubtitles_hash
 from stremiosrv.transcode.probe import probe_media
 
+try:  # proper charset detection (Cyrillic/legacy subs); degrade gracefully if absent
+    from charset_normalizer import from_bytes as _detect_bytes
+except ImportError:  # pragma: no cover
+    _detect_bytes = None
+
 router = APIRouter()
+
+
+def _decompress(raw: bytes, content_encoding: str) -> bytes:
+    """Undo gzip/deflate if the CDN compressed the body (urllib doesn't auto-decompress). Sniffs the
+    gzip magic bytes too, since some hosts gzip without the header."""
+    enc = (content_encoding or "").lower()
+    if "gzip" in enc or raw[:2] == b"\x1f\x8b":
+        try:
+            return gzip.decompress(raw)
+        except OSError:
+            return raw
+    if "deflate" in enc:
+        for wbits in (zlib.MAX_WBITS, -zlib.MAX_WBITS):
+            try:
+                return zlib.decompress(raw, wbits)
+            except zlib.error:
+                continue
+    return raw
+
+
+def decode_subtitle(raw: bytes) -> str:
+    """Decode a subtitle body to text, detecting the charset. A Windows-1251 (Cyrillic) or other
+    legacy-encoded sub must NOT be forced through UTF-8 — that yields replacement junk that strict
+    players (ExoPlayer) drop, while mpv would have coped. Returns clean Unicode."""
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    try:
+        return raw.decode("utf-8")  # the common, clean case
+    except UnicodeDecodeError:
+        pass
+    if _detect_bytes is not None:
+        best = _detect_bytes(raw).best()
+        if best is not None:
+            return str(best)
+    return raw.decode("windows-1251", errors="replace")  # Cyrillic-biased last resort
 
 # Stremio passes videoUrl as our own stream URL: .../<40-hex-infohash>/<fileIdx>[?...]
 _STREAM_RE = re.compile(r"/([0-9a-fA-F]{40})/(\d+)")
@@ -43,9 +87,12 @@ def subtitles_proxy(source: str = Query(alias="from")) -> Response:
     try:
         with urllib.request.urlopen(source, timeout=10) as r:  # noqa: S310 — scheme checked above
             raw = r.read()
+            content_encoding = r.headers.get("Content-Encoding", "")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail="failed to fetch subtitle") from e
-    return Response(content=srt_to_vtt(raw.decode("utf-8", errors="replace")), media_type="text/vtt")
+    text = decode_subtitle(_decompress(raw, content_encoding))
+    # charset=utf-8 so strict players (ExoPlayer) don't second-guess the encoding.
+    return Response(content=srt_to_vtt(text), media_type="text/vtt; charset=utf-8")
 
 
 def _ensure_edges(handle, idx: int, edge: int = 65536, timeout: float = 15.0) -> bool:

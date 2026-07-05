@@ -1,6 +1,6 @@
 [project]
 name = "stremiosrv"
-version = "0.2.21"
+version = "0.2.22"
 description = "Open, self-hosted Stremio streaming server (libtorrent engine + bundled web player)"
 readme = "README.md"
 authors = [
@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "charset-normalizer>=3.3",
     "fastapi>=0.136.3",
     "libtorrent>=2.0.11 ; sys_platform == 'linux'",
     "pydantic>=2.13.4",
