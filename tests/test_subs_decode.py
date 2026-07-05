@@ -43,3 +43,29 @@ def test_srt_to_vtt_timestamp_and_header():
     out = srt_to_vtt("1\n00:00:01,000 --> 00:00:02,000\nhi\n")
     assert out.startswith("WEBVTT")
     assert "00:00:01.000 --> 00:00:02.000" in out
+
+
+def test_to_webvtt_uses_ffmpeg_output(monkeypatch):
+    from stremiosrv.api import subs
+
+    class _Ok:
+        returncode = 0
+        stdout = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n"
+
+    monkeypatch.setattr(subs.subprocess, "run", lambda *a, **k: _Ok())
+    out = subs.to_webvtt("[Script Info]\nDialogue: ...")  # ASS in -> ffmpeg gives clean VTT
+    assert out.startswith("WEBVTT")
+    assert "hi" in out
+
+
+def test_to_webvtt_falls_back_when_ffmpeg_fails(monkeypatch):
+    from stremiosrv.api import subs
+
+    class _Fail:
+        returncode = 1
+        stdout = b""
+
+    monkeypatch.setattr(subs.subprocess, "run", lambda *a, **k: _Fail())
+    out = subs.to_webvtt("1\n00:00:01,000 --> 00:00:02,000\nhi\n")
+    assert out.startswith("WEBVTT")  # naive fallback still yields valid-ish VTT
+    assert "00:00:01.000 --> 00:00:02.000" in out

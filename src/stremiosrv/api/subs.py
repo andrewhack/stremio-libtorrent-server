@@ -5,6 +5,7 @@ import gzip
 import os
 import re
 import subprocess
+import tempfile
 import time
 import urllib.request
 import zlib
@@ -78,10 +79,39 @@ def srt_to_vtt(text: str) -> str:
     return "WEBVTT\n\n" + text
 
 
+def to_webvtt(text: str) -> str:
+    """Convert a fetched subtitle (SRT/ASS/SSA/VTT/SUB/...) to clean WebVTT via ffmpeg — the SAME path
+    that already makes embedded subs render on strict players (ExoPlayer/VLC). The naive text
+    conversion (srt_to_vtt) only handles well-formed SubRip; ASS/SSA (which OpenSubtitles serves a lot
+    of) and CRLF/malformed SRT produce WebVTT that strict players reject (mpv tolerates it). Falls back
+    to srt_to_vtt if ffmpeg is unavailable or can't parse the input."""
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".sub", delete=False) as f:
+            f.write(text)
+            tmp = f.name
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-y", "-i", tmp, "-f", "webvtt", "pipe:1"],
+            capture_output=True, timeout=15, check=False,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return srt_to_vtt(text)  # fallback: naive but charset-correct
+
+
 @router.get("/subtitles.vtt")
 def subtitles_proxy(source: str = Query(alias="from")) -> Response:
-    """Fetch an external subtitle (Stremio addons pass `?from=<url>`) and serve it as WebVTT on our
-    own origin — so the browser gets it with CORS instead of being blocked cross-origin."""
+    """Fetch an external subtitle (Stremio addons pass `?from=<url>`) and serve it as clean WebVTT on
+    our own origin — CORS-safe for the browser, and format-normalized (ffmpeg) so strict native
+    players render it too."""
     if not source.lower().startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="only http(s) subtitle sources are allowed")
     try:
@@ -92,7 +122,7 @@ def subtitles_proxy(source: str = Query(alias="from")) -> Response:
         raise HTTPException(status_code=502, detail="failed to fetch subtitle") from e
     text = decode_subtitle(_decompress(raw, content_encoding))
     # charset=utf-8 so strict players (ExoPlayer) don't second-guess the encoding.
-    return Response(content=srt_to_vtt(text), media_type="text/vtt; charset=utf-8")
+    return Response(content=to_webvtt(text), media_type="text/vtt; charset=utf-8")
 
 
 def _ensure_edges(handle, idx: int, edge: int = 65536, timeout: float = 15.0) -> bool:
