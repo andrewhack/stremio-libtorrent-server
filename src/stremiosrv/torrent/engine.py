@@ -30,6 +30,10 @@ from stremiosrv.torrent.trackers import merge_trackers
 # binding lacks the flag (test envs), in which case the clear is a safe no-op.
 _TORRENT_FLAGS = getattr(lt, "torrent_flags", None) if lt is not None else None
 _AUTO_MANAGED = getattr(_TORRENT_FLAGS, "auto_managed", None) if _TORRENT_FLAGS is not None else None
+# libtorrent's DEFAULT add flags are `auto_managed | paused` — the idiom is "add paused, let the
+# auto-manager start it". Once we drop auto_managed we must ALSO drop paused, or the torrent is
+# stranded paused forever (no auto-manager to start it → no metadata, no download).
+_PAUSED = getattr(_TORRENT_FLAGS, "paused", None) if _TORRENT_FLAGS is not None else None
 
 
 class PinSpaceError(Exception):
@@ -628,10 +632,14 @@ class Engine:
         # Take the torrent OUT of libtorrent's auto-management so our explicit pause() (the seed
         # policy) is actually honored — an auto_managed torrent is resumed by the auto-manager,
         # defeating stop-seeding-on-complete / max-seed-time. We manage priorities/deadlines/pause
-        # ourselves; with active_limit=-1 auto-management wasn't queuing anything anyway.
+        # ourselves; with active_limit=-1 auto-management wasn't queuing anything anyway. Clear
+        # `paused` in the same breath: the default flags set BOTH, and without the auto-manager to
+        # start it, a paused-and-unmanaged torrent would never run (no metadata, no download).
         if _AUTO_MANAGED is not None:
             try:
                 p.flags = p.flags & ~_AUTO_MANAGED
+                if _PAUSED is not None:
+                    p.flags = p.flags & ~_PAUSED
             except Exception:  # noqa: BLE001 — binding without settable flags: keep the default
                 pass
         # No sequential_download flag: playback uses per-piece deadlines (set on the requested

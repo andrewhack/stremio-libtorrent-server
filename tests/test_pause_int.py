@@ -69,14 +69,17 @@ def test_handle_pause_de_manages_and_sticks_on_real_lt(tmp_path):
             ses.remove_torrent(h)
 
 
-def test_engine_add_produces_non_auto_managed(tmp_path):
-    """Engine.add() must add torrents already OUT of auto-management, so the seed policy's pause()
-    is honored. Uses a bare infohash (no network needed — the handle just sits idle)."""
+def test_engine_add_produces_non_auto_managed_and_running(tmp_path):
+    """Engine.add() must add torrents OUT of auto-management AND not paused. Clearing auto_managed
+    alone would strand the torrent paused (libtorrent's default flags are auto_managed|paused, and
+    with no auto-manager to start it, it never runs — no metadata, no download). Uses a bare infohash
+    (no network needed — we only inspect the flags)."""
     eng = Engine(listen_port=6891, cache_root=str(tmp_path))
     try:
         h = eng.add("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         time.sleep(1)
         flags = h.raw().status().flags
         assert not (flags & AUTO_MANAGED), "Engine.add() must clear auto_managed on the params"
+        assert not (flags & PAUSED), "Engine.add() must also clear paused, else the torrent never runs"
     finally:
         eng.shutdown()
