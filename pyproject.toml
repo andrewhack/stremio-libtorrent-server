@@ -1,6 +1,6 @@
 [project]
 name = "stremiosrv"
-version = "0.2.23"
+version = "0.2.24"
 description = "Open, self-hosted Stremio streaming server (libtorrent engine + bundled web player)"
 readme = "README.md"
 authors = [

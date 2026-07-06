@@ -57,6 +57,8 @@ class _FakeH:
         self._seeding = seeding
         self.paused = False
         self.dl_limit: int | None = None
+        self.cleared_flags: list = []  # records unset_flags() args
+        self.set_flags_calls: list = []
 
     def status(self) -> _St:
         return _St(self._seeding)
@@ -70,6 +72,12 @@ class _FakeH:
     def set_download_limit(self, n: int) -> None:
         self.dl_limit = n
 
+    def unset_flags(self, f) -> None:
+        self.cleared_flags.append(f)
+
+    def set_flags(self, f) -> None:
+        self.set_flags_calls.append(f)
+
 
 def test_handle_seeding_pause_resume() -> None:
     fake = _FakeH(seeding=True)
@@ -80,6 +88,29 @@ def test_handle_seeding_pause_resume() -> None:
     assert fake.paused is True and h.is_paused() is True
     h.resume()
     assert fake.paused is False and h.is_paused() is False
+
+
+def test_pause_clears_auto_managed_so_it_sticks(monkeypatch) -> None:
+    """The bug: pause() alone doesn't stop an auto_managed torrent (the session auto-manager
+    resumes it), so it keeps uploading. Fix: pause() must clear auto_managed first."""
+    from stremiosrv.torrent import engine as eng
+    monkeypatch.setattr(eng, "_AUTO_MANAGED", 0x20)  # simulate real libtorrent flag present
+    fake = _FakeH(seeding=True)
+    h = eng.Handle(fake)
+    h.pause()
+    assert 0x20 in fake.cleared_flags, "pause() must unset_flags(auto_managed) so the pause sticks"
+    assert fake.paused is True and h.is_paused() is True
+
+
+def test_pause_without_lt_flag_still_pauses(monkeypatch) -> None:
+    """Binding without torrent_flags (or lt absent): pause() degrades to a plain pause, no crash."""
+    from stremiosrv.torrent import engine as eng
+    monkeypatch.setattr(eng, "_AUTO_MANAGED", None)
+    fake = _FakeH(seeding=True)
+    h = eng.Handle(fake)
+    h.pause()
+    assert fake.cleared_flags == []
+    assert fake.paused is True and h.is_paused() is True
 
 
 def test_handle_set_download_limit() -> None:

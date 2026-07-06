@@ -22,6 +22,15 @@ from stremiosrv import cache as cachemod
 from stremiosrv import pins as pinsmod
 from stremiosrv.torrent.trackers import merge_trackers
 
+# libtorrent's auto_managed flag. A torrent carrying it is driven by the session's auto-manager, which
+# OVERRIDES an explicit handle.pause() and resumes the torrent (with unlimited active limits it keeps
+# every seed running). That was the "paused:true but still uploading ~1MB/s" bug: pause() flipped our
+# bookkeeping but the auto-manager re-activated the seed. So we take torrents OUT of auto-management
+# (on add + on pause) — the server manages priorities/deadlines/pause explicitly. None when lt / the
+# binding lacks the flag (test envs), in which case the clear is a safe no-op.
+_TORRENT_FLAGS = getattr(lt, "torrent_flags", None) if lt is not None else None
+_AUTO_MANAGED = getattr(_TORRENT_FLAGS, "auto_managed", None) if _TORRENT_FLAGS is not None else None
+
 
 class PinSpaceError(Exception):
     """Raised when pinning a torrent would leave too little free disk for streaming."""
@@ -263,8 +272,14 @@ class Handle:
     def pause(self) -> None:
         """Stop the torrent — halts seeding and disconnects peers. Used by the seeding policy on a
         completed torrent (stop-seeding-on-complete / max-seed-time). Playback still serves the
-        finished file straight from disk, so pausing a complete torrent doesn't break watching it."""
+        finished file straight from disk, so pausing a complete torrent doesn't break watching it.
+
+        Clears auto_managed FIRST: an auto_managed torrent gets resumed by the session auto-manager
+        right after pause() (the "paused:true but still uploading" bug), so the pause only sticks once
+        the torrent is out of auto-management. No-op clear when the binding lacks the flag."""
         try:
+            if _AUTO_MANAGED is not None:
+                self._h.unset_flags(_AUTO_MANAGED)
             self._h.pause()
         except Exception:  # noqa: BLE001
             pass
@@ -610,6 +625,15 @@ class Engine:
         live = self._tracker_source.current() if self._tracker_source else None
         p.trackers = merge_trackers(existing, trackers, env=self._extra_trackers, live=live)
         p.save_path = self._cache_root
+        # Take the torrent OUT of libtorrent's auto-management so our explicit pause() (the seed
+        # policy) is actually honored — an auto_managed torrent is resumed by the auto-manager,
+        # defeating stop-seeding-on-complete / max-seed-time. We manage priorities/deadlines/pause
+        # ourselves; with active_limit=-1 auto-management wasn't queuing anything anyway.
+        if _AUTO_MANAGED is not None:
+            try:
+                p.flags = p.flags & ~_AUTO_MANAGED
+            except Exception:  # noqa: BLE001 — binding without settable flags: keep the default
+                pass
         # No sequential_download flag: playback uses per-piece deadlines (set on the requested
         # range) so seeks and trailing-moov fetches are fast instead of waiting for in-order download.
         th = self._ses.add_torrent(p)
