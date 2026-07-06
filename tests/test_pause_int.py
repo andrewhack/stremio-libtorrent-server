@@ -34,31 +34,23 @@ def _quiet_session(port: int):
     })
 
 
-def _make_seed(ses, tmp_path, port_dir="data"):
-    """Create a tiny single-file torrent and add it as an immediate seed, auto_managed ON — i.e. the
-    exact pre-fix state. Returns the raw libtorrent handle."""
-    root = tmp_path / port_dir
-    root.mkdir()
-    f = root / "movie.bin"
-    f.write_bytes(b"x" * 65536)  # 64 KiB
-    fs = lt.file_storage()
-    lt.add_files(fs, str(f))
-    ct = lt.create_torrent(fs, 16384)  # 16 KiB pieces
-    lt.set_piece_hashes(ct, str(root.parent))
-    ti = lt.torrent_info(ct.generate())
+def _add_managed(ses, tmp_path, hexhash: str):
+    """Add a real, auto_managed torrent (bare infohash — metadata isn't needed to exercise the
+    pause/auto-manager interaction; the auto-manager still owns and would resume it)."""
     p = lt.add_torrent_params()
-    p.ti = ti
-    p.save_path = str(root.parent)
-    p.flags |= AUTO_MANAGED | lt.torrent_flags.seed_mode  # managed + already-a-seed
+    p.info_hashes = lt.info_hash_t(lt.sha1_hash(bytes.fromhex(hexhash)))
+    p.save_path = str(tmp_path)
+    p.flags |= AUTO_MANAGED
     return ses.add_torrent(p)
 
 
 def test_handle_pause_de_manages_and_sticks_on_real_lt(tmp_path):
-    """A genuinely auto_managed seed, after Handle.pause(), must be taken OUT of auto-management and
-    STAY paused — the auto-manager must not resume it (that was the still-uploading bug)."""
+    """A genuinely auto_managed torrent, after Handle.pause(), must be taken OUT of auto-management
+    and STAY paused — the auto-manager must not resume it (that was the still-uploading bug)."""
     ses = _quiet_session(6890)
+    h = None
     try:
-        h = _make_seed(ses, tmp_path)
+        h = _add_managed(ses, tmp_path, "bb" * 20)
         time.sleep(1)
         assert h.status().flags & AUTO_MANAGED, "precondition: torrent is auto_managed (the bug state)"
 
@@ -73,7 +65,8 @@ def test_handle_pause_de_manages_and_sticks_on_real_lt(tmp_path):
         assert not (st2.flags & AUTO_MANAGED), "must STAY out of auto-management"
         assert st2.flags & PAUSED, "must STAY paused — no auto-resume (this is the fix)"
     finally:
-        ses.remove_torrent(h)
+        if h is not None:
+            ses.remove_torrent(h)
 
 
 def test_engine_add_produces_non_auto_managed(tmp_path):
