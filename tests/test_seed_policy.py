@@ -19,49 +19,52 @@ def test_idle_limit_caps_only_idle_while_something_plays() -> None:
 
 # ---- should_stop_seeding ----
 def test_seed_forever_by_default() -> None:
-    assert should_stop_seeding(pinned=False, seeding=True, completed_at=0.0, now=10_000,
+    assert should_stop_seeding(pinned=False, finished=True, completed_at=0.0, now=10_000,
                                seed_on_complete=True, max_seed_minutes=0) is False
 
 
 def test_stop_immediately_when_seed_on_complete_disabled() -> None:
-    assert should_stop_seeding(pinned=False, seeding=True, completed_at=100.0, now=100.0,
+    assert should_stop_seeding(pinned=False, finished=True, completed_at=100.0, now=100.0,
                                seed_on_complete=False, max_seed_minutes=0) is True
 
 
 def test_pinned_always_keeps_seeding() -> None:
-    assert should_stop_seeding(pinned=True, seeding=True, completed_at=0.0, now=10_000,
+    assert should_stop_seeding(pinned=True, finished=True, completed_at=0.0, now=10_000,
                                seed_on_complete=False, max_seed_minutes=1) is False
 
 
 def test_incomplete_torrent_never_stops() -> None:
-    assert should_stop_seeding(pinned=False, seeding=False, completed_at=None, now=10_000,
+    assert should_stop_seeding(pinned=False, finished=False, completed_at=None, now=10_000,
                                seed_on_complete=False, max_seed_minutes=0) is False
 
 
 def test_max_seed_minutes_boundary() -> None:
     # 10-minute policy: stop once >= 600s since completion, not before.
-    assert should_stop_seeding(pinned=False, seeding=True, completed_at=0.0, now=601,
+    assert should_stop_seeding(pinned=False, finished=True, completed_at=0.0, now=601,
                                seed_on_complete=True, max_seed_minutes=10) is True
-    assert should_stop_seeding(pinned=False, seeding=True, completed_at=0.0, now=599,
+    assert should_stop_seeding(pinned=False, finished=True, completed_at=0.0, now=599,
                                seed_on_complete=True, max_seed_minutes=10) is False
 
 
 # ---- Handle control methods via a fake libtorrent handle ----
 class _St:
-    def __init__(self, seeding: bool) -> None:
+    def __init__(self, seeding: bool, finished: bool | None = None) -> None:
         self.is_seeding = seeding
+        # A full seed is also finished; a partially-watched pack can be finished but NOT seeding.
+        self.is_finished = seeding if finished is None else finished
 
 
 class _FakeH:
-    def __init__(self, seeding: bool = False) -> None:
+    def __init__(self, seeding: bool = False, finished: bool | None = None) -> None:
         self._seeding = seeding
+        self._finished = seeding if finished is None else finished
         self.paused = False
         self.dl_limit: int | None = None
         self.cleared_flags: list = []  # records unset_flags() args
         self.set_flags_calls: list = []
 
     def status(self) -> _St:
-        return _St(self._seeding)
+        return _St(self._seeding, self._finished)
 
     def pause(self) -> None:
         self.paused = True
@@ -77,6 +80,25 @@ class _FakeH:
 
     def set_flags(self, f) -> None:
         self.set_flags_calls.append(f)
+
+
+def test_finished_pack_stops_even_when_not_a_full_seed() -> None:
+    """The TV-pack bug: a partially-watched multi-file torrent is is_finished (all wanted data) +
+    progress 1.0 but NOT is_seeding (un-watched episodes are priority 0). The policy must stop it —
+    it keys off `finished`, so finished=True + seed_on_complete=False -> stop, regardless of seeding."""
+    assert should_stop_seeding(pinned=False, finished=True, completed_at=100.0, now=100.0,
+                               seed_on_complete=False, max_seed_minutes=0) is True
+
+
+def test_handle_is_finished_vs_is_seeding() -> None:
+    """is_finished reads status().is_finished (all WANTED data) — distinct from is_seeding (whole
+    torrent). A finished-but-not-full-seed pack: is_finished True, is_seeding False."""
+    pack = _FakeH(seeding=False, finished=True)
+    h = Handle(pack)
+    assert h.is_finished() is True
+    assert h.is_seeding() is False
+    full = _FakeH(seeding=True)  # a full seed is both
+    assert Handle(full).is_finished() is True and Handle(full).is_seeding() is True
 
 
 def test_handle_seeding_pause_resume() -> None:

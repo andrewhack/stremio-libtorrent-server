@@ -63,12 +63,16 @@ def idle_download_limit(*, this_active: bool, any_active: bool, idle_limit: int)
     return 0
 
 
-def should_stop_seeding(*, pinned: bool, seeding: bool, completed_at: float | None, now: float,
+def should_stop_seeding(*, pinned: bool, finished: bool, completed_at: float | None, now: float,
                         seed_on_complete: bool, max_seed_minutes: int) -> bool:
-    """Whether a completed torrent should stop seeding now. Pinned torrents always keep seeding (the
-    owner asked to keep them). seed_on_complete=False stops as soon as it completes; otherwise stop
-    max_seed_minutes after completion (0 = seed forever)."""
-    if pinned or not seeding or completed_at is None:
+    """Whether a torrent that has all its WANTED data should stop seeding now. `finished` = all
+    priority>0 pieces present (libtorrent is_finished), NOT is_seeding (the WHOLE torrent complete):
+    a TV-season pack where only some episodes were watched is finished + progress 1.0 but never a
+    full seed (the un-watched episodes are priority 0), yet it still uploads the pieces it kept — so
+    keying off is_seeding let SEED_ON_COMPLETE / MAX_SEED_MINUTES silently never fire for packs.
+    Pinned torrents always keep seeding (owner asked to keep them). seed_on_complete=False stops as
+    soon as it's finished; otherwise stop max_seed_minutes after completion (0 = seed forever)."""
+    if pinned or not finished or completed_at is None:
         return False
     if not seed_on_complete:
         return True
@@ -264,9 +268,19 @@ class Handle:
         return self._active > 0
 
     def is_seeding(self) -> bool:
-        """True once the wanted data is complete (libtorrent 'seeding' state)."""
+        """True once the WHOLE torrent is complete (libtorrent 'is_seeding' — every piece present)."""
         try:
             return bool(self._h.status().is_seeding)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def is_finished(self) -> bool:
+        """True once all WANTED (priority>0) data is downloaded (libtorrent 'is_finished'). Unlike
+        is_seeding, this is True for a partially-watched multi-file pack whose un-watched files are
+        priority 0 — which is exactly when the seed policy should engage (we're only uploading the
+        pieces we kept). Drives stop-seeding-on-complete / max-seed-time."""
+        try:
+            return bool(self._h.status().is_finished)
         except Exception:  # noqa: BLE001
             return False
 
@@ -718,13 +732,13 @@ class Engine:
         for h in list(self._torrents.values()):
             if not h.has_metadata():
                 continue
-            seeding = h.is_seeding()
-            if seeding and h.completed_at is None:
+            finished = h.is_finished()  # all WANTED data present (covers TV-packs); NOT is_seeding
+            if finished and h.completed_at is None:
                 h.completed_at = now
-            elif not seeding:
+            elif not finished:
                 h.completed_at = None
             if not h.is_paused() and should_stop_seeding(
-                pinned=h.pinned, seeding=seeding, completed_at=h.completed_at, now=now,
+                pinned=h.pinned, finished=finished, completed_at=h.completed_at, now=now,
                 seed_on_complete=self._seed_on_complete, max_seed_minutes=self._max_seed_minutes,
             ):
                 h.pause()

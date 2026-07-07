@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 
 lt = pytest.importorskip("libtorrent")
 
-from stremiosrv.torrent.engine import Engine, Handle  # noqa: E402  (after importorskip)
+from stremiosrv.torrent.engine import Engine, Handle, should_stop_seeding  # noqa: E402  (after importorskip)
 
 AUTO_MANAGED = lt.torrent_flags.auto_managed
 PAUSED = lt.torrent_flags.paused
@@ -64,6 +64,56 @@ def test_handle_pause_de_manages_and_sticks_on_real_lt(tmp_path):
         st2 = h.status()
         assert not (st2.flags & AUTO_MANAGED), "must STAY out of auto-management"
         assert st2.flags & PAUSED, "must STAY paused — no auto-resume (this is the fix)"
+    finally:
+        if h is not None:
+            ses.remove_torrent(h)
+
+
+def _make_pack_torrent(tmp_path):
+    """A 2-file torrent, each file a whole number of 16 KiB pieces (so no piece straddles two files).
+    Returns (torrent_info, content_root)."""
+    root = tmp_path / "pack"
+    root.mkdir()
+    (root / "ep0.bin").write_bytes(b"0" * 32768)  # 2 pieces
+    (root / "ep1.bin").write_bytes(b"1" * 32768)  # 2 pieces
+    fs = lt.file_storage()
+    lt.add_files(fs, str(root))
+    ct = lt.create_torrent(fs, 16384)
+    lt.set_piece_hashes(ct, str(root.parent))
+    return lt.torrent_info(ct.generate()), root
+
+
+def test_finished_pack_is_finished_not_seeding_on_real_lt(tmp_path):
+    """The TV-pack bug, on real libtorrent, deterministic (no network): only file0 is wanted (file1
+    priority 0) and only file0's data is on disk. After a recheck libtorrent reports is_finished=True
+    (all WANTED data present) but is_seeding=False (file1 missing) — the exact partially-watched-pack
+    state that kept uploading. The seed policy (keyed on is_finished) must treat it as complete."""
+    ti, root = _make_pack_torrent(tmp_path)
+    save = tmp_path / "save"
+    (save / "pack").mkdir(parents=True)
+    (save / "pack" / "ep0.bin").write_bytes((root / "ep0.bin").read_bytes())  # file0 only
+    ses = _quiet_session(6892)
+    h = None
+    try:
+        p = lt.add_torrent_params()
+        p.ti = ti
+        p.save_path = str(save)
+        p.file_priorities = [4, 0]           # file0 wanted, file1 skipped (mirrors focus_file on a pack)
+        p.flags &= ~(AUTO_MANAGED | PAUSED)  # run it so it checks the on-disk data
+        h = ses.add_torrent(p)
+        h.force_recheck()
+        for _ in range(80):                  # wait for the recheck to settle (64 KiB -> fast)
+            st = h.status()
+            if "checking" not in str(st.state).lower() and st.is_finished:
+                break
+            time.sleep(0.25)
+        st = h.status()
+        assert st.is_finished, "all WANTED data (file0) present -> is_finished"
+        assert not st.is_seeding, "file1 missing -> NOT a full seed (is_seeding False)"
+        wrapped = Handle(h)
+        assert wrapped.is_finished() is True and wrapped.is_seeding() is False
+        assert should_stop_seeding(pinned=False, finished=wrapped.is_finished(), completed_at=1.0,
+                                   now=1.0, seed_on_complete=False, max_seed_minutes=0) is True
     finally:
         if h is not None:
             ses.remove_torrent(h)
