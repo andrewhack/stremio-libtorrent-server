@@ -81,6 +81,14 @@ def should_stop_seeding(*, pinned: bool, finished: bool, completed_at: float | N
     return False
 
 
+def should_resume_on_open(*, paused: bool, finished: bool) -> bool:
+    """Whether opening a playback stream should resume a torrent the seed policy had paused. Resume
+    only when it's paused AND not finished — i.e. the now-focused file still needs downloading (the
+    NEXT episode of a pack), so a paused torrent would otherwise stall playback. A finished torrent
+    stays paused: it plays straight from disk, so re-seeding it on a re-watch is needless upload."""
+    return paused and not finished
+
+
 def adaptive_sequential(buffer_bytes: int, currently_sequential: bool, low: int, high: int) -> bool:
     """Adaptive piece-picking decision: should the played torrent download strictly in-order?
 
@@ -689,7 +697,16 @@ class Engine:
 
     def note_stream_open(self, h: "Handle") -> None:
         """A playback stream opened: promote its played file to active priority and re-apply the
-        cross-torrent bandwidth caps so idle torrents yield to it."""
+        cross-torrent bandwidth caps so idle torrents yield to it.
+
+        If the seed policy had PAUSED this torrent (stop-seeding-on-complete / max-seed-time) and the
+        now-focused file still needs downloading — e.g. the NEXT episode of a TV pack, not yet on disk
+        — resume it, else playback would stall on a paused torrent. `focus_file()` already ran
+        (playback.py) so `is_finished()` reflects the newly-focused file: a complete torrent being
+        re-watched stays paused (served from disk, no needless re-seed); an incomplete focus resumes.
+        The seed policy re-pauses once the new file finishes."""
+        if should_resume_on_open(paused=h.is_paused(), finished=h.is_finished()):
+            h.resume()
         h.mark_active()
         self._apply_bandwidth_policy()
 

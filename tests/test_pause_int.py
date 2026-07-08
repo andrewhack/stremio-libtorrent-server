@@ -119,6 +119,22 @@ def test_finished_pack_is_finished_not_seeding_on_real_lt(tmp_path):
             ses.remove_torrent(h)
 
 
+def test_note_stream_open_resumes_paused_unfinished_torrent(tmp_path):
+    """Resume-on-play (real lt): if the seed policy paused a torrent whose focused file still needs
+    downloading (e.g. the next episode of a pack), opening a stream must RESUME it, else playback
+    stalls on a paused torrent. A bare-infohash add has no data -> is_finished False -> must resume."""
+    eng = Engine(listen_port=6893, cache_root=str(tmp_path))
+    try:
+        h = eng.add("cccccccccccccccccccccccccccccccccccccccc")
+        time.sleep(1)
+        h.pause()
+        assert h.is_paused() is True and h.is_finished() is False
+        eng.note_stream_open(h)
+        assert h.is_paused() is False, "opening a stream on a paused+unfinished torrent must resume it"
+    finally:
+        eng.shutdown()
+
+
 def test_engine_add_produces_non_auto_managed_and_running(tmp_path):
     """Engine.add() must add torrents OUT of auto-management AND not paused. Clearing auto_managed
     alone would strand the torrent paused (libtorrent's default flags are auto_managed|paused, and

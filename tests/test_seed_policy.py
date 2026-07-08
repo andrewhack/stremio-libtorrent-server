@@ -5,7 +5,12 @@ and are covered by integration tests.
 """
 from __future__ import annotations
 
-from stremiosrv.torrent.engine import Handle, idle_download_limit, should_stop_seeding
+from stremiosrv.torrent.engine import (
+    Handle,
+    idle_download_limit,
+    should_resume_on_open,
+    should_stop_seeding,
+)
 
 
 # ---- idle_download_limit: cross-torrent active prioritization ----
@@ -44,6 +49,17 @@ def test_max_seed_minutes_boundary() -> None:
                                seed_on_complete=True, max_seed_minutes=10) is True
     assert should_stop_seeding(pinned=False, finished=True, completed_at=0.0, now=599,
                                seed_on_complete=True, max_seed_minutes=10) is False
+
+
+# ---- should_resume_on_open: resume a seed-paused torrent when a new file needs downloading ----
+def test_resume_on_open_only_when_paused_and_unfinished() -> None:
+    # Next episode of a stop-seed-paused pack (paused + not finished) -> resume so it can download.
+    assert should_resume_on_open(paused=True, finished=False) is True
+    # Re-watching a finished torrent that was paused -> stay paused, play from disk (no re-seed).
+    assert should_resume_on_open(paused=True, finished=True) is False
+    # Not paused -> nothing to do (already running).
+    assert should_resume_on_open(paused=False, finished=False) is False
+    assert should_resume_on_open(paused=False, finished=True) is False
 
 
 # ---- Handle control methods via a fake libtorrent handle ----
