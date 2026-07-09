@@ -13,7 +13,7 @@ import zlib
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from stremiosrv.stream.fileserver import file_disk_path
-from stremiosrv.subs.opensub import opensubtitles_hash
+from stremiosrv.subs.opensub import opensubtitles_hash_and_size
 from stremiosrv.transcode.probe import probe_media
 
 try:  # proper charset detection (Cyrillic/legacy subs); degrade gracefully if absent
@@ -145,6 +145,13 @@ def _ensure_edges(handle, idx: int, edge: int = 65536, timeout: float = 15.0) ->
 
 @router.get("/opensubHash")
 def opensub_hash(request: Request, videoUrl: str | None = None, mediaURL: str | None = None) -> dict:
+    """OpenSubtitles matching key, in the stock streaming-server envelope:
+    `{"error": null, "result": {"size": <bytes>, "hash": "<16hex>"}}`.
+
+    The OpenSubtitles addon queries by moviehash AND moviebytesize, so BOTH must be returned — a bare
+    `{"result": "<hash>"}` (no size) silently breaks OpenSubtitles matching while other subtitle
+    sources (IMDb/filename) still work. `result` is null when the file can't be resolved in time; the
+    client then falls back to filename matching."""
     src = videoUrl or mediaURL
     if not src:
         raise HTTPException(status_code=422, detail="videoUrl or mediaURL required")
@@ -157,11 +164,13 @@ def opensub_hash(request: Request, videoUrl: str | None = None, mediaURL: str | 
         while not h.has_metadata() and time.time() < end:
             time.sleep(0.2)
         if h.has_metadata() and _ensure_edges(h, idx):
-            return {"result": opensubtitles_hash(file_disk_path(eng.save_path(), h, idx))}
-        return {"result": None}  # couldn't resolve in time -> client falls back to filename match
+            hsh, size = opensubtitles_hash_and_size(file_disk_path(eng.save_path(), h, idx))
+            return {"error": None, "result": {"size": size, "hash": hsh}}
+        return {"error": None, "result": None}  # couldn't resolve in time -> client falls back to filename
     if os.path.exists(src):
-        return {"result": opensubtitles_hash(src)}
-    return {"result": None}
+        hsh, size = opensubtitles_hash_and_size(src)
+        return {"error": None, "result": {"size": size, "hash": hsh}}
+    return {"error": None, "result": None}
 
 
 @router.get("/{info_hash}/{idx:int}/subtitles.json")
