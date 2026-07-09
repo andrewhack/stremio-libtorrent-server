@@ -5,3 +5,6 @@
 __pycache__/
 docs/server.reference.js
 .superpowers/
+
+# Superpowers process docs (specs/plans) — internal only, never on the public repo
+docs/superpowers/
