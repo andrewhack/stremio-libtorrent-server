@@ -107,22 +107,38 @@ def to_webvtt(text: str) -> str:
     return srt_to_vtt(text)  # fallback: naive but charset-correct
 
 
-@router.get("/subtitles.vtt")
-def subtitles_proxy(source: str = Query(alias="from")) -> Response:
-    """Fetch an external subtitle (Stremio addons pass `?from=<url>`) and serve it as clean WebVTT on
-    our own origin — CORS-safe for the browser, and format-normalized (ffmpeg) so strict native
-    players render it too."""
+# A browser User-Agent for outbound subtitle fetches. Subtitle CDNs — notably subs5.strem.io, which
+# the OpenSubtitles addon serves through — return 403 to urllib's default "Python-urllib/x.y" agent;
+# that 403 became our 502 "failed to fetch subtitle" -> blank subs. A normal browser UA is accepted.
+_FETCH_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+
+@router.get("/subtitles.{ext}")
+def subtitles_proxy(ext: str, source: str = Query(alias="from")) -> Response:
+    """Fetch an external subtitle (Stremio passes `?from=<url>`) and serve it on our own origin —
+    CORS-safe and format-normalized. Mirrors the stock server's `/subtitles.:ext`: **the client asks
+    for the extension it wants.** Android/native players request **`.srt`** (SubRip, for ExoPlayer);
+    the browser requests `.vtt`. A `.vtt` request is normalized to clean WebVTT via ffmpeg; any other
+    ext is charset-decoded and served as SubRip.
+
+    Two bugs this fixes (both blanked OpenSubtitles on Android): serving ONLY `/subtitles.vtt` meant
+    the `.srt` request fell through nginx to the web-player index.html (player got HTML, not a cue);
+    and the bare `urlopen` was 403'd by subs5.strem.io -> 502. See `_FETCH_UA`."""
     if not source.lower().startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="only http(s) subtitle sources are allowed")
+    req = urllib.request.Request(source, headers={"User-Agent": _FETCH_UA})
     try:
-        with urllib.request.urlopen(source, timeout=10) as r:  # noqa: S310 — scheme checked above
+        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 — scheme checked above
             raw = r.read()
             content_encoding = r.headers.get("Content-Encoding", "")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail="failed to fetch subtitle") from e
     text = decode_subtitle(_decompress(raw, content_encoding))
-    # charset=utf-8 so strict players (ExoPlayer) don't second-guess the encoding.
-    return Response(content=to_webvtt(text), media_type="text/vtt; charset=utf-8")
+    if ext.lower() == "vtt":
+        # charset=utf-8 so strict players (ExoPlayer) don't second-guess the encoding.
+        return Response(content=to_webvtt(text), media_type="text/vtt; charset=utf-8")
+    return Response(content=text, media_type="application/x-subrip; charset=utf-8")
 
 
 def _ensure_edges(handle, idx: int, edge: int = 65536, timeout: float = 15.0) -> bool:

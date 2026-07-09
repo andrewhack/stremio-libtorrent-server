@@ -20,7 +20,10 @@ location = /stats.json         { proxy_pass http://127.0.0.1:11470; }
 location = /hwaccel-profiler   { proxy_pass http://127.0.0.1:11470; }
 location = /casting            { proxy_pass http://127.0.0.1:11470; }
 location = /opensubHash        { proxy_pass http://127.0.0.1:11470; }
-location = /subtitles.vtt      { proxy_pass http://127.0.0.1:11470; }
+# Prefix (not exact): the client picks the extension it wants — `.srt` for native players
+# (Android/ExoPlayer), `.vtt` for the browser. Route every /subtitles.<ext> to the proxy, else a
+# `.srt` request falls through to the web-player index.html (HTML, not a subtitle).
+location /subtitles.           { proxy_pass http://127.0.0.1:11470; }
 location = /removeAll          { proxy_pass http://127.0.0.1:11470; }
 location ^~ /hlsv2/            { proxy_pass http://127.0.0.1:11470; }
 # Torrent routes are /<40-hex-infohash>/<idx|stats.json|remove>. The second segment MUST be
