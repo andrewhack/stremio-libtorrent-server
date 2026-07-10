@@ -483,9 +483,19 @@ class Engine:
         return os.path.join(self._resume_dir, info_hash.lower() + ".fastresume")
 
     def _alerts_loop(self) -> None:
+        # Deliberately NOT session.wait_for_alert(): its return value is discarded here, but the
+        # boost.python binding still materialises it — dynamic_cast'ing the *borrowed* front-of-queue
+        # alert pointer (return_internal_reference<1>). Under load (mass cache eviction firing
+        # torrent_removed alerts while streams read) that borrowed pointer can dangle and the cast
+        # segfaults in libstdc++ __dynamic_cast (observed: SIGSEGV core dump, 2026-07-09 16:26).
+        # pop_alerts() returns owned wrappers with a stable lifetime, so we poll it instead — same
+        # ~sub-second latency, no borrowed-pointer hazard, and self._stop.wait() makes stop snappy.
         while not self._stop.is_set():
-            self._ses.wait_for_alert(1000)
-            for a in self._ses.pop_alerts():
+            alerts = self._ses.pop_alerts()
+            if not alerts:
+                self._stop.wait(0.5)
+                continue
+            for a in alerts:
                 if isinstance(a, lt.save_resume_data_alert):
                     try:
                         ih = str(a.params.info_hashes.v1)
