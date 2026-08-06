@@ -42,8 +42,10 @@ def test_read_never_crosses_into_unavailable_piece(tmp_path):
 
 
 def test_timeout_ends_stream_gracefully_without_raising(tmp_path, monkeypatch):
-    """Cold-start: no piece ever arrives -> generator ends cleanly (no ASGI ExceptionGroup) and
-    records a timeout, so the player retries instead of seeing a stack trace."""
+    """Cold-start: no piece ever arrives -> generator ends cleanly and records a timeout, so the
+    player retries. Scope note: this asserts the *generator* does not raise. It says nothing about
+    the ASGI layer — the short body still trips uvicorn's Content-Length check, which is covered by
+    test_truncated_stream.py."""
     from stremiosrv import metrics
     timeouts = []
     monkeypatch.setattr(metrics, "record_timeout", lambda: timeouts.append(1))
@@ -56,8 +58,8 @@ def test_timeout_ends_stream_gracefully_without_raising(tmp_path, monkeypatch):
 
 def test_disk_error_ends_stream_gracefully(tmp_path, monkeypatch):
     """A mid-stream failure (file not on disk yet, handle removed by the evictor, or disk I/O) must
-    end the stream cleanly — NOT raise into the ASGI layer, which surfaces as an ExceptionGroup +
-    nginx 'upstream prematurely closed connection'."""
+    end the stream cleanly rather than propagating out of the generator. Same scope note as above:
+    the ASGI-level consequence is covered by test_truncated_stream.py."""
     from stremiosrv import metrics
     timeouts = []
     monkeypatch.setattr(metrics, "record_timeout", lambda: timeouts.append(1))

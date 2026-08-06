@@ -47,10 +47,13 @@ def wait_and_read(
     Cold-start resilience: a peer-starved box (no inbound port-forward) downloads the playhead
     pieces slowly, so the FIRST piece gets a longer budget (`first_timeout`) than subsequent ones
     (`timeout`). If a piece still never arrives, the generator **ends the stream cleanly** (logs a
-    warning, returns) instead of raising mid-response — a raise after the 206 surfaces as an ugly
-    ASGI `ExceptionGroup` and an alarming log; a clean end just lets the player retry (which
-    succeeds once more of the file is cached). Playback therefore works even without port-forwarding,
-    just slower on first play.
+    warning, returns) rather than raising, and the player retries (which succeeds once more of the
+    file is cached). Playback therefore works even without port-forwarding, just slower on first play.
+
+    Returning early does NOT by itself keep the log clean: the route has already announced
+    `Content-Length: end-start+1`, so a short body makes uvicorn raise "Response content shorter
+    than Content-Length" after the fact. Truncating the connection is the correct HTTP signal and is
+    kept; `SuppressClientDisconnect` (app.py) is what stops it reaching the error log.
 
     Maintains a sliding window of boosted+deadlined pieces ahead of the read position. The window
     is a fixed *byte budget* (not a piece count) so on big torrents with large pieces it stays a
@@ -79,8 +82,9 @@ def wait_and_read(
             while not handle.have_piece(gp) and time.time() < deadline:
                 time.sleep(0.2)
             if not handle.have_piece(gp):
-                # Give up gracefully: end the stream (no raise) so the player retries instead of
-                # seeing an ASGI error. Common on peer-starved boxes — surfaced via /netcheck.
+                # Give up gracefully: end the stream (no raise) so the player just retries. Common on
+                # peer-starved boxes — surfaced via /netcheck. The resulting short body is absorbed
+                # by SuppressClientDisconnect; this warning is the diagnostic that survives.
                 metrics.record_timeout()
                 logger.warning("piece %d not available within %.0fs (peer-starved?); ending stream", gp, budget)
                 return
@@ -100,11 +104,11 @@ def wait_and_read(
             pos += len(data)
     except Exception as e:  # noqa: BLE001 — must NEVER bubble into the ASGI layer
         # Any mid-stream error — file not on disk yet (FileNotFoundError), the torrent handle removed
-        # by the evictor mid-stream (invalid-handle), or a transient disk I/O error — would otherwise
-        # surface as an ugly ASGI ExceptionGroup + nginx "upstream prematurely closed connection" and
-        # alarm the user. End the stream cleanly instead; the player simply re-requests the range and
-        # succeeds once the data is present. (Client disconnects raise GeneratorExit, not Exception,
-        # so they pass through and close the generator normally.)
+        # by the evictor mid-stream (invalid-handle), or a transient disk I/O error — ends the stream
+        # cleanly rather than propagating; the player simply re-requests the range and succeeds once
+        # the data is present. As above, the resulting short body is absorbed by
+        # SuppressClientDisconnect. (Client disconnects raise GeneratorExit, not Exception, so they
+        # pass through and close the generator normally.)
         metrics.record_timeout()
         logger.warning("stream ended early (%s: %s); player will retry", type(e).__name__, e)
         return

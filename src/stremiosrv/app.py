@@ -1,3 +1,6 @@
+import contextvars
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,37 +18,105 @@ _DISCONNECT_NAMES = frozenset({
 })
 
 
-def _all_client_disconnect(exc: BaseException) -> bool:
-    """True only if `exc` (unwrapping ExceptionGroups) consists *entirely* of client-disconnect /
-    cancellation leaves — so a real error mixed in still propagates and gets logged."""
-    leaves: list[BaseException] = []
+# uvicorn's HTTP protocol raises this (protocols/http/*_impl.py) when a StreamingResponse ends
+# before the Content-Length it already announced. On the range route that is deliberate, not a
+# fault: wait_and_read gives up on a peer-starved piece (or a handle the evictor removed mid-stream)
+# and ends the stream, having committed to `Content-Length: end-start+1` in the 206 header.
+# Truncating the connection IS the correct HTTP signal for "this body is incomplete" — the player
+# re-requests the range and succeeds once more of the file is cached — and wait_and_read has already
+# logged the precise reason at WARNING. The ASGI traceback on top is pure noise.
+# NB: the sibling "longer than Content-Length" means we computed a range wrong — a genuine bug, so
+# it is deliberately NOT matched here.
+_TRUNCATED_BODY_MSG = "Response content shorter than Content-Length"
+
+
+def _leaves(exc: BaseException) -> list[BaseException]:
+    """Flatten `exc` (unwrapping nested ExceptionGroups) to its non-group leaf exceptions."""
+    out: list[BaseException] = []
 
     def walk(e: BaseException) -> None:
         if isinstance(e, BaseExceptionGroup):
             for sub in e.exceptions:
                 walk(sub)
         else:
-            leaves.append(e)
+            out.append(e)
 
     walk(exc)
+    return out
+
+
+def _is_truncated_body(exc: BaseException) -> bool:
+    """True for uvicorn's deliberate-truncation error (matched on message: the type is a bare
+    RuntimeError, so suppressing by type would swallow real bugs)."""
+    return type(exc) is RuntimeError and str(exc) == _TRUNCATED_BODY_MSG
+
+
+def _all_client_disconnect(exc: BaseException) -> bool:
+    """True only if `exc` (unwrapping ExceptionGroups) consists *entirely* of client-disconnect /
+    cancellation leaves — so a real error mixed in still propagates and gets logged."""
+    leaves = _leaves(exc)
     return bool(leaves) and all(type(leaf).__name__ in _DISCONNECT_NAMES for leaf in leaves)
 
 
+def _all_benign_stream_end(exc: BaseException) -> bool:
+    """True only if every leaf is an expected end-of-stream — the client going away, or our own
+    deliberate truncation. A real error anywhere in the group still propagates and gets logged."""
+    leaves = _leaves(exc)
+    return bool(leaves) and all(
+        type(leaf).__name__ in _DISCONNECT_NAMES or _is_truncated_body(leaf) for leaf in leaves
+    )
+
+
+# Having swallowed the truncation above, uvicorn's run_asgi still finds the response incomplete and
+# logs this at ERROR — misleading, since the callable did not misbehave, we cut the body on purpose.
+_INCOMPLETE_MSG = "ASGI callable returned without completing response."
+
+# Set on the request's own context when we suppress a truncation. uvicorn runs each request in a
+# task with its own copy of the context, so this cannot bleed into a concurrent stream.
+_truncated: contextvars.ContextVar[bool] = contextvars.ContextVar("stremiosrv_truncated")
+
+
+class _DropTruncationFollowup(logging.Filter):
+    """Drops uvicorn's `_INCOMPLETE_MSG` for the one request that deliberately truncated. Scoped by
+    contextvar rather than dropping the message outright, so an unrelated incomplete response — a
+    real bug — is still logged."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (record.getMessage().strip() == _INCOMPLETE_MSG and _truncated.get(False))
+
+
+def _install_log_filter() -> None:
+    """Attach the filter to uvicorn's error logger, once. Safe to call before or after uvicorn
+    configures logging: dictConfig replaces a logger's handlers but leaves its filters intact."""
+    logger = logging.getLogger("uvicorn.error")
+    if not any(isinstance(f, _DropTruncationFollowup) for f in logger.filters):
+        logger.addFilter(_DropTruncationFollowup())
+
+
 class SuppressClientDisconnect:
-    """Outermost ASGI wrapper. When a player disconnects mid-`StreamingResponse` (seek / buffer-ahead
-    / stop), Starlette's anyio task group surfaces the aborted send() as an ExceptionGroup that
-    uvicorn logs as a scary 'Exception in ASGI application' (nginx: 'upstream prematurely closed').
-    Playback is unaffected — the player just reconnects — so swallow disconnect-ONLY exceptions to
-    keep the log readable. Any group containing a genuine error propagates unchanged."""
+    """Outermost ASGI wrapper. Two expected end-of-stream conditions otherwise reach uvicorn as a
+    scary 'Exception in ASGI application' + ExceptionGroup traceback (nginx: 'upstream prematurely
+    closed connection'):
+
+    * the player disconnects mid-`StreamingResponse` (seek / buffer-ahead / stop), which Starlette's
+      anyio task group surfaces as an aborted send();
+    * `wait_and_read` ends a stream early on a peer-starved piece, leaving the body short of the
+      Content-Length the 206 already announced (see `_TRUNCATED_BODY_MSG`).
+
+    Playback is unaffected in both cases — the player simply re-requests — so swallow them to keep
+    the log readable. Any group containing a genuine error propagates unchanged."""
 
     def __init__(self, app) -> None:
         self.app = app
+        _install_log_filter()
 
     async def __call__(self, scope, receive, send) -> None:
         try:
             await self.app(scope, receive, send)
-        except BaseException as exc:  # noqa: BLE001 — re-raised below unless it's a pure disconnect
-            if scope.get("type") == "http" and _all_client_disconnect(exc):
+        except BaseException as exc:  # noqa: BLE001 — re-raised below unless it's a benign end
+            if scope.get("type") == "http" and _all_benign_stream_end(exc):
+                if any(_is_truncated_body(leaf) for leaf in _leaves(exc)):
+                    _truncated.set(True)  # silences uvicorn's follow-up for THIS request only
                 return
             raise
 
