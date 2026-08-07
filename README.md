@@ -210,14 +210,19 @@ the built-in routers for that first boot either.
 
 ### Next-episode prefetch
 
-Off by default. With `STREMIOSRV_PREFETCH_NEXT=true`, the server watches how far into an episode you
-are. Once you pass 90% **and** that episode is completely downloaded, it fetches the first 5% of the
-next video file in the same torrent (plus its last 4 MiB, so a trailing MP4 index doesn't stall the
-switch) at low background priority, then stops. Pressing Next starts from cache instead of from the
-swarm; the rest of the episode then downloads normally.
+Off by default. With `STREMIOSRV_PREFETCH_NEXT=true`, the server watches how much of the current
+episode's stream has been **read** and whether that episode is completely downloaded. Once reads pass
+90% **and** the episode is complete, it fetches the first 5% of the next video file in the same
+torrent (plus its last 4 MiB, so a trailing MP4 index doesn't stall the switch) at low background
+priority, then stops. Pressing Next starts from cache instead of from the swarm; the rest of the
+episode then downloads normally.
 
-Both conditions matter. Requiring the current episode to be complete is what guarantees prefetch can
-never take bandwidth from what you are watching — by the time it runs, that file needs none.
+Only one of those two conditions is a hard guarantee. Completeness is: prefetch can never take
+bandwidth from what you're watching, because by the time it runs that file needs none. The 90% mark
+is a best-effort proxy — bytes read, not where the viewer actually is — so a player that probes the
+end of the file on open (e.g. to read a trailing MP4 index) can satisfy it within the first seconds of
+an episode. That earliness is bounded (it can only ever pull the same small head+tail, never more) and
+harmless (the completeness gate still holds); it's just occasionally sooner than the 90% figure implies.
 
 **Scope:** this covers multi-episode **packs** — one torrent holding several episodes. When each
 episode is its own torrent, the next one's infohash has never been sent to the server (the streaming
@@ -226,7 +231,11 @@ a single video file has no "next file" and is unaffected, which is how films opt
 
 **One side effect:** with `STREMIOSRV_SEED_ON_COMPLETE=false`, a completed torrent is normally
 paused. Prefetch resumes it for as long as the head takes to arrive — so it will seed again briefly
-— and the seeding policy pauses it once more afterwards.
+— and the seeding policy pauses it once more afterwards. With `STREMIOSRV_SEED_ON_COMPLETE=true` and
+`STREMIOSRV_MAX_SEED_MINUTES` set, arming has a quieter version of the same effect: the torrent is
+briefly "not finished" again while the head downloads, which resets the seed-time clock. A torrent
+already most of the way through its seed window gets that clock restarted, and can end up seeding up
+to `MAX_SEED_MINUTES` longer than expected after the head lands.
 
 **GPU transcode** (only for clients that can't direct-play). Docker does **not** expose the host GPU to a
 container by default, so the one-command install above is **CPU-only**. The server *auto-detects* a GPU,
