@@ -68,8 +68,13 @@ def next_video_index(paths: list[str], sizes: list[int], current: int) -> int | 
 
 def head_pieces(file_offset: int, file_size: int, piece_length: int,
                 fraction: float, max_bytes: int) -> list[int]:
-    """Global piece indices covering the first min(fraction*size, max_bytes) bytes of a file."""
-    if piece_length <= 0 or file_size <= 0:
+    """Global piece indices covering the first min(fraction*size, max_bytes) bytes of a file.
+
+    A fraction above 1 is rejected the same way position_reached rejects one outside (0, 1]:
+    misconfiguration (e.g. a "5" meant as "5 percent") disables the feature instead of being bounded
+    only by max_bytes — and not bounded at all if max_bytes is raised too.
+    """
+    if piece_length <= 0 or file_size <= 0 or fraction > 1:
         return []
     n = min(int(file_size * fraction), max_bytes, file_size)
     if n <= 0:

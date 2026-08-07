@@ -238,9 +238,15 @@ class Handle:
         and seeded). The playhead window is still rushed via per-piece deadlines on top.
 
         Re-applied only when the focused file changes (cheap + idempotent across a file's many range
-        requests)."""
+        requests). A genuine change also resets the next-episode-prefetch bookkeeping: the read
+        cursor (it tracks bytes read of THIS file — stale numbers left over from the file just
+        departed would otherwise satisfy the trigger fraction instantly) and the prefetched-index set
+        (prioritize_files below overwrites every piece priority on the torrent, wiping any previously
+        armed head, so a stale entry here would block that file from ever being re-armed)."""
         if self._focused_idx == idx:
             return
+        self._read_pos = self._read_total = 0
+        self._prefetched.clear()
         ti = self._h.torrent_file()
         if ti is None:
             return
@@ -907,7 +913,16 @@ class Engine:
         if nxt is None or h.is_prefetched(nxt):
             return
         if not h.file_complete(idx):
-            return  # the episode being watched still needs the pipe — this is the whole safety gate
+            # The episode being watched still needs the pipe — this is the whole safety gate. It also
+            # guarantees every piece of THIS file (idx) is already on disk by the time we pass it,
+            # which is the only reason prefetch_arm's unconditional piece_priority() write below can
+            # never downgrade a not-yet-downloaded piece of the file being played: in a real, unpadded
+            # torrent the last piece of this file can be the SAME physical piece as the first piece of
+            # `nxt`'s head (files aren't piece-aligned). next_video_index orders by filename, not byte
+            # offset, so `nxt` is not always the physically adjacent file — but this gate's guarantee
+            # ("every piece of idx is present") holds regardless of which file turns out to share that
+            # boundary piece.
+            return
         plen = ti.piece_length()
         off, size = fs.file_offset(nxt), fs.file_size(nxt)
         pieces = prefetch.head_pieces(off, size, plen, self._prefetch_fraction,
@@ -925,6 +940,13 @@ class Engine:
         # nothing, so without this the feature would silently no-op on exactly those boxes. The
         # cost is stated plainly: a torrent whose seeding you stopped seeds again until the head
         # lands, at which point the seed policy re-pauses it within seed_policy_interval.
+        #
+        # Narrow race: h.status() is a roughly 1s-cached snapshot, so for up to ~1s after this
+        # resume() the seed policy thread can still read is_finished=True and pause it right back.
+        # mark_prefetched has already fired by then, so that head is never retried. Harmless either
+        # way — the outcome is only "the feature silently didn't help", never worse than not having
+        # it — and it self-heals on the next real play: should_resume_on_open(paused=True,
+        # finished=False) resumes it again.
         if h.is_paused():
             h.resume()
         planned = len(pieces) * plen

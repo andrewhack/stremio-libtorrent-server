@@ -10,7 +10,7 @@ import logging
 import mimetypes
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 
 from stremiosrv import metrics
 
@@ -40,7 +40,7 @@ def wait_and_read(
     save_path: str, handle, idx: int, start: int, end: int,
     timeout: float = 30.0, first_timeout: float = 120.0,
     chunk: int = 262144, window_bytes: int = 50_331_648, step_ms: int = 50,
-) -> Iterator[bytes]:
+) -> Generator[bytes, None, None]:
     """Yield bytes [start, end] (inclusive, file-relative) of file `idx`, blocking per chunk
     until the covering piece is available.
 

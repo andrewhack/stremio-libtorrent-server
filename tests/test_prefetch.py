@@ -117,6 +117,10 @@ def test_head_pieces_tiny_file_still_gets_one_piece():
 def test_head_pieces_disabled_fraction():
     assert head_pieces(0, GiB, PLEN, 0.0, 128 * MiB) == []
     assert head_pieces(0, GiB, PLEN, -0.5, 128 * MiB) == []
+    # A "5" meant as "5 percent" (STREMIOSRV_PREFETCH_NEXT_FRACTION is a fraction, not a percentage)
+    # must disable the feature like any other misconfiguration, not silently widen towards the whole
+    # file bounded only by max_bytes.
+    assert head_pieces(0, GiB, PLEN, 1.1, 128 * MiB) == []
     assert head_pieces(0, 0, PLEN, 0.05, 128 * MiB) == []
 
 

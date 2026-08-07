@@ -9,6 +9,10 @@ from stremiosrv.torrent.engine import ACTIVE_FILE_PRIO, IDLE_FILE_PRIO, Engine, 
 MiB = 1024 * 1024
 PLEN = 4 * MiB
 EP = 100 * PLEN        # 400 MiB per episode -> 100 pieces each
+# Deliberately NOT a multiple of PLEN: a real, unpadded multi-file torrent isn't piece-aligned, so the
+# last piece of one file is shared with the first piece of the next. A separate constant (not a change
+# to EP) so the other 28 fixtures keep their piece-aligned arithmetic unchanged.
+EP_UNALIGNED = 100 * PLEN + 1_000_000
 NFILES = 3
 
 
@@ -62,8 +66,8 @@ class _FakeTI:
 class _FakeLT:
     """lt.torrent_handle stand-in that records every priority write and every deadline."""
 
-    def __init__(self, have=()):
-        self._ti = _FakeTI()
+    def __init__(self, have=(), size=EP):
+        self._ti = _FakeTI(size=size)
         self._have = set(have)
         self.prio: dict[int, int] = {}
         self.deadlines: list[tuple[int, int]] = []
@@ -122,6 +126,33 @@ def test_focused_index_is_none_before_first_focus():
     assert h.focused_index() == 1
 
 
+def test_focus_file_resets_the_read_cursor_on_a_genuine_change():
+    # The read cursor tracks bytes read of the FOCUSED file. Carrying stale numbers from the file
+    # just left across a switch would let position_reached() fire instantly on the new file (it
+    # already satisfied the old file's trigger, and total is compared, not reset).
+    h = Handle(_FakeLT())
+    h.focus_file(0)
+    h.note_read_position(int(EP * 0.95), EP)
+    assert h.read_progress() == (int(EP * 0.95), EP)
+
+    h.focus_file(1)  # genuine change (0 -> 1)
+
+    assert h.read_progress() == (0, 0), "the old file's cursor must not leak into the new file"
+
+
+def test_focus_file_does_not_reset_the_cursor_when_focus_is_unchanged():
+    # playback.py calls focus_file(idx) on EVERY range request for the file already being played,
+    # not just the first. If the reset ran on that no-op path too, the cursor would never accumulate
+    # past 0 during ordinary playback and position_reached() would never fire.
+    h = Handle(_FakeLT())
+    h.focus_file(0)
+    h.note_read_position(int(EP * 0.5), EP)
+
+    h.focus_file(0)  # same index -> early return, not a genuine change
+
+    assert h.read_progress() == (int(EP * 0.5), EP)
+
+
 def test_file_complete_true_when_every_piece_present():
     assert Handle(_FakeLT(have=range(0, 100))).file_complete(0) is True
 
@@ -133,6 +164,12 @@ def test_file_complete_false_on_a_single_hole():
 
 def test_file_complete_false_for_an_untouched_file():
     assert Handle(_FakeLT(have=range(0, 100))).file_complete(1) is False
+
+
+def test_file_complete_false_for_a_zero_size_file():
+    # A file with no bytes can never be "complete"; the size<=0 guard must short-circuit before
+    # scanning any pieces (an empty file has no covering piece to check anyway).
+    assert Handle(_FakeLT(size=0)).file_complete(0) is False
 
 
 def test_prefetch_arm_writes_low_priority_and_no_deadlines():
@@ -534,3 +571,82 @@ def test_switching_to_the_prefetched_episode_downloads_the_whole_file():
     assert h.focused_index() == 1
     assert all(lt_h.prio.get(p) == ACTIVE_FILE_PRIO for p in range(100, 200)), \
         "episode 2 stranded at the prefetched head — focus_file was a no-op"
+
+
+def test_tick_does_not_arm_immediately_after_a_focus_change_leaves_the_cursor_stale():
+    """Before the Fix 1 cursor reset, a genuine focus change left _read_pos/_read_total holding the
+    OLD file's numbers. Those numbers already satisfied the 90% trigger (that's what got the new
+    file prefetched in the first place), so -- on a torrent where the newly-focused file also
+    happens to already be complete, e.g. a fully-cached pack -- the very next tick, before a single
+    byte of the new file has been read, would see position_reached() return True from stale data and
+    arm the file AFTER it too. The safety invariant (file_complete) still stops it from competing
+    with playback, but the trigger itself must not fire on data left over from a different file."""
+    h, lt_h = _armed()  # episode 0 focused + complete, cursor at 95%
+    _StubEngine()._prefetch_tick(h)  # arms episode 1
+    assert h.is_prefetched(1) is True
+
+    h.focus_file(1)  # the user presses Next
+    assert h.read_progress() == (0, 0), "sanity: the Fix 1 reset must have already run"
+
+    lt_h.prio.clear()
+    # Pretend episode 1 (now focused) is ALSO already fully on disk -- e.g. a fully-cached pack --
+    # so the completeness gate alone would not block arming episode 2. That isolates the position
+    # gate as the only thing standing between this tick and a premature arm.
+    lt_h._have.update(range(100, 200))
+
+    _StubEngine()._prefetch_tick(h)
+
+    assert lt_h.prio == {}, "a stale cursor must never arm the next-next episode at t=0 of a switch"
+
+
+def test_prefetched_head_can_be_rearmed_after_focus_moves_away_and_back():
+    """focus_file's prioritize_files overwrites EVERY piece priority on the torrent on a genuine
+    change, wiping any previously armed head back to 0. Without clearing _prefetched too, that file
+    index could never be re-armed even though its priorities really were reset -- the benefit would
+    be silently lost forever."""
+    h, lt_h = _armed()  # episode 0 (idx 0) focused + complete, cursor past the trigger
+    _StubEngine()._prefetch_tick(h)  # arms episode 1's head
+    assert lt_h.prio.get(100) == IDLE_FILE_PRIO
+    assert h.is_prefetched(1) is True
+
+    h.focus_file(2)  # focus moves away entirely (e.g. the user jumps ahead)
+    assert lt_h.prio.get(100) == 0, "sanity: focus_file really did wipe the armed head"
+
+    h.focus_file(0)  # ...and back to episode 1's predecessor
+    h.note_read_position(int(EP * 0.95), EP)  # a fresh past-the-trigger cursor for episode 0
+    lt_h.prio.clear()  # observation-only reset so the next assertion is unambiguous
+
+    _StubEngine()._prefetch_tick(h)
+
+    assert lt_h.prio.get(100) == IDLE_FILE_PRIO, "the wiped head must be re-armable once focus returns"
+    assert h.is_prefetched(1) is True
+
+
+def test_unaligned_boundary_piece_is_already_downloaded_when_armed():
+    """Real, unpadded multi-file torrents aren't piece-aligned: the last piece of the file being
+    played can be the SAME physical piece as the first piece of the next file's head range.
+    file_complete(idx) is what makes prefetch_arm's unconditional piece_priority() write safe in that
+    case -- it guarantees every piece of the file being played (idx) is already on disk before arming
+    runs, so downgrading a shared piece's priority can never pull it out from under playback. Every
+    other fixture in this file uses piece-aligned geometry (EP = 100 * PLEN), so this is the only
+    test that would catch a future change that relaxes file_complete's all-or-nothing check."""
+    # File 0 spans pieces 0..100 with this unaligned size -- piece 100 is the boundary, shared with
+    # the start of file 1's byte range.
+    lt_h = _FakeLT(have=range(0, 101), size=EP_UNALIGNED)
+    h = Handle(lt_h)
+    h.focus_file(0)
+    h.mark_active()
+    h.note_read_position(int(EP_UNALIGNED * 0.95), EP_UNALIGNED)
+
+    boundary_piece = EP_UNALIGNED // PLEN  # last piece of file 0 == first piece of file 1's head
+    assert boundary_piece == 100
+    assert h.file_complete(0) is True
+    assert lt_h.have_piece(boundary_piece) is True, "file_complete(0) must guarantee this before arming"
+    assert lt_h.prio.get(boundary_piece) == ACTIVE_FILE_PRIO, "sanity: playing file 0 owns it for now"
+
+    _StubEngine()._prefetch_tick(h)
+
+    # The tick armed file 1's head, which downgrades the shared boundary piece from ACTIVE to IDLE --
+    # harmless only because file_complete(0) already guaranteed it was on disk before this ran.
+    assert lt_h.prio.get(boundary_piece) == IDLE_FILE_PRIO
+    assert boundary_piece in lt_h._have, "the piece must still be on disk -- arming never fetches"
