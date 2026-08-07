@@ -514,3 +514,23 @@ def test_route_records_positions_monotonically_across_multiple_chunks(tmp_path):
         "recorded positions must increase monotonically"
     assert all(total == file_size for _, total in recorded), "total must stay the whole-file size"
     assert recorded[-1] == (file_size, file_size)
+
+
+def test_switching_to_the_prefetched_episode_downloads_the_whole_file():
+    """The requirement: pressing Next must resume the full download of the prefetched episode.
+
+    focus_file returns early when _focused_idx already equals the requested index, so if prefetch
+    ever claimed focus, this switch would be a no-op and every piece past the prefetched head would
+    stay at priority 0 forever. libtorrent's file-level priority write overwrites the piece-level
+    one, which is what makes the promotion happen — the fake models that."""
+    h, lt_h = _armed()
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.prio.get(100) == IDLE_FILE_PRIO, "head should be armed"
+    assert lt_h.prio.get(150) == 0, "middle of episode 2 should not be wanted yet"
+    assert h.focused_index() == 0, "prefetch must not steal focus"
+
+    h.focus_file(1)  # the user presses Next
+
+    assert h.focused_index() == 1
+    assert all(lt_h.prio.get(p) == ACTIVE_FILE_PRIO for p in range(100, 200)), \
+        "episode 2 stranded at the prefetched head — focus_file was a no-op"
