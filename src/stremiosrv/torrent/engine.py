@@ -21,6 +21,7 @@ except ImportError:  # libtorrent not installed (e.g. test environments without 
 from stremiosrv import cache as cachemod
 from stremiosrv import pins as pinsmod
 from stremiosrv.torrent import dht_state
+from stremiosrv.torrent.picker import pieces_for_range
 from stremiosrv.torrent.trackers import merge_trackers
 
 # libtorrent's auto_managed flag. A torrent carrying it is driven by the session's auto-manager, which
@@ -130,6 +131,11 @@ class Handle:
         # Adaptive piece-picking state: whether we're currently in strict-sequential mode (matches
         # focus_file's set_sequential_download(True) default). Toggled by adaptive_tick under the flag.
         self._adaptive_seq = True
+        # Next-episode prefetch. The read cursor is written by the streaming thread (per chunk) and
+        # read by the prefetch loop; plain int stores, so a marginally stale read costs one tick.
+        self._read_pos = 0
+        self._read_total = 0
+        self._prefetched: set[int] = set()  # file indices whose head has already been armed
 
     def status(self):
         return self._h.status()
@@ -382,6 +388,55 @@ class Handle:
             return None
         except Exception:  # noqa: BLE001
             return None
+
+    def note_read_position(self, pos: int, total: int) -> None:
+        """Record how far the open stream has been read. Called per chunk from the streaming
+        generator, so it must stay two integer assignments — no lock, no I/O, cannot raise."""
+        self._read_pos = pos
+        self._read_total = total
+
+    def read_progress(self) -> tuple[int, int]:
+        """(bytes served, file total) for the most recent stream on this torrent."""
+        return self._read_pos, self._read_total
+
+    def focused_index(self) -> int | None:
+        """Which file is being played (None before the first focus_file)."""
+        return self._focused_idx
+
+    def file_complete(self, idx: int) -> bool:
+        """True when every piece covering file `idx` is on disk. Short-circuits on the first hole."""
+        ti = self._h.torrent_file()
+        if ti is None:
+            return False
+        fs = ti.files()
+        size = fs.file_size(idx)
+        if size <= 0:
+            return False
+        off = fs.file_offset(idx)
+        for p in pieces_for_range(off, off + size - 1, ti.piece_length()):
+            if not self._h.have_piece(p):
+                return False
+        return True
+
+    def prefetch_arm(self, pieces: list[int], prio: int = IDLE_FILE_PRIO) -> None:
+        """Raise `pieces` to a low background priority so the next episode's head fills quietly.
+
+        Deliberately does NOT set piece deadlines — those are the playhead's mechanism, and a
+        prefetch using them could out-compete a torrent being watched. Deliberately does NOT touch
+        _focused_idx — focus_file returns early when it already equals the requested index, so
+        claiming focus here would make the later real play of that file a no-op and strand it at
+        the prefetched head with the rest of its pieces at priority 0."""
+        for p in pieces:
+            try:
+                self._h.piece_priority(p, prio)
+            except Exception:  # noqa: BLE001 — best-effort; a failed piece simply isn't prefetched
+                pass
+
+    def is_prefetched(self, idx: int) -> bool:
+        return idx in self._prefetched
+
+    def mark_prefetched(self, idx: int) -> None:
+        self._prefetched.add(idx)
 
     def set_piece_deadline(self, piece: int, ms: int) -> None:
         """Ask libtorrent to fetch this piece within `ms` (urgent, order-independent — enables
