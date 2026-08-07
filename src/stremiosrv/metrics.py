@@ -13,6 +13,8 @@ _lock = threading.Lock()
 _stalls = 0
 _stall_seconds = 0.0
 _timeouts = 0
+_prefetches = 0
+_prefetch_bytes = 0
 
 
 def record_stall(seconds: float) -> None:
@@ -30,14 +32,29 @@ def record_timeout() -> None:
         _timeouts += 1
 
 
-def playback_stats() -> dict:
-    """Snapshot for /stats.json: cumulative stalls, total stall seconds, and timeouts."""
+def record_prefetch(planned_bytes: int) -> None:
+    """A next-episode head was armed. `planned_bytes` is what was REQUESTED, not what arrived —
+    the counter exists to answer 'did the opt-in feature fire, and how much did it ask for' on a
+    real box before the default is ever flipped."""
+    global _prefetches, _prefetch_bytes
     with _lock:
-        return {"stalls": _stalls, "stallSeconds": round(_stall_seconds, 1), "timeouts": _timeouts}
+        _prefetches += 1
+        _prefetch_bytes += planned_bytes
+
+
+def playback_stats() -> dict:
+    """Snapshot for /stats.json: cumulative stalls, total stall seconds, timeouts, and how often
+    next-episode prefetch armed."""
+    with _lock:
+        return {
+            "stalls": _stalls, "stallSeconds": round(_stall_seconds, 1), "timeouts": _timeouts,
+            "prefetches": _prefetches, "prefetchBytes": _prefetch_bytes,
+        }
 
 
 def reset() -> None:
     """Test helper — zero the counters."""
-    global _stalls, _stall_seconds, _timeouts
+    global _stalls, _stall_seconds, _timeouts, _prefetches, _prefetch_bytes
     with _lock:
         _stalls, _stall_seconds, _timeouts = 0, 0.0, 0
+        _prefetches, _prefetch_bytes = 0, 0

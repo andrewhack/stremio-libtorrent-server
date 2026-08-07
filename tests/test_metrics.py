@@ -11,7 +11,19 @@ def test_record_stall_and_timeout_snapshot():
     metrics.record_stall(1.5)
     metrics.record_stall(0.5)
     metrics.record_timeout()
-    assert metrics.playback_stats() == {"stalls": 2, "stallSeconds": 2.0, "timeouts": 1}
+    assert metrics.playback_stats() == {
+        "stalls": 2, "stallSeconds": 2.0, "timeouts": 1,
+        "prefetches": 0, "prefetchBytes": 0,
+    }
+
+
+def test_record_prefetch_counts_arms_and_requested_bytes():
+    metrics.reset()
+    metrics.record_prefetch(20 * 1024 * 1024)
+    metrics.record_prefetch(4 * 1024 * 1024)
+    s = metrics.playback_stats()
+    assert s["prefetches"] == 2
+    assert s["prefetchBytes"] == 24 * 1024 * 1024
 
 
 def test_cache_usage(tmp_path):
