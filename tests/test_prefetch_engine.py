@@ -427,3 +427,90 @@ def test_route_records_the_read_position(tmp_path):
     r = c.get(f"/{'ab' * 20}/0", headers={"Range": "bytes=0-4095"})
     assert r.status_code == 206
     assert recorded[-1] == (4096, 4096)
+
+
+def test_route_records_an_absolute_position_for_a_non_zero_start(tmp_path):
+    """pos is seeded from `start`, not 0, so a seek mid-file must still record an absolute file
+    position -- position_reached() compares it against the whole-file total, not the range size."""
+    from fastapi.testclient import TestClient
+
+    from stremiosrv.app import create_app
+
+    file_size = 10_000
+    range_start = 100
+    (tmp_path / "ep.mkv").write_bytes(b"x" * file_size)
+    recorded: list[tuple[int, int]] = []
+
+    class _H:
+        def has_metadata(self): return True
+        def is_active(self): return True
+        def focus_file(self, idx): pass
+        def refocus(self): pass
+        def file_size(self, idx): return file_size
+        def file_path(self, idx): return "ep.mkv"
+        def piece_length(self): return file_size
+        def file_offset(self, idx): return 0
+        def num_pieces(self): return 1
+        def have_piece(self, i): return True
+        def boost_piece(self, p, ms): pass
+        def note_read_position(self, pos, total): recorded.append((pos, total))
+
+    class _E:
+        def __init__(self): self._h = _H()
+        def get(self, ih): return self._h
+        def save_path(self): return str(tmp_path)
+        def active_torrent_count(self): return 1
+        def note_stream_open(self, h): pass
+        def note_stream_close(self, h): pass
+
+    c = TestClient(create_app(engine=_E()))
+    r = c.get(f"/{'ab' * 20}/0", headers={"Range": f"bytes={range_start}-{file_size - 1}"})
+    assert r.status_code == 206
+    assert len(recorded) == 1, "range fits in a single 262144-byte chunk"
+    # Absolute position: end + 1 == file_size. A `pos` seeded from 0 instead of `start` would have
+    # recorded (file_size - range_start, file_size) instead.
+    assert recorded[-1] == (file_size, file_size)
+
+
+def test_route_records_positions_monotonically_across_multiple_chunks(tmp_path):
+    """A file spanning several 262144-byte wait_and_read chunks must get one note_read_position
+    call per chunk, with the recorded position increasing monotonically up to the final total."""
+    from fastapi.testclient import TestClient
+
+    from stremiosrv.app import create_app
+
+    file_size = 600_000  # > 2 * the 262144-byte read chunk -> at least 3 chunks
+    (tmp_path / "ep.mkv").write_bytes(b"x" * file_size)
+    recorded: list[tuple[int, int]] = []
+
+    class _H:
+        def has_metadata(self): return True
+        def is_active(self): return True
+        def focus_file(self, idx): pass
+        def refocus(self): pass
+        def file_size(self, idx): return file_size
+        def file_path(self, idx): return "ep.mkv"
+        def piece_length(self): return file_size
+        def file_offset(self, idx): return 0
+        def num_pieces(self): return 1
+        def have_piece(self, i): return True
+        def boost_piece(self, p, ms): pass
+        def note_read_position(self, pos, total): recorded.append((pos, total))
+
+    class _E:
+        def __init__(self): self._h = _H()
+        def get(self, ih): return self._h
+        def save_path(self): return str(tmp_path)
+        def active_torrent_count(self): return 1
+        def note_stream_open(self, h): pass
+        def note_stream_close(self, h): pass
+
+    c = TestClient(create_app(engine=_E()))
+    r = c.get(f"/{'ab' * 20}/0", headers={"Range": f"bytes=0-{file_size - 1}"})
+    assert r.status_code == 206
+    assert len(recorded) > 1, "file spans multiple chunks; the cursor must be recorded per chunk"
+    positions = [pos for pos, _ in recorded]
+    assert all(a < b for a, b in zip(positions, positions[1:])), \
+        "recorded positions must increase monotonically"
+    assert all(total == file_size for _, total in recorded), "total must stay the whole-file size"
+    assert recorded[-1] == (file_size, file_size)

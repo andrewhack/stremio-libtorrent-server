@@ -178,14 +178,27 @@ def serve(info_hash: str, idx: int, request: Request):
         # The read cursor is recorded here rather than inside wait_and_read: that function must
         # never raise into the ASGI layer, and every one of its test fakes would need the new
         # method. Here `h` is always a real Handle from the engine.
+        #
+        # The loop below is manual (not `yield from`) so it can record the cursor per chunk, but
+        # that trades away a guarantee `yield from` gave for free: structural, deterministic closing
+        # of the delegated sub-generator when this generator is torn down early (client disconnect,
+        # truncation). A bare `for chunk in stream: yield chunk` relies on CPython's refcounting to
+        # close `stream` promptly -- which holds only as long as nothing else keeps a reference to
+        # it (a logging wrapper, a debug hook, an instrumentation decorator). The explicit close
+        # below makes the guarantee structural again instead of an implementation-detail accident.
+        # `.close()` on an already-exhausted generator is a documented no-op, so this costs nothing
+        # on the normal-completion path.
         eng.note_stream_open(h)
         try:
             pos = start
-            for chunk in wait_and_read(eng.save_path(), h, idx, start, end,
-                                       window_bytes=readahead):
-                pos += len(chunk)
-                h.note_read_position(pos, total)
-                yield chunk
+            stream = wait_and_read(eng.save_path(), h, idx, start, end, window_bytes=readahead)
+            try:
+                for chunk in stream:
+                    pos += len(chunk)
+                    h.note_read_position(pos, total)
+                    yield chunk
+            finally:
+                stream.close()
         finally:
             eng.note_stream_close(h)
 
