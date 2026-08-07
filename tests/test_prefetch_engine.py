@@ -1,7 +1,10 @@
 """Next-episode prefetch at the Handle / Engine level (fake libtorrent handle, no session)."""
+import threading
+
 from stremiosrv import metrics
 from stremiosrv.config import Settings
-from stremiosrv.torrent.engine import IDLE_FILE_PRIO, Engine, Handle
+from stremiosrv.torrent import prefetch
+from stremiosrv.torrent.engine import ACTIVE_FILE_PRIO, IDLE_FILE_PRIO, Engine, Handle
 
 MiB = 1024 * 1024
 PLEN = 4 * MiB
@@ -167,13 +170,14 @@ def test_prefetched_bookkeeping():
 
 
 class _StubEngine:
-    """_prefetch_tick never touches the libtorrent session, so it can be exercised without one
-    (constructing a real Engine would need lt, which the unit suite runs without)."""
+    """_prefetch_tick / _prefetch_loop never touch the libtorrent session, so they can be exercised
+    without one (constructing a real Engine would need lt, which the unit suite runs without)."""
 
     _prefetch_trigger = 0.90
     _prefetch_fraction = 0.05
     _prefetch_max_bytes = 128 * MiB
     _prefetch_tick = Engine._prefetch_tick
+    _prefetch_loop = Engine._prefetch_loop
 
 
 def _armed(*, complete_current=True, paused=False):
@@ -263,3 +267,126 @@ def test_config_prefetch_defaults_off():
     assert s.prefetch_next_fraction == 0.05
     assert s.prefetch_next_max_bytes == 134_217_728
     assert s.prefetch_trigger_fraction == 0.90
+
+
+def test_tick_discards_a_stale_decision_when_focus_changes_mid_scan():
+    """The streaming thread can call focus_file(nxt) while the tick is still mid-scan (the O(files)
+    sweep plus the O(pieces-in-file) completeness scan are hundreds to thousands of round-trips). If
+    the tick doesn't notice, prefetch_arm would downgrade the now-focused file's pieces from
+    ACTIVE_FILE_PRIO back down to IDLE_FILE_PRIO right after the user pressed Next."""
+    h, lt_h = _armed()
+    real_have_piece = lt_h.have_piece
+    flipped = {"done": False}
+
+    def have_piece_and_flip(p):
+        if not flipped["done"]:
+            flipped["done"] = True
+            h.focus_file(1)  # simulates the streaming thread handling a Next press mid-scan
+        return real_have_piece(p)
+
+    lt_h.have_piece = have_piece_and_flip
+
+    armed_calls = []
+    real_arm = h.prefetch_arm
+
+    def spy_arm(pieces, *a, **kw):
+        armed_calls.append(list(pieces))
+        return real_arm(pieces, *a, **kw)
+
+    h.prefetch_arm = spy_arm
+
+    _StubEngine()._prefetch_tick(h)
+
+    assert armed_calls == [], "a stale tick must never call prefetch_arm"
+    assert h.focused_index() == 1
+    # focus_file(1) itself promoted file 1's pieces to ACTIVE_FILE_PRIO; the stale tick must not
+    # clobber that back down to IDLE_FILE_PRIO.
+    assert lt_h.prio.get(100) == ACTIVE_FILE_PRIO
+    assert lt_h.prio.get(199) == ACTIVE_FILE_PRIO
+
+
+def test_tick_deduplicates_overlapping_head_and_tail_pieces(monkeypatch):
+    """A small next file can make the head range and the trailing-TAIL_BYTES range share pieces.
+    prefetch_arm is idempotent so this isn't a correctness bug, but the piece count/byte count that
+    feeds `planned` (and the info log) must not be inflated by counting a piece twice."""
+    monkeypatch.setattr(prefetch, "head_pieces", lambda *a, **kw: [100, 101, 102])
+    monkeypatch.setattr(prefetch, "tail_pieces", lambda *a, **kw: [102, 103])
+    h, lt_h = _armed()
+    metrics.reset()
+
+    armed_calls = []
+    real_arm = h.prefetch_arm
+
+    def spy_arm(pieces, *a, **kw):
+        armed_calls.append(list(pieces))
+        return real_arm(pieces, *a, **kw)
+
+    h.prefetch_arm = spy_arm
+
+    _StubEngine()._prefetch_tick(h)
+
+    assert armed_calls == [[100, 101, 102, 103]], "duplicate piece 102 must be collapsed, order kept"
+    assert metrics.playback_stats()["prefetchBytes"] == 4 * PLEN
+
+
+def test_tick_returns_when_metadata_is_not_yet_available():
+    class _NoMetaStatus:
+        has_metadata = False
+        info_hashes = _IH()
+
+    h, lt_h = _armed()
+    lt_h.status = _NoMetaStatus  # calling it (lt_h.status()) constructs a has_metadata=False instance
+    before = dict(lt_h.prio)
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.prio == before
+
+
+def test_tick_returns_when_nothing_is_focused_yet():
+    lt_h = _FakeLT(have=range(0, 100))
+    h = Handle(lt_h)
+    h.mark_active()
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.prio == {}
+
+
+def test_tick_returns_when_no_pieces_are_planned(monkeypatch):
+    """Today's real geometry can't produce this (MIN_VIDEO_BYTES / TAIL_BYTES in prefetch.py guarantee
+    at least the tail piece), but the guard exists to stop an empty plan from being armed and
+    permanently marked prefetched -- force the inputs directly to prove it holds."""
+    monkeypatch.setattr(prefetch, "head_pieces", lambda *a, **kw: [])
+    monkeypatch.setattr(prefetch, "tail_pieces", lambda *a, **kw: [])
+    h, lt_h = _armed()
+    before = dict(lt_h.prio)
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.prio == before
+    assert h.is_prefetched(1) is False
+
+
+def test_prefetch_loop_survives_a_raising_tick():
+    """The resilience guarantee ("never let the prefetch thread die") lives in _prefetch_loop's
+    except clause, not in _prefetch_tick -- it has to be exercised at the loop level to prove it."""
+
+    class _FastEvent(threading.Event):
+        """wait() returns immediately regardless of timeout, so the loop under test can be driven
+        without sleeping for the real PREFETCH_INTERVAL (5s)."""
+
+        def wait(self, timeout=None):
+            return super().wait(0)
+
+    class _RaisingHandle:
+        def __init__(self, stop_event):
+            self._stop_event = stop_event
+            self.calls = 0
+
+        def is_active(self):
+            self.calls += 1
+            self._stop_event.set()  # stop after this one tick so the loop under test returns
+            raise RuntimeError("boom")
+
+    eng = _StubEngine()
+    eng._stop = _FastEvent()
+    eng._torrents = {"deadbeef": _RaisingHandle(eng._stop)}
+
+    eng._prefetch_loop()  # must return normally, not raise
+
+    assert eng._torrents["deadbeef"].calls == 1

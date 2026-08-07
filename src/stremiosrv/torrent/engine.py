@@ -863,6 +863,13 @@ class Engine:
             logger.addHandler(sh)
             logger.setLevel(logging.INFO)
             logger.propagate = False
+        logger.info(
+            "next-episode prefetch started: trigger=%.0f%%, head=%.0f%%, max_bytes=%d, interval=%ss",
+            self._prefetch_trigger * 100, self._prefetch_fraction * 100,
+            self._prefetch_max_bytes, PREFETCH_INTERVAL,
+        )
+        warned = False  # log the first per-tick failure only, so a 5s loop can't spam on a
+        # persistently-raising handle — the resilience guarantee stays, but so does a signal.
         while not self._stop.is_set():
             self._stop.wait(PREFETCH_INTERVAL)
             if self._stop.is_set():
@@ -870,8 +877,10 @@ class Engine:
             for h in list(self._torrents.values()):
                 try:
                     self._prefetch_tick(h)
-                except Exception:  # noqa: BLE001 — never let the prefetch thread die
-                    pass
+                except Exception as exc:  # noqa: BLE001 — never let the prefetch thread die
+                    if not warned:
+                        warned = True
+                        logger.warning("prefetch tick failed (further failures suppressed): %s", exc)
 
     def _prefetch_tick(self, h: "Handle") -> None:
         """One prefetch decision for one torrent.
@@ -904,8 +913,11 @@ class Engine:
         pieces = prefetch.head_pieces(off, size, plen, self._prefetch_fraction,
                                       self._prefetch_max_bytes)
         pieces += prefetch.tail_pieces(off, size, plen)
+        pieces = list(dict.fromkeys(pieces))  # a small next file can make head and tail overlap
         if not pieces:
             return
+        if h.focused_index() != idx:
+            return  # the user switched files while we scanned; this decision is stale
         h.prefetch_arm(pieces)
         h.mark_prefetched(nxt)
         # A box with SEED_ON_COMPLETE=false leaves a complete torrent PAUSED while it plays from
