@@ -8,6 +8,7 @@ Targets libtorrent 2.0.x (python bindings).
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import threading
@@ -19,8 +20,10 @@ except ImportError:  # libtorrent not installed (e.g. test environments without 
     lt = None  # type: ignore[assignment]
 
 from stremiosrv import cache as cachemod
+from stremiosrv import metrics
 from stremiosrv import pins as pinsmod
 from stremiosrv.torrent import dht_state
+from stremiosrv.torrent import prefetch
 from stremiosrv.torrent.picker import pieces_for_range
 from stremiosrv.torrent.trackers import merge_trackers
 
@@ -52,6 +55,10 @@ class PinSpaceError(Exception):
 # bandwidth to whatever is being watched now. (Non-played files in a pack stay 0 / skipped.)
 ACTIVE_FILE_PRIO = 4
 IDLE_FILE_PRIO = 1
+
+logger = logging.getLogger("stremiosrv.prefetch")
+
+PREFETCH_INTERVAL = 5.0  # seconds between next-episode prefetch policy ticks
 
 
 def idle_download_limit(*, this_active: bool, any_active: bool, idle_limit: int) -> int:
@@ -463,6 +470,10 @@ class Engine:
                  adaptive_picking: bool = False,  # experimental parallel-fill when buffer is deep
                  adaptive_low_bytes: int = 0, adaptive_high_bytes: int = 0,
                  adaptive_interval: float = 2.0,
+                 prefetch_next: bool = False,  # next-episode prefetch (opt-in)
+                 prefetch_next_fraction: float = 0.05,
+                 prefetch_next_max_bytes: int = 134_217_728,
+                 prefetch_trigger_fraction: float = 0.90,
                  dht_bootstrap_nodes: str = "") -> None:
         _settings = {
             # INBOUND listener (stock server lacks this) — dual-stack so IPv6 peers can reach us too;
@@ -545,6 +556,14 @@ class Engine:
         self._adaptive_interval = max(0.5, adaptive_interval)
         if self._adaptive_picking and self._adaptive_high > 0:
             threading.Thread(target=self._adaptive_loop, daemon=True).start()
+        # Next-episode prefetch (opt-in). The thread only runs when enabled, so the default
+        # download behaviour is byte-for-byte unchanged.
+        self._prefetch_next = prefetch_next
+        self._prefetch_fraction = prefetch_next_fraction
+        self._prefetch_max_bytes = prefetch_next_max_bytes
+        self._prefetch_trigger = prefetch_trigger_fraction
+        if self._prefetch_next:
+            threading.Thread(target=self._prefetch_loop, daemon=True).start()
 
     def _touch(self, info_hash: str) -> None:
         self._last_access[info_hash.lower()] = time.monotonic()
@@ -834,6 +853,72 @@ class Engine:
                         h.adaptive_tick(self._adaptive_low, self._adaptive_high)
                     except Exception:  # noqa: BLE001 — never let the adaptive thread die
                         pass
+
+    def _prefetch_loop(self) -> None:
+        """Background loop (only started when prefetch_next is on): give every actively-streamed
+        torrent one chance per tick to arm the next episode's head."""
+        if not logger.handlers:  # uvicorn doesn't surface our INFO logs by default (see cache.py)
+            sh = logging.StreamHandler()
+            sh.setFormatter(logging.Formatter("%(asctime)s [prefetch] %(message)s"))
+            logger.addHandler(sh)
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
+        while not self._stop.is_set():
+            self._stop.wait(PREFETCH_INTERVAL)
+            if self._stop.is_set():
+                break
+            for h in list(self._torrents.values()):
+                try:
+                    self._prefetch_tick(h)
+                except Exception:  # noqa: BLE001 — never let the prefetch thread die
+                    pass
+
+    def _prefetch_tick(self, h: "Handle") -> None:
+        """One prefetch decision for one torrent.
+
+        Gates are ordered cheapest-first on purpose: the O(pieces-in-file) completeness scan only
+        runs once the read cursor has actually reached the trigger point, so it does not execute
+        every tick for every active torrent."""
+        if not h.is_active() or not h.has_metadata():
+            return
+        idx = h.focused_index()
+        if idx is None:
+            return
+        pos, total = h.read_progress()
+        if not prefetch.position_reached(pos, total, self._prefetch_trigger):
+            return
+        ti = h.torrent_file()
+        if ti is None:
+            return
+        fs = ti.files()
+        n = fs.num_files()
+        paths = [fs.file_path(i) for i in range(n)]
+        sizes = [fs.file_size(i) for i in range(n)]
+        nxt = prefetch.next_video_index(paths, sizes, idx)
+        if nxt is None or h.is_prefetched(nxt):
+            return
+        if not h.file_complete(idx):
+            return  # the episode being watched still needs the pipe — this is the whole safety gate
+        plen = ti.piece_length()
+        off, size = fs.file_offset(nxt), fs.file_size(nxt)
+        pieces = prefetch.head_pieces(off, size, plen, self._prefetch_fraction,
+                                      self._prefetch_max_bytes)
+        pieces += prefetch.tail_pieces(off, size, plen)
+        if not pieces:
+            return
+        h.prefetch_arm(pieces)
+        h.mark_prefetched(nxt)
+        # A box with SEED_ON_COMPLETE=false leaves a complete torrent PAUSED while it plays from
+        # disk (should_resume_on_open keeps it that way deliberately). A paused torrent downloads
+        # nothing, so without this the feature would silently no-op on exactly those boxes. The
+        # cost is stated plainly: a torrent whose seeding you stopped seeds again until the head
+        # lands, at which point the seed policy re-pauses it within seed_policy_interval.
+        if h.is_paused():
+            h.resume()
+        planned = len(pieces) * plen
+        metrics.record_prefetch(planned)
+        logger.info("armed %s file %d: %d pieces (%.0f MiB)",
+                    h.info_hash(), nxt, len(pieces), planned / 1048576)
 
     def _enforce_seed_policy(self) -> None:
         if self._seed_on_complete and self._max_seed_minutes <= 0:

@@ -1,5 +1,7 @@
 """Next-episode prefetch at the Handle / Engine level (fake libtorrent handle, no session)."""
-from stremiosrv.torrent.engine import IDLE_FILE_PRIO, Handle
+from stremiosrv import metrics
+from stremiosrv.config import Settings
+from stremiosrv.torrent.engine import IDLE_FILE_PRIO, Engine, Handle
 
 MiB = 1024 * 1024
 PLEN = 4 * MiB
@@ -162,3 +164,102 @@ def test_prefetched_bookkeeping():
     h.mark_prefetched(1)
     assert h.is_prefetched(1) is True
     assert h.is_prefetched(2) is False
+
+
+class _StubEngine:
+    """_prefetch_tick never touches the libtorrent session, so it can be exercised without one
+    (constructing a real Engine would need lt, which the unit suite runs without)."""
+
+    _prefetch_trigger = 0.90
+    _prefetch_fraction = 0.05
+    _prefetch_max_bytes = 128 * MiB
+    _prefetch_tick = Engine._prefetch_tick
+
+
+def _armed(*, complete_current=True, paused=False):
+    """A 3-episode pack: episode 1 focused and (by default) fully on disk, cursor past the trigger."""
+    lt_h = _FakeLT(have=range(0, 100) if complete_current else range(0, 99))
+    h = Handle(lt_h)
+    h.focus_file(0)
+    h.mark_active()
+    h.note_read_position(int(EP * 0.95), EP)
+    h._paused = paused
+    return h, lt_h
+
+
+def test_tick_arms_head_and_tail_of_the_next_episode():
+    metrics.reset()
+    h, lt_h = _armed()
+    _StubEngine()._prefetch_tick(h)
+    # Episode 2 spans pieces 100..199. 5% of 400 MiB = 20 MiB = pieces 100..104; tail = piece 199.
+    assert all(lt_h.prio.get(p) == IDLE_FILE_PRIO for p in range(100, 105))
+    assert lt_h.prio.get(199) == IDLE_FILE_PRIO
+    assert lt_h.prio.get(150) == 0, "only the head and tail may be wanted"
+    assert lt_h.deadlines == []
+    assert h.focused_index() == 0
+    assert metrics.playback_stats()["prefetches"] == 1
+
+
+def test_tick_arms_only_once_per_next_episode():
+    h, lt_h = _armed()
+    eng = _StubEngine()
+    eng._prefetch_tick(h)
+    lt_h.prio.clear()
+    eng._prefetch_tick(h)
+    assert lt_h.prio == {}
+
+
+def test_tick_does_not_scan_pieces_before_the_position_gate():
+    # The completeness scan is O(pieces-in-file); it must not run on every tick for every torrent.
+    h, lt_h = _armed()
+    h.note_read_position(int(EP * 0.5), EP)
+    lt_h.have_calls = 0
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.have_calls == 0, "completeness scan ran before the cheap position gate"
+    assert lt_h.prio.get(100) == 0
+
+
+def test_tick_holds_off_while_the_current_episode_is_incomplete():
+    h, lt_h = _armed(complete_current=False)
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.prio.get(100) == 0
+    assert lt_h.have_calls > 0, "it should have scanned and found the hole"
+
+
+def test_tick_skips_an_idle_torrent():
+    h, lt_h = _armed()
+    h.mark_idle()
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.prio.get(100) == 0
+
+
+def test_tick_resumes_a_seed_paused_torrent():
+    # SEED_ON_COMPLETE=false leaves a complete torrent paused while it plays from disk. A paused
+    # torrent downloads nothing, so without this the feature would silently no-op on those boxes.
+    h, lt_h = _armed(paused=True)
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.resumed == 1
+    assert h.is_paused() is False
+
+
+def test_tick_leaves_a_running_torrent_alone():
+    h, lt_h = _armed()
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.resumed == 0
+
+
+def test_tick_does_nothing_on_the_last_episode():
+    h, lt_h = _armed()
+    h.focus_file(NFILES - 1)
+    h.note_read_position(int(EP * 0.95), EP)
+    before = dict(lt_h.prio)
+    _StubEngine()._prefetch_tick(h)
+    assert lt_h.prio == before
+
+
+def test_config_prefetch_defaults_off():
+    s = Settings()
+    assert s.prefetch_next is False
+    assert s.prefetch_next_fraction == 0.05
+    assert s.prefetch_next_max_bytes == 134_217_728
+    assert s.prefetch_trigger_fraction == 0.90

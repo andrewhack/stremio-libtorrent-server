@@ -195,6 +195,10 @@ def build_app() -> FastAPI:
         adaptive_low_bytes=settings.adaptive_low_bytes,
         adaptive_high_bytes=settings.adaptive_high_bytes,
         adaptive_interval=settings.adaptive_interval,
+        prefetch_next=settings.prefetch_next,
+        prefetch_next_fraction=settings.prefetch_next_fraction,
+        prefetch_next_max_bytes=settings.prefetch_next_max_bytes,
+        prefetch_trigger_fraction=settings.prefetch_trigger_fraction,
     )
     engine.load_pins_into_session()
     converter = Converter(settings.cache_root, settings.transcode_profile)

@@ -52,3 +52,12 @@ class Settings(BaseSettings):
     adaptive_low_bytes: int = 67_108_864     # 64 MiB buffered-ahead: below -> strict sequential (safe)
     adaptive_high_bytes: int = 268_435_456   # 256 MiB buffered-ahead: above -> parallel (throughput)
     adaptive_interval: float = 2.0           # seconds between adaptive control ticks
+    # Next-episode prefetch (opt-in, OFF by default). Once the read cursor passes
+    # prefetch_trigger_fraction of the played file AND that file is fully downloaded, pull the head
+    # (and trailing index) of the next video file in the SAME torrent, so pressing Next starts
+    # instantly. Only covers packs: a next episode in a separate torrent has an infohash the server
+    # was never told. The flag off = today's behaviour, byte for byte.
+    prefetch_next: bool = False
+    prefetch_next_fraction: float = 0.05        # head size as a fraction of the next file
+    prefetch_next_max_bytes: int = 134_217_728  # 128 MiB ceiling (a 4K episode won't pull 200 MB)
+    prefetch_trigger_fraction: float = 0.90     # fire once the read cursor passes this point
