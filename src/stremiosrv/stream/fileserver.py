@@ -18,7 +18,7 @@ logger = logging.getLogger("stremiosrv.stream")
 
 # Browser <video> needs a recognized media type or it refuses the source ("video not supported").
 # mimetypes doesn't know some container extensions (e.g. .mkv), so map the common ones explicitly.
-_VIDEO_TYPES = {
+VIDEO_TYPES = {
     ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm",
     ".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".mov": "video/quicktime",
     ".ts": "video/mp2t", ".m2ts": "video/mp2t", ".ogv": "video/ogg",
@@ -29,7 +29,7 @@ _VIDEO_TYPES = {
 def content_type_for(path: str) -> str:
     """Best-effort media type from a file's extension (for the Content-Type stream header)."""
     ext = os.path.splitext(path)[1].lower()
-    return _VIDEO_TYPES.get(ext) or mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return VIDEO_TYPES.get(ext) or mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 
 def file_disk_path(save_path: str, handle, idx: int) -> str:
