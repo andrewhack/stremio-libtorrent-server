@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # empty = disabled (fully static, offline-safe default).
     tracker_list_url: str = ""
     tracker_list_refresh_hours: float = 24.0  # how often the background source re-fetches
+    # Optional DHT bootstrap nodes ("host:port,host:port"). Empty keeps libtorrent's built-in
+    # routers. The server saves its DHT routing table to <cache_root>/dht.state and restores it on
+    # start, so a node that has been online once rejoins through peers it already knows rather than
+    # through anyone's bootstrap server — this setting only matters for a genuinely first boot.
+    dht_bootstrap_nodes: str = ""
     # Adaptive piece-picking (experimental, OFF by default — needs on-box A/B tuning per the spec).
     # While a file is playing, relax strict sequential download to parallel/rarest-first once enough
     # is buffered contiguously ahead of the playhead (harvest swarm throughput), and re-tighten to

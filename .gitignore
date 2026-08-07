@@ -8,3 +8,7 @@ docs/server.reference.js
 
 # Superpowers process docs (specs/plans) — internal only, never on the public repo
 docs/superpowers/
+# stremio-loop artifacts staged into this checkout for the gated release —
+# probe captures and monitor runtime state, never part of the product.
+compat/out/
+monitor/state/

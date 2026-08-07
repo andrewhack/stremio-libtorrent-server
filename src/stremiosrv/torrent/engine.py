@@ -20,6 +20,7 @@ except ImportError:  # libtorrent not installed (e.g. test environments without 
 
 from stremiosrv import cache as cachemod
 from stremiosrv import pins as pinsmod
+from stremiosrv.torrent import dht_state
 from stremiosrv.torrent.trackers import merge_trackers
 
 # libtorrent's auto_managed flag. A torrent carrying it is driven by the session's auto-manager, which
@@ -406,8 +407,9 @@ class Engine:
                  tracker_source=None,  # optional TrackerSource (live list); None = static only
                  adaptive_picking: bool = False,  # experimental parallel-fill when buffer is deep
                  adaptive_low_bytes: int = 0, adaptive_high_bytes: int = 0,
-                 adaptive_interval: float = 2.0) -> None:
-        self._ses = lt.session({
+                 adaptive_interval: float = 2.0,
+                 dht_bootstrap_nodes: str = "") -> None:
+        _settings = {
             # INBOUND listener (stock server lacks this) — dual-stack so IPv6 peers can reach us too;
             # a host without IPv6 just fails that bind and keeps IPv4 (libtorrent degrades gracefully).
             "listen_interfaces": f"0.0.0.0:{listen_port},[::]:{listen_port}",
@@ -436,7 +438,20 @@ class Engine:
             "announce_to_all_trackers": True,
             "announce_to_all_tiers": True,
             "allow_multiple_connections_per_ip": True,
-        })
+        }
+        # Optional operator-chosen DHT entry points, so nobody is obliged to depend on the
+        # built-in routers. Unset keeps libtorrent's defaults.
+        _boot = dht_state.bootstrap_setting(dht_bootstrap_nodes)
+        if _boot:
+            _settings["dht_bootstrap_nodes"] = _boot
+
+        # Restore the DHT routing table if we have one. A node that has been online before rejoins
+        # through peers it already knows, instead of through bootstrap routers that have to still
+        # exist. Falls back to a plain cold start when there is no state or it is unreadable.
+        self._dht_state_path = dht_state.state_path(cache_root)
+        _params = dht_state.load_session_params(
+            self._dht_state_path, _settings, read_params=lt.read_session_params)
+        self._ses = lt.session(_params) if _params is not None else lt.session(_settings)
         self._cache_root = cache_root
         # Extra trackers injected into every torrent: operator-supplied (env) + an optional live
         # source. Both feed merge_trackers; the source is read (never awaited) on each add().
@@ -535,6 +550,15 @@ class Engine:
             except Exception:  # noqa: BLE001
                 pass
 
+    def save_dht_state(self) -> bool:
+        """Persist the DHT routing table. Best-effort — never raises, never blocks a caller."""
+        try:
+            params = self._ses.session_state()
+        except Exception:  # noqa: BLE001 — an lt API change must not take the saver thread down
+            return False
+        return dht_state.save_session_params(
+            self._dht_state_path, params, write_buf=lt.write_session_params_buf)
+
     def _resume_saver_loop(self) -> None:
         """Background loop: periodically persist resume data so a crash/kill loses < interval of
         progress (avoids the recheck/black-first-play after a non-graceful restart)."""
@@ -544,6 +568,10 @@ class Engine:
                 break
             try:
                 self.save_all_resume()
+                # Same interval, same reason: an appliance is unplugged, not shut down. Saving the
+                # routing table only in shutdown() would mean the machines most likely to sit
+                # powered-off for months are the ones that never keep it.
+                self.save_dht_state()
             except Exception:  # noqa: BLE001 — never let the saver thread die
                 pass
 
@@ -818,6 +846,7 @@ class Engine:
 
     def shutdown(self) -> None:
         self.save_all_resume()
+        self.save_dht_state()
         time.sleep(2)  # let the alerts loop flush resume files
         self._stop.set()
         for ih in list(self._torrents):

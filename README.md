@@ -181,6 +181,7 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_EXTRA_TRACKERS` | *(empty)* | Extra trackers appended to **every** torrent (on top of the built-in defaults). Comma/space/newline-separated `udp://`/`http(s)://`/`ws(s)://` URLs. |
 | `STREMIOSRV_TRACKER_LIST_URL` | *(empty)* | Optional URL of a community tracker list (e.g. the raw [ngosang/trackerslist](https://github.com/ngosang/trackerslist) `trackers_best.txt`). Fetched in a **background thread** to keep the list current — best-effort, **never blocks startup or playback**; offline falls back to the last cached list, then the built-in defaults. Empty = fully static. |
 | `STREMIOSRV_TRACKER_LIST_REFRESH_HOURS` | `24` | How often the background tracker-list source re-fetches (only when a URL is set). |
+| `STREMIOSRV_DHT_BOOTSTRAP_NODES` | *(empty)* | Your own DHT entry points, `host:port,host:port`. Empty keeps libtorrent's built-in routers. Only used on a **first** boot — after that the server rejoins via its saved routing table (see below). |
 | `STREMIOSRV_ADAPTIVE_PICKING` | `false` | **Experimental.** While playing, relax strict sequential download to parallel once enough is buffered ahead of the playhead (harvests more swarm throughput), re-tightening to in-order when the buffer drains or on a seek — the playhead window stays deadline-rushed, so continuity is protected. Off by default; needs on-box tuning. |
 | `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
 | `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
@@ -193,6 +194,15 @@ tracker, exactly like the stock Stremio server. Extend it two ways: add your own
 runs in a background thread and **never blocks startup or playback** (offline → last cached list → the
 built-in defaults). The bigger peering win, though, is **inbound connectivity**: forward
 `STREMIOSRV_BT_LISTEN_PORT` (6881) so you reach the whole swarm, not just what trackers hand back.
+
+**Your node remembers the network.** Joining the DHT needs an entry point, and with nothing saved
+that means a handful of bootstrap routers run by other people — every reboot, forever. So the
+server writes its DHT routing table to `<cache>/dht.state` (every 30s, and on shutdown) and
+restores it on start. A machine that has been online even once rejoins through hundreds of peers it
+already knows, with nobody else's server in the path. That matters most for a box that sits powered
+off for months and then gets plugged back in. A corrupt or missing file is not an error — it just
+falls back to a normal cold start. Set `STREMIOSRV_DHT_BOOTSTRAP_NODES` if you would rather not use
+the built-in routers for that first boot either.
 
 **GPU transcode** (only for clients that can't direct-play). Docker does **not** expose the host GPU to a
 container by default, so the one-command install above is **CPU-only**. The server *auto-detects* a GPU,

@@ -190,6 +190,7 @@ def build_app() -> FastAPI:
         seed_policy_interval=settings.seed_policy_interval,
         extra_trackers=parse_tracker_string(settings.extra_trackers),
         tracker_source=tracker_source,
+        dht_bootstrap_nodes=settings.dht_bootstrap_nodes,
         adaptive_picking=settings.adaptive_picking,
         adaptive_low_bytes=settings.adaptive_low_bytes,
         adaptive_high_bytes=settings.adaptive_high_bytes,
