@@ -162,6 +162,9 @@ class _FakeHandle:
     def boost_piece(self, p, ms):
         pass
 
+    def note_read_position(self, pos, total):
+        pass
+
 
 class _FakeEngine:
     def __init__(self, save_path):

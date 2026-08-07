@@ -174,9 +174,18 @@ def serve(info_hash: str, idx: int, request: Request):
         # priority AND idle torrents get throttled (engine.note_stream_open re-applies the
         # cross-torrent bandwidth policy); on close (normal end, client disconnect, or error) demote
         # + lift the throttle. finally covers GeneratorExit on disconnect.
+        #
+        # The read cursor is recorded here rather than inside wait_and_read: that function must
+        # never raise into the ASGI layer, and every one of its test fakes would need the new
+        # method. Here `h` is always a real Handle from the engine.
         eng.note_stream_open(h)
         try:
-            yield from wait_and_read(eng.save_path(), h, idx, start, end, window_bytes=readahead)
+            pos = start
+            for chunk in wait_and_read(eng.save_path(), h, idx, start, end,
+                                       window_bytes=readahead):
+                pos += len(chunk)
+                h.note_read_position(pos, total)
+                yield chunk
         finally:
             eng.note_stream_close(h)
 

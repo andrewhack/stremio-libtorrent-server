@@ -390,3 +390,40 @@ def test_prefetch_loop_survives_a_raising_tick():
     eng._prefetch_loop()  # must return normally, not raise
 
     assert eng._torrents["deadbeef"].calls == 1
+
+
+def test_route_records_the_read_position(tmp_path):
+    """The streaming generator must feed the prefetch loop, or the trigger never fires."""
+    from fastapi.testclient import TestClient
+
+    from stremiosrv.app import create_app
+
+    (tmp_path / "ep.mkv").write_bytes(b"x" * 4096)
+    recorded: list[tuple[int, int]] = []
+
+    class _H:
+        def has_metadata(self): return True
+        def is_active(self): return True
+        def focus_file(self, idx): pass
+        def refocus(self): pass
+        def file_size(self, idx): return 4096
+        def file_path(self, idx): return "ep.mkv"
+        def piece_length(self): return 4096
+        def file_offset(self, idx): return 0
+        def num_pieces(self): return 1
+        def have_piece(self, i): return True
+        def boost_piece(self, p, ms): pass
+        def note_read_position(self, pos, total): recorded.append((pos, total))
+
+    class _E:
+        def __init__(self): self._h = _H()
+        def get(self, ih): return self._h
+        def save_path(self): return str(tmp_path)
+        def active_torrent_count(self): return 1
+        def note_stream_open(self, h): pass
+        def note_stream_close(self, h): pass
+
+    c = TestClient(create_app(engine=_E()))
+    r = c.get(f"/{'ab' * 20}/0", headers={"Range": "bytes=0-4095"})
+    assert r.status_code == 206
+    assert recorded[-1] == (4096, 4096)
