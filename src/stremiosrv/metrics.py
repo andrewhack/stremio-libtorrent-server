@@ -1,9 +1,11 @@
 """In-process playback metrics for the appliance suggestion advisor.
 
-Counts re-buffer **stalls** (a read that had to wait for a not-yet-downloaded piece) and piece
-**timeouts** (a piece that never arrived within the read timeout). Exposed via GET /stats.json and
-consumed by the appliance's config-web advisor to suggest raising the download rate limit when
-playback is starved. Process-local counters (the server is single-process); reset on restart.
+Counts re-buffer **stalls** (a read that had to wait for a not-yet-downloaded piece), piece
+**timeouts** (a piece that never arrived within the read timeout), and next-episode **prefetch**
+arms (how often the opt-in prefetch fired, and how many bytes it asked for). Exposed via
+GET /stats.json and consumed by the appliance's config-web advisor to suggest raising the download
+rate limit when playback is starved. Process-local counters (the server is single-process); reset on
+restart.
 """
 from __future__ import annotations
 

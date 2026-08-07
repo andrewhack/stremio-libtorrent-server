@@ -183,6 +183,10 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_TRACKER_LIST_REFRESH_HOURS` | `24` | How often the background tracker-list source re-fetches (only when a URL is set). |
 | `STREMIOSRV_DHT_BOOTSTRAP_NODES` | *(empty)* | Your own DHT entry points, `host:port,host:port`. Empty keeps libtorrent's built-in routers. Only used on a **first** boot — after that the server rejoins via its saved routing table (see below). |
 | `STREMIOSRV_ADAPTIVE_PICKING` | `false` | **Experimental.** While playing, relax strict sequential download to parallel once enough is buffered ahead of the playhead (harvests more swarm throughput), re-tightening to in-order when the buffer drains or on a seek — the playhead window stays deadline-rushed, so continuity is protected. Off by default; needs on-box tuning. |
+| `STREMIOSRV_PREFETCH_NEXT` | `false` | **Next-episode prefetch (opt-in).** Once you are into the last 10% of an episode **and** that episode is fully downloaded, quietly pull the start of the next episode in the same torrent so pressing Next starts instantly. Only applies to multi-episode packs — see below. |
+| `STREMIOSRV_PREFETCH_NEXT_FRACTION` | `0.05` | How much of the next episode to fetch, as a fraction of its size. |
+| `STREMIOSRV_PREFETCH_NEXT_MAX_BYTES` | `134217728` (128 MiB) | Ceiling on that head, so a very large episode doesn't pull 200 MB. |
+| `STREMIOSRV_PREFETCH_TRIGGER_FRACTION` | `0.90` | How far into the current episode the trigger sits. |
 | `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
 | `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
 
@@ -203,6 +207,26 @@ already knows, with nobody else's server in the path. That matters most for a bo
 off for months and then gets plugged back in. A corrupt or missing file is not an error — it just
 falls back to a normal cold start. Set `STREMIOSRV_DHT_BOOTSTRAP_NODES` if you would rather not use
 the built-in routers for that first boot either.
+
+### Next-episode prefetch
+
+Off by default. With `STREMIOSRV_PREFETCH_NEXT=true`, the server watches how far into an episode you
+are. Once you pass 90% **and** that episode is completely downloaded, it fetches the first 5% of the
+next video file in the same torrent (plus its last 4 MiB, so a trailing MP4 index doesn't stall the
+switch) at low background priority, then stops. Pressing Next starts from cache instead of from the
+swarm; the rest of the episode then downloads normally.
+
+Both conditions matter. Requiring the current episode to be complete is what guarantees prefetch can
+never take bandwidth from what you are watching — by the time it runs, that file needs none.
+
+**Scope:** this covers multi-episode **packs** — one torrent holding several episodes. When each
+episode is its own torrent, the next one's infohash has never been sent to the server (the streaming
+protocol carries only an infohash and a file index), so there is nothing to prefetch. A torrent with
+a single video file has no "next file" and is unaffected, which is how films opt out automatically.
+
+**One side effect:** with `STREMIOSRV_SEED_ON_COMPLETE=false`, a completed torrent is normally
+paused. Prefetch resumes it for as long as the head takes to arrive — so it will seed again briefly
+— and the seeding policy pauses it once more afterwards.
 
 **GPU transcode** (only for clients that can't direct-play). Docker does **not** expose the host GPU to a
 container by default, so the one-command install above is **CPU-only**. The server *auto-detects* a GPU,
