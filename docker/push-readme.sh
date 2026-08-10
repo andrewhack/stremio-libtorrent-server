@@ -35,7 +35,13 @@ if [ -z "${DOCKERHUB_TOKEN:-}" ] && [ -f "$DOCKER_CONFIG_JSON" ]; then
         ?*:?*)
             DOCKERHUB_USER="${creds%%:*}"
             DOCKERHUB_TOKEN="${creds#*:}"
-            echo "no DOCKERHUB_TOKEN set -- reusing the stored docker login for $DOCKERHUB_USER"
+            # Which kind it is decides what to do when Hub refuses it below: the registry accepts an
+            # account password that this API does not, so "stored login exists" is not "API will work".
+            case "$DOCKERHUB_TOKEN" in
+                dckr_pat_*) kind="access token" ;;
+                *)          kind="account password, not a PAT" ;;
+            esac
+            echo "no DOCKERHUB_TOKEN set -- reusing the stored docker login for $DOCKERHUB_USER ($kind)"
             ;;
     esac
     unset creds
