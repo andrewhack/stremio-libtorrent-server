@@ -66,10 +66,23 @@ if [ "$chars" -gt 23000 ]; then
     echo "warning: $chars chars is close to Docker Hub's ~25k overview cap"
 fi
 
-login_code=$(jq -n --arg u "$DOCKERHUB_USER" '{username: $u, password: env.DOCKERHUB_TOKEN}' \
+# Docker Hub has two auth endpoints and they take different credentials. /v2/auth/token
+# (identifier + secret -> access_token) is the current one and the only one that accepts a personal
+# access token; /v2/users/login (username + password -> token) is the legacy path, which answers a
+# PAT with HTTP 409 "Please reset your password." -- a message that sends you off resetting a
+# perfectly good password. Try the modern endpoint, fall back for a genuine password login.
+scheme="Bearer"
+login_code=$(jq -n --arg u "$DOCKERHUB_USER" '{identifier: $u, secret: env.DOCKERHUB_TOKEN}' \
     | curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- \
-        -o "$tmp/login.json" -w '%{http_code}' "$API/users/login/")
-jwt=$(jq -r '.token // empty' < "$tmp/login.json")
+        -o "$tmp/login.json" -w '%{http_code}' "$API/auth/token")
+jwt=$(jq -r '.access_token // empty' < "$tmp/login.json")
+if [ -z "$jwt" ]; then
+    scheme="JWT"
+    login_code=$(jq -n --arg u "$DOCKERHUB_USER" '{username: $u, password: env.DOCKERHUB_TOKEN}' \
+        | curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- \
+            -o "$tmp/login.json" -w '%{http_code}' "$API/users/login/")
+    jwt=$(jq -r '.token // empty' < "$tmp/login.json")
+fi
 if [ -z "$jwt" ]; then
     # Say what Hub said. "login failed" alone sends you hunting for the wrong problem: a registry
     # credential that pushes images fine can still be refused here, and 2FA answers with a challenge
@@ -79,7 +92,7 @@ if [ -z "$jwt" ]; then
     echo "set DOCKERHUB_TOKEN to a Docker Hub personal access token with write scope" >&2
     exit 3
 fi
-printf 'header = "Authorization: JWT %s"\n' "$jwt" > "$tmp/auth.conf"
+printf 'header = "Authorization: %s %s"\n' "$scheme" "$jwt" > "$tmp/auth.conf"
 
 code=$(jq -Rs '{full_description: .}' < "$tmp/body.md" \
     | curl -sS -K "$tmp/auth.conf" -X PATCH -H 'Content-Type: application/json' \
