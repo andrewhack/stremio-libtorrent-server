@@ -71,24 +71,30 @@ fi
 # access token; /v2/users/login (username + password -> token) is the legacy path, which answers a
 # PAT with HTTP 409 "Please reset your password." -- a message that sends you off resetting a
 # perfectly good password. Try the modern endpoint, fall back for a genuine password login.
+# Report what an endpoint actually said. Only `detail` and the field *names* -- never a token value.
+# Both attempts get reported on failure: with one shared message you cannot tell which endpoint
+# refused you, and they refuse for different reasons.
+report_auth() {
+    echo "  $1: HTTP $2 -- $(jq -r '.detail // .message // "no detail"' < "$3" 2>/dev/null || echo unparsable)" >&2
+    echo "     fields: $(jq -r 'try (keys | join(",")) catch "unparsable"' < "$3")" >&2
+}
+
 scheme="Bearer"
-login_code=$(jq -n --arg u "$DOCKERHUB_USER" '{identifier: $u, secret: env.DOCKERHUB_TOKEN}' \
+code_modern=$(jq -n --arg u "$DOCKERHUB_USER" '{identifier: $u, secret: env.DOCKERHUB_TOKEN}' \
     | curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- \
-        -o "$tmp/login.json" -w '%{http_code}' "$API/auth/token")
-jwt=$(jq -r '.access_token // empty' < "$tmp/login.json")
+        -o "$tmp/auth-token.json" -w '%{http_code}' "$API/auth/token")
+jwt=$(jq -r '.access_token // empty' < "$tmp/auth-token.json")
 if [ -z "$jwt" ]; then
     scheme="JWT"
-    login_code=$(jq -n --arg u "$DOCKERHUB_USER" '{username: $u, password: env.DOCKERHUB_TOKEN}' \
+    code_legacy=$(jq -n --arg u "$DOCKERHUB_USER" '{username: $u, password: env.DOCKERHUB_TOKEN}' \
         | curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- \
-            -o "$tmp/login.json" -w '%{http_code}' "$API/users/login/")
-    jwt=$(jq -r '.token // empty' < "$tmp/login.json")
+            -o "$tmp/users-login.json" -w '%{http_code}' "$API/users/login/")
+    jwt=$(jq -r '.token // empty' < "$tmp/users-login.json")
 fi
 if [ -z "$jwt" ]; then
-    # Say what Hub said. "login failed" alone sends you hunting for the wrong problem: a registry
-    # credential that pushes images fine can still be refused here, and 2FA answers with a challenge
-    # rather than an error. Only `detail` and the field *names* are printed -- never a token value.
-    echo "login failed for $DOCKERHUB_USER (HTTP $login_code): $(jq -r '.detail // .message // "no detail"' < "$tmp/login.json")" >&2
-    echo "response fields: $(jq -r 'try (keys | join(",")) catch "unparsable"' < "$tmp/login.json")" >&2
+    echo "Docker Hub refused both auth endpoints for $DOCKERHUB_USER:" >&2
+    report_auth "/v2/auth/token   (PAT)     " "$code_modern" "$tmp/auth-token.json"
+    report_auth "/v2/users/login  (password)" "$code_legacy" "$tmp/users-login.json"
     echo "set DOCKERHUB_TOKEN to a Docker Hub personal access token with write scope" >&2
     exit 3
 fi
