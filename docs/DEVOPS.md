@@ -38,14 +38,22 @@ docker compose ps          # STATUS should show (healthy) once the healthcheck p
 > compose overlay split) keeps startup resilient.
 
 ### Publishing to Docker Hub
+Bump `version` in `pyproject.toml`, commit, then:
 ```sh
 docker login -u <hub-user>
-VERSION=<x.y.z> ./docker/publish.sh   # tags + pushes :$VERSION and :latest
-./docker/push-readme.sh               # README.md -> the Hub repo overview
+DRY_RUN=1 ./docker/publish.sh   # build + smoke only, publishes nothing
+./docker/publish.sh             # build -> smoke -> push :$VERSION and :latest -> sync the overview
 ```
-Two separate things: pushing a tag ships the **image**, and never touches the repository **overview**
-(the long description on the Hub page) — left alone, the overview quietly falls behind the README.
-`publish.sh` runs `push-readme.sh` at the end, so a release cannot ship with stale docs on the page.
+One command for the whole release. It refuses to run with modified tracked files (the image would
+match no commit), builds, then **reads the version out of the image it is about to push** — nothing
+version-shaped is typed by hand — and refuses if that disagrees with `pyproject.toml`, which means
+the build is stale. It then starts the image and polls `/health` until it reports healthy, failing
+with the container logs if it never does or if the version it serves isn't the version being tagged.
+Overrides: `SKIP_BUILD`, `VERSION`, `LOCAL`, `SMOKE_PORT`, `ALLOW_DIRTY`, `ALLOW_VERSION_MISMATCH`.
+
+Pushing a tag ships the **image** and never touches the repository **overview** (the long description
+on the Hub page) — left alone, the overview quietly falls behind the README. `publish.sh` syncs it
+last, so a release cannot ship with stale docs on the page.
 
 `push-readme.sh` authenticates with the credential `docker login` already stored, so no second secret
 is needed; set `DOCKERHUB_TOKEN` to override it (required under a credential helper, where the secret
