@@ -296,6 +296,7 @@ Modules: `api/` (Stremio HTTP API) · `torrent/` (libtorrent + piece-picker) · 
 server) · `transcode/` (ffmpeg NVENC/VAAPI → HLS) · `config.py` · `health.py`. Protocol reference:
 [`docs/protocol-map.md`](docs/protocol-map.md).
 
+<!--hub:skip-->
 ## ✅ Status
 
 All stages shipped and verified on hardware:
@@ -317,6 +318,7 @@ uv run pytest -q          # unit tests
 uv run ruff check .       # lint
 uv run uvicorn stremiosrv.app:create_app --factory --host 0.0.0.0 --port 11470
 ```
+<!--/hub:skip-->
 
 ## 🔐 Appendix — how the TV HTTPS URL works (`*.stremio.rocks`)
 

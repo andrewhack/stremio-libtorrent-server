@@ -56,17 +56,35 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 umask 077
 
-# Send LF, whatever the checkout has. Docker Hub renders it identically, it makes the read-back check
-# below exact on a CRLF clone, and it buys ~400 characters of headroom against the cap.
-tr -d '\r' < "$README" > "$tmp/body.md"
-chars=$(LC_ALL=C.UTF-8 wc -m < "$tmp/body.md" 2>/dev/null || wc -m < "$tmp/body.md")
-chars=$(echo "$chars" | tr -d ' ')
-echo "syncing README -> $REPO overview ($chars chars)"
-# Docker Hub caps the overview around 25k characters. The read-back below is what actually proves the
-# text landed whole -- this is just an early nudge, because a truncated page looks fine until someone
-# scrolls to the bottom of it.
-if [ "$chars" -gt 23000 ]; then
-    echo "warning: $chars chars is close to Docker Hub's ~25k overview cap"
+# An unmatched open marker makes the sed range below run to end-of-file, silently amputating the
+# page. Refuse instead -- that failure would look exactly like a successful publish.
+opens=$(grep -c '<!--hub:skip-->' "$README" || true)
+closes=$(grep -c '<!--/hub:skip-->' "$README" || true)
+if [ "$opens" != "$closes" ]; then
+    echo "ERROR: $README has $opens <!--hub:skip--> markers but $closes closing ones" >&2
+    exit 2
+fi
+
+# Two transforms. Send LF whatever the checkout has: Hub renders it identically, it makes the
+# read-back check exact on a CRLF clone, and it saves ~400 bytes against the cap. Then drop regions
+# marked <!--hub:skip--> ... <!--/hub:skip-->: the overview has a hard byte cap this README keeps
+# growing towards, and part of it is repo-facing anyway (how to run the test suite is no use to
+# someone reading a Docker Hub page). GitHub still shows those sections -- HTML comments render as
+# nothing there -- so nothing is lost, and the two pages stay one source file.
+tr -d '\r' < "$README" | sed '/<!--hub:skip-->/,/<!--\/hub:skip-->/d' > "$tmp/body.md"
+bytes=$(wc -c < "$tmp/body.md" | tr -d ' ')
+chars=$(LC_ALL=C.UTF-8 wc -m < "$tmp/body.md" 2>/dev/null | tr -d ' ')
+echo "syncing README -> $REPO overview ($bytes bytes, $chars chars)"
+# Hub's cap is 25000 *bytes*, and it enforces it server-side with "Exceeded max number of bytes".
+# Bytes, not characters, is the whole trap: this README is ~880 bytes heavier than its character
+# count because every emoji costs four, so a page that looks 700 under the limit is actually over it.
+# Checking here turns a cryptic 400 into a number you can act on, before anything is sent.
+if [ "$bytes" -gt 25000 ]; then
+    echo "ERROR: $bytes bytes exceeds Docker Hub's 25000-byte cap -- trim $((bytes - 25000)) bytes" >&2
+    exit 6
+fi
+if [ "$bytes" -gt 24000 ]; then
+    echo "warning: only $((25000 - bytes)) bytes left under the 25000-byte cap"
 fi
 
 # Docker Hub has two auth endpoints and they take different credentials. /v2/auth/token
