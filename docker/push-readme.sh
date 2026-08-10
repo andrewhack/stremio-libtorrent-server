@@ -61,7 +61,11 @@ fi
 sent=$(cat "$tmp/body.md")
 live=$(curl -sS "$API/repositories/$REPO/" | jq -r '.full_description // ""' | tr -d '\r')
 if [ "$sent" != "$live" ]; then
-    echo "MISMATCH after push: sent ${#sent} chars, Docker Hub is serving ${#live}" >&2
+    # Bytes, not characters -- ${#var} counts bytes in dash and characters in bash, and a diagnostic
+    # that means two different things depending on the shell is worse than one that is merely coarse.
+    nsent=$(printf '%s' "$sent" | wc -c | tr -d ' ')
+    nlive=$(printf '%s' "$live" | wc -c | tr -d ' ')
+    echo "MISMATCH after push: sent $nsent bytes, Docker Hub is serving $nlive" >&2
     echo "the overview is NOT in sync -- check the length cap and re-run" >&2
     exit 5
 fi
