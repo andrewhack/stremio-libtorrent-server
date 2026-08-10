@@ -107,7 +107,10 @@ code=$(jq -Rs '{full_description: .}' < "$tmp/body.md" \
     | curl -sS -K "$tmp/auth.conf" -X PATCH -H 'Content-Type: application/json' \
         --data-binary @- -o "$tmp/patch.json" -w '%{http_code}' "$API/repositories/$REPO/")
 if [ "$code" != "200" ]; then
+    # errinfo carries the field-level reason (which field, which constraint). Without it a validation
+    # error is just "400", and the most likely cause -- the length cap -- looks like anything else.
     echo "PATCH returned HTTP $code: $(jq -r '.detail // .message // tostring' < "$tmp/patch.json" 2>/dev/null || cat "$tmp/patch.json")" >&2
+    echo "  errinfo: $(jq -c '.errinfo // empty' < "$tmp/patch.json" 2>/dev/null | head -c 600)" >&2
     exit 4
 fi
 
