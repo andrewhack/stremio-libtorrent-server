@@ -48,6 +48,9 @@ if [ -z "${DOCKERHUB_TOKEN:-}" ] && [ -f "$DOCKER_CONFIG_JSON" ]; then
 fi
 
 : "${DOCKERHUB_TOKEN:?set DOCKERHUB_TOKEN to a Docker Hub token with write scope, or run docker login}"
+# Must be exported, not just set: the request bodies below read it through jq's `env`, which sees only
+# the environment. As a plain shell variable it silently serialises to null and Hub rejects the body.
+export DOCKERHUB_TOKEN
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
