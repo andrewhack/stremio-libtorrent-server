@@ -60,11 +60,17 @@ if [ "$chars" -gt 23000 ]; then
     echo "warning: $chars chars is close to Docker Hub's ~25k overview cap"
 fi
 
-jwt=$(jq -n --arg u "$DOCKERHUB_USER" '{username: $u, password: env.DOCKERHUB_TOKEN}' \
-    | curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- "$API/users/login/" \
-    | jq -r '.token // empty')
+login_code=$(jq -n --arg u "$DOCKERHUB_USER" '{username: $u, password: env.DOCKERHUB_TOKEN}' \
+    | curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- \
+        -o "$tmp/login.json" -w '%{http_code}' "$API/users/login/")
+jwt=$(jq -r '.token // empty' < "$tmp/login.json")
 if [ -z "$jwt" ]; then
-    echo "login failed for $DOCKERHUB_USER -- check DOCKERHUB_TOKEN (needs write scope)" >&2
+    # Say what Hub said. "login failed" alone sends you hunting for the wrong problem: a registry
+    # credential that pushes images fine can still be refused here, and 2FA answers with a challenge
+    # rather than an error. Only `detail` and the field *names* are printed -- never a token value.
+    echo "login failed for $DOCKERHUB_USER (HTTP $login_code): $(jq -r '.detail // .message // "no detail"' < "$tmp/login.json")" >&2
+    echo "response fields: $(jq -r 'try (keys | join(",")) catch "unparsable"' < "$tmp/login.json")" >&2
+    echo "set DOCKERHUB_TOKEN to a Docker Hub personal access token with write scope" >&2
     exit 3
 fi
 printf 'header = "Authorization: JWT %s"\n' "$jwt" > "$tmp/auth.conf"
