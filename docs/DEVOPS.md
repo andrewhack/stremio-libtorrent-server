@@ -40,15 +40,17 @@ docker compose ps          # STATUS should show (healthy) once the healthcheck p
 ### Publishing to Docker Hub
 ```sh
 docker login -u <hub-user>
-VERSION=<x.y.z> ./docker/publish.sh          # tags + pushes :$VERSION and :latest
-DOCKERHUB_TOKEN=<pat> ./docker/push-readme.sh   # README.md -> the Hub repo overview
+VERSION=<x.y.z> ./docker/publish.sh   # tags + pushes :$VERSION and :latest
+./docker/push-readme.sh               # README.md -> the Hub repo overview
 ```
 Two separate things: pushing a tag ships the **image**, and never touches the repository **overview**
-(the long description on the Hub page). `publish.sh` runs `push-readme.sh` for you when
-`DOCKERHUB_TOKEN` is set in the environment, and says so when it skips it — otherwise the overview
-quietly falls behind the README. `push-readme.sh` reads the token from the environment only, and
-verifies the result by reading the page back, so a rejected or truncated update fails loudly. Note the
-overview has a length cap (~25k characters) that the README is not far from.
+(the long description on the Hub page) — left alone, the overview quietly falls behind the README.
+`publish.sh` runs `push-readme.sh` at the end, so a release cannot ship with stale docs on the page.
+
+`push-readme.sh` authenticates with the credential `docker login` already stored, so no second secret
+is needed; set `DOCKERHUB_TOKEN` to override it (required under a credential helper, where the secret
+is not in `config.json`). It verifies the result by reading the page back, so a rejected or truncated
+update fails loudly. Note the overview has a length cap (~25k characters) the README is not far from.
 
 ### Configuration (env vars, prefix `STREMIOSRV_`)
 | Var | Default | Purpose |

@@ -4,23 +4,44 @@
 # The overview is not part of the image, so pushing a tag never touches it -- it drifted two releases
 # behind before this existed. Run it whenever the README changes; docker/publish.sh calls it too.
 #
-#   DOCKERHUB_TOKEN=<personal access token, read+write> sh docker/push-readme.sh
+#   sh docker/push-readme.sh                                     # reuses your `docker login`
+#   DOCKERHUB_TOKEN=<pat, read+write> sh docker/push-readme.sh   # or an explicit token
 #
-# The token is read from the environment, sent only to hub.docker.com, and never printed. It is kept
-# out of argv as well (jq reads it from the environment; the session JWT goes to curl via a 0600
-# config file), so it does not show up in `ps` on a shared host.
+# The credential is sent only to hub.docker.com and never printed. It is kept out of argv as well (jq
+# reads it from the environment; the session JWT goes to curl via a 0600 config file), so it does not
+# show up in `ps` on a shared host.
 #
-# Env overrides: DOCKERHUB_USER, REPO, README.
+# Env overrides: DOCKERHUB_USER, REPO, README, DOCKER_CONFIG_JSON.
 set -e
 
 DOCKERHUB_USER="${DOCKERHUB_USER:-androshack}"
 REPO="${REPO:-androshack/stremio-libtorrent-server}"
 README="${README:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/README.md}"
 API="https://hub.docker.com/v2"
+DOCKER_CONFIG_JSON="${DOCKER_CONFIG_JSON:-$HOME/.docker/config.json}"
 
-: "${DOCKERHUB_TOKEN:?set DOCKERHUB_TOKEN to a Docker Hub access token with write scope}"
 [ -f "$README" ] || { echo "no README at $README" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
+
+# With no token in the environment, reuse the credential `docker login` already stored for this user
+# -- the same one `docker push` authenticates with, so shipping the image and shipping the docs need
+# no second secret. It owns the username too, since a credential only works for the account it
+# belongs to. Skipped entirely when DOCKERHUB_TOKEN is set, and a no-op under a credential helper
+# (credsStore), where the secret is not in the file at all -- pass a token explicitly there.
+if [ -z "${DOCKERHUB_TOKEN:-}" ] && [ -f "$DOCKER_CONFIG_JSON" ]; then
+    creds=$(jq -r '.auths["https://index.docker.io/v1/"].auth // empty' "$DOCKER_CONFIG_JSON" \
+        | base64 -d 2>/dev/null || true)
+    case "$creds" in
+        ?*:?*)
+            DOCKERHUB_USER="${creds%%:*}"
+            DOCKERHUB_TOKEN="${creds#*:}"
+            echo "no DOCKERHUB_TOKEN set -- reusing the stored docker login for $DOCKERHUB_USER"
+            ;;
+    esac
+    unset creds
+fi
+
+: "${DOCKERHUB_TOKEN:?set DOCKERHUB_TOKEN to a Docker Hub token with write scope, or run docker login}"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
