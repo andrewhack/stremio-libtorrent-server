@@ -37,6 +37,19 @@ docker compose ps          # STATUS should show (healthy) once the healthcheck p
 > creation when the NVIDIA runtime/driver is absent, taking the service down. `launch.sh` (or the
 > compose overlay split) keeps startup resilient.
 
+### Publishing to Docker Hub
+```sh
+docker login -u <hub-user>
+VERSION=<x.y.z> ./docker/publish.sh          # tags + pushes :$VERSION and :latest
+DOCKERHUB_TOKEN=<pat> ./docker/push-readme.sh   # README.md -> the Hub repo overview
+```
+Two separate things: pushing a tag ships the **image**, and never touches the repository **overview**
+(the long description on the Hub page). `publish.sh` runs `push-readme.sh` for you when
+`DOCKERHUB_TOKEN` is set in the environment, and says so when it skips it — otherwise the overview
+quietly falls behind the README. `push-readme.sh` reads the token from the environment only, and
+verifies the result by reading the page back, so a rejected or truncated update fails loudly. Note the
+overview has a length cap (~25k characters) that the README is not far from.
+
 ### Configuration (env vars, prefix `STREMIOSRV_`)
 | Var | Default | Purpose |
 |---|---|---|

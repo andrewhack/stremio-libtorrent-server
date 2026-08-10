@@ -12,3 +12,11 @@ docker tag "$LOCAL" "$REPO:latest"
 docker push "$REPO:$VERSION"
 docker push "$REPO:latest"
 echo "pushed $REPO:$VERSION and $REPO:latest"
+
+# The Hub *overview* is separate from the image and a push never updates it -- it silently drifted two
+# releases behind once. Sync it here so a release cannot ship with stale docs on the landing page.
+if [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+    REPO="$REPO" sh "$(dirname "$0")/push-readme.sh"
+else
+    echo "note: DOCKERHUB_TOKEN unset -- skipped the overview sync (see docker/push-readme.sh)"
+fi
