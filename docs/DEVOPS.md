@@ -38,22 +38,33 @@ docker compose ps          # STATUS should show (healthy) once the healthcheck p
 > compose overlay split) keeps startup resilient.
 
 ### Publishing to Docker Hub
-Bump `version` in `pyproject.toml`, commit, then:
+Bump `version` in `pyproject.toml`, write `docs/releases/v<x.y.z>.md`, commit, then:
 ```sh
 docker login -u <hub-user>
 DRY_RUN=1 ./docker/publish.sh   # build + smoke only, publishes nothing
-./docker/publish.sh             # build -> smoke -> push :$VERSION and :latest -> sync the overview
+./docker/publish.sh             # the whole release
 ```
-One command for the whole release. It refuses to run with modified tracked files (the image would
-match no commit), builds, then **reads the version out of the image it is about to push** — nothing
-version-shaped is typed by hand — and refuses if that disagrees with `pyproject.toml`, which means
-the build is stale. It then starts the image and polls `/health` until it reports healthy, failing
-with the container logs if it never does or if the version it serves isn't the version being tagged.
-Overrides: `SKIP_BUILD`, `VERSION`, `LOCAL`, `SMOKE_PORT`, `ALLOW_DIRTY`, `ALLOW_VERSION_MISMATCH`.
+One command end to end: build → smoke → push `:$VERSION` and `:latest` → sync the Hub overview →
+tag `v$VERSION` → cut the GitHub release. Order is deliberate — the announcement goes last, after the
+artefact is actually public.
+
+Everything checkable is checked **before** the build, because discovering a problem after the image
+is on Docker Hub leaves a half-published release with no undo: modified tracked files (the image
+would match no commit), missing release notes, and a `v$VERSION` tag that already points somewhere
+other than `HEAD`. After building it **reads the version out of the image it is about to push** —
+nothing version-shaped is typed by hand — and refuses if that disagrees with `pyproject.toml`, which
+means the build is stale. Then it starts the image and polls `/health`, failing with the container
+logs if it never comes up healthy or serves a different version than the one being tagged.
+
+The release title comes from the notes file's first heading, so title and notes can't drift. The
+GitHub token is taken from `GH_TOKEN`, else from the credentials in the `origin` URL. If only that
+last step fails, the message says so explicitly — the image is already published by then.
+
+Overrides: `SKIP_BUILD`, `SKIP_GITHUB`, `VERSION`, `LOCAL`, `NOTES_FILE`, `RELEASE_NAME`,
+`SMOKE_PORT`, `ALLOW_DIRTY`, `ALLOW_VERSION_MISMATCH`.
 
 Pushing a tag ships the **image** and never touches the repository **overview** (the long description
-on the Hub page) — left alone, the overview quietly falls behind the README. `publish.sh` syncs it
-last, so a release cannot ship with stale docs on the page.
+on the Hub page) — left alone, the overview quietly falls behind the README.
 
 `push-readme.sh` authenticates with the credential `docker login` already stored, so no second secret
 is needed; set `DOCKERHUB_TOKEN` to override it (required under a credential helper, where the secret

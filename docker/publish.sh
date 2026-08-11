@@ -2,16 +2,17 @@
 # Build, gate, and publish the all-in-one image, then sync the Hub overview.
 #
 #   docker login -u androshack
-#   ./docker/publish.sh                 # build -> smoke -> push :$VERSION and :latest -> sync README
-#   DRY_RUN=1 ./docker/publish.sh       # everything except the pushes and the overview sync
+#   ./docker/publish.sh                 # build -> smoke -> push image -> sync README -> tag + release
+#   DRY_RUN=1 ./docker/publish.sh       # build + smoke only; publishes and releases nothing
 #   SKIP_BUILD=1 ./docker/publish.sh    # publish an image that is already built
+#   SKIP_GITHUB=1 ./docker/publish.sh   # Docker Hub only, no git tag and no GitHub release
 #
-# This replaces the per-release ~/build-NNN.sh scripts. Same steps in the same order, minus the two
-# things that were copy-pasted into each one and went stale: the hand-typed version, and a `git reset
-# --hard origin/main` that silently discarded whatever was in the tree.
+# This replaces the per-release ~/build-NNN.sh and ~/release-NNN.sh scripts. Same steps in the same
+# order, minus the two things that were copy-pasted into each one and went stale: the hand-typed
+# version, and a `git reset --hard origin/main` that silently discarded whatever was in the tree.
 #
-# Env overrides: REPO, LOCAL, VERSION, DRY_RUN, SKIP_BUILD, SMOKE_PORT, ALLOW_DIRTY,
-#                ALLOW_VERSION_MISMATCH.
+# Env overrides: REPO, LOCAL, VERSION, DRY_RUN, SKIP_BUILD, SKIP_GITHUB, SMOKE_PORT, NOTES_FILE,
+#                RELEASE_NAME, GH_TOKEN, ALLOW_DIRTY, ALLOW_VERSION_MISMATCH.
 set -e
 
 REPO="${REPO:-androshack/stremio-libtorrent-server}"
@@ -37,6 +38,30 @@ if [ -z "${ALLOW_DIRTY:-}" ] && git -C "$HERE" rev-parse --git-dir >/dev/null 2>
 fi
 echo "releasing from commit $(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo '(not a git checkout)')"
 
+TREE_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/pyproject.toml" | head -1)
+
+# Everything knowable without building is checked here, before the build. Discovering that the notes
+# are missing *after* the image is on Docker Hub leaves a half-published release: the image is out and
+# public, and there is no undo for that. The version is not derived from the image yet, so preflight
+# uses the checkout's -- and the two are reconciled below.
+PRE_VERSION="${VERSION:-$TREE_VERSION}"
+TAG="v$PRE_VERSION"
+NOTES_FILE="${NOTES_FILE:-$HERE/docs/releases/$TAG.md}"
+if [ -z "${SKIP_GITHUB:-}" ]; then
+    if [ ! -f "$NOTES_FILE" ]; then
+        echo "ERROR: no release notes at $NOTES_FILE" >&2
+        echo "  write them there, or pass NOTES_FILE=, or SKIP_GITHUB=1 for a Docker-Hub-only push" >&2
+        exit 2
+    fi
+    existing=$(git -C "$HERE" rev-list -n 1 "$TAG" 2>/dev/null || true)
+    if [ -n "$existing" ] && [ "$existing" != "$(git -C "$HERE" rev-parse HEAD)" ]; then
+        echo "ERROR: tag $TAG already exists and points at $(git -C "$HERE" rev-parse --short "$TAG"), not HEAD" >&2
+        echo "  bump the version, or delete the tag if it was created by mistake" >&2
+        exit 2
+    fi
+    echo "release notes: $NOTES_FILE ($(wc -l < "$NOTES_FILE" | tr -d ' ') lines) -> $TAG"
+fi
+
 if [ -z "${SKIP_BUILD:-}" ]; then
     echo "building $LOCAL"
     docker build -t "$LOCAL" "$HERE"
@@ -55,8 +80,7 @@ VERSION="${VERSION:-$IMAGE_VERSION}"
 # An image whose version differs from this checkout is a stale build, and pushing it would drag
 # :latest backwards onto it -- the one outcome here that is genuinely hard to undo, because every
 # `docker pull` in the world follows :latest. Hard error, with a way through for the rare deliberate
-# case. `head -1` takes [project].version, which pyproject.toml declares before any other table.
-TREE_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/pyproject.toml" | head -1)
+# case. TREE_VERSION comes from [project].version, which pyproject.toml declares before any other.
 if [ -n "$IMAGE_VERSION" ] && [ -n "$TREE_VERSION" ] && [ "$IMAGE_VERSION" != "$TREE_VERSION" ]; then
     echo "ERROR: $LOCAL contains $IMAGE_VERSION but this checkout is $TREE_VERSION" >&2
     echo "  rebuild it, or set ALLOW_VERSION_MISMATCH=1 if you really mean to publish that build" >&2
@@ -100,8 +124,11 @@ cleanup_smoke
 trap - EXIT INT TERM
 
 echo "publishing $LOCAL as $REPO:$VERSION and $REPO:latest"
+if [ -z "${SKIP_GITHUB:-}" ]; then
+    echo "then tagging $TAG and cutting the GitHub release from $NOTES_FILE"
+fi
 if [ -n "${DRY_RUN:-}" ]; then
-    echo "DRY_RUN set -- not tagging, pushing, or syncing the overview"
+    echo "DRY_RUN set -- nothing pushed, tagged, released, or synced"
     exit 0
 fi
 
@@ -115,3 +142,54 @@ echo "pushed $REPO:$VERSION and $REPO:latest"
 # releases behind once. Sync it here so a release cannot ship with stale docs on the landing page. The
 # pushes above already prove a docker login exists, and that is the credential push-readme.sh reuses.
 REPO="$REPO" sh "$(dirname "$0")/push-readme.sh"
+
+[ -n "${SKIP_GITHUB:-}" ] && exit 0
+
+# --- git tag + GitHub release -------------------------------------------------------------------
+# Last, deliberately. Everything above is the artefact; this is the announcement, and announcing a
+# release whose image failed to push would be the wrong way round. If this step fails the image is
+# already public, so it says exactly what is left to do rather than implying the whole thing failed.
+#
+# The token comes from GH_TOKEN if set, otherwise out of the origin URL, which on the release host
+# carries it inline. Extracted into a variable and passed to curl through a 0600 config file -- never
+# printed, never in argv, and note `git remote -v` would show it, so it is not printed here either.
+ORIGIN=$(git -C "$HERE" remote get-url origin)
+SLUG=$(echo "$ORIGIN" | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##')
+GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-$(echo "$ORIGIN" | sed -n 's#^https://\([^@/]*\)@github\.com/.*#\1#p')}}"
+if [ -z "$GH_TOKEN" ]; then
+    echo "WARNING: no GH_TOKEN and none embedded in origin -- image published, GitHub release skipped" >&2
+    echo "  finish with: git push origin $TAG   then cut the release from $NOTES_FILE" >&2
+    exit 0
+fi
+
+if git -C "$HERE" rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+    echo "tag $TAG already exists at HEAD"
+else
+    git -C "$HERE" tag -a "$TAG" -m "$TAG"
+    echo "created tag $TAG"
+fi
+git -C "$HERE" push origin "$TAG"
+
+# Name the release from the notes' first heading when it has one, so the title and the notes cannot
+# drift apart. Falls back to the bare tag.
+heading=$(sed -n '1s/^#\{1,\} *//p' "$NOTES_FILE" | tr -d '\r')
+if [ -z "${RELEASE_NAME:-}" ]; then
+    if [ -n "$heading" ]; then RELEASE_NAME="$TAG - $heading"; else RELEASE_NAME="$TAG"; fi
+fi
+
+ghtmp=$(mktemp -d)
+trap 'rm -rf "$ghtmp"' EXIT INT TERM
+(umask 077; printf 'header = "Authorization: token %s"\n' "$GH_TOKEN" > "$ghtmp/auth.conf")
+gh_code=$(jq -n --arg tag "$TAG" --arg name "$RELEASE_NAME" --rawfile body "$NOTES_FILE" \
+        '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}' \
+    | curl -sS -K "$ghtmp/auth.conf" -X POST --data-binary @- \
+        -H 'Accept: application/vnd.github+json' -H 'User-Agent: stremio-publish' \
+        -o "$ghtmp/release.json" -w '%{http_code}' "https://api.github.com/repos/$SLUG/releases")
+case "$gh_code" in
+    201) echo "released: $(jq -r '.html_url' < "$ghtmp/release.json")" ;;
+    422) # Almost always "already_exists" -- a re-run after a partial failure, which is not an error.
+         echo "release $TAG already exists on GitHub: $(jq -r '.errors[0].code // .message' < "$ghtmp/release.json")" ;;
+    *)   echo "GitHub release failed (HTTP $gh_code): $(jq -r '.message // tostring' < "$ghtmp/release.json")" >&2
+         echo "  the image IS published -- only the GitHub release is missing" >&2
+         exit 4 ;;
+esac
