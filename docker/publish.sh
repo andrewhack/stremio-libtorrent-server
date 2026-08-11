@@ -55,7 +55,9 @@ if [ -z "${SKIP_GITHUB:-}" ]; then
     fi
     existing=$(git -C "$HERE" rev-list -n 1 "$TAG" 2>/dev/null || true)
     if [ -n "$existing" ] && [ "$existing" != "$(git -C "$HERE" rev-parse HEAD)" ]; then
-        echo "ERROR: tag $TAG already exists and points at $(git -C "$HERE" rev-parse --short "$TAG"), not HEAD" >&2
+        # ^{commit}, because rev-parse on an annotated tag yields the tag object's sha, not the
+        # commit's -- printing that would send you looking for a sha that is in no log.
+        echo "ERROR: tag $TAG already exists and points at $(git -C "$HERE" rev-parse --short "$TAG^{commit}"), not HEAD" >&2
         echo "  bump the version, or delete the tag if it was created by mistake" >&2
         exit 2
     fi
