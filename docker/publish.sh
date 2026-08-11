@@ -61,7 +61,15 @@ if [ -z "${SKIP_GITHUB:-}" ]; then
         echo "  bump the version, or delete the tag if it was created by mistake" >&2
         exit 2
     fi
+    # GitHub renders the release title above the body, so a notes file that opens with its own title
+    # shows it twice -- v1.1.0 and v1.2.0 both went out that way. Consume the first heading into the
+    # title instead, and strip it from the body below, so the duplication cannot happen by omission.
+    HEADING=$(sed -n '1s/^#\{1,\} *//p' "$NOTES_FILE" | tr -d '\r')
+    if [ -z "${RELEASE_NAME:-}" ]; then
+        if [ -n "$HEADING" ]; then RELEASE_NAME="$TAG - $HEADING"; else RELEASE_NAME="$TAG"; fi
+    fi
     echo "release notes: $NOTES_FILE ($(wc -l < "$NOTES_FILE" | tr -d ' ') lines) -> $TAG"
+    echo "release title: $RELEASE_NAME"
 fi
 
 if [ -z "${SKIP_BUILD:-}" ]; then
@@ -172,17 +180,19 @@ else
 fi
 git -C "$HERE" push origin "$TAG"
 
-# Name the release from the notes' first heading when it has one, so the title and the notes cannot
-# drift apart. Falls back to the bare tag.
-heading=$(sed -n '1s/^#\{1,\} *//p' "$NOTES_FILE" | tr -d '\r')
-if [ -z "${RELEASE_NAME:-}" ]; then
-    if [ -n "$heading" ]; then RELEASE_NAME="$TAG - $heading"; else RELEASE_NAME="$TAG"; fi
-fi
-
 ghtmp=$(mktemp -d)
 trap 'rm -rf "$ghtmp"' EXIT INT TERM
 (umask 077; printf 'header = "Authorization: token %s"\n' "$GH_TOKEN" > "$ghtmp/auth.conf")
-gh_code=$(jq -n --arg tag "$TAG" --arg name "$RELEASE_NAME" --rawfile body "$NOTES_FILE" \
+
+# Drop the heading that became the title, and the blank line under it, so the page does not open by
+# repeating itself. `/./,$!d` deletes leading blanks; a notes file with no heading is sent whole.
+if [ -n "$HEADING" ]; then
+    sed '1d' "$NOTES_FILE" | sed '/./,$!d' > "$ghtmp/body.md"
+else
+    cat "$NOTES_FILE" > "$ghtmp/body.md"
+fi
+
+gh_code=$(jq -n --arg tag "$TAG" --arg name "$RELEASE_NAME" --rawfile body "$ghtmp/body.md" \
         '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}' \
     | curl -sS -K "$ghtmp/auth.conf" -X POST --data-binary @- \
         -H 'Accept: application/vnd.github+json' -H 'User-Agent: stremio-publish' \

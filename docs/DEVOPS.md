@@ -56,7 +56,9 @@ nothing version-shaped is typed by hand — and refuses if that disagrees with `
 means the build is stale. Then it starts the image and polls `/health`, failing with the container
 logs if it never comes up healthy or serves a different version than the one being tagged.
 
-The release title comes from the notes file's first heading, so title and notes can't drift. The
+The notes file's first heading becomes the release title and is **stripped from the body** — GitHub
+already renders the title above it, and v1.1.0 and v1.2.0 both shipped with that line printed twice.
+Title and notes therefore cannot drift, and cannot repeat. The
 GitHub token is taken from `GH_TOKEN`, else from the credentials in the `origin` URL. If only that
 last step fails, the message says so explicitly — the image is already published by then.
 
