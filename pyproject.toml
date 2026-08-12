@@ -3,6 +3,8 @@ name = "stremiosrv"
 version = "1.3.0"
 description = "Open, self-hosted Stremio streaming server (libtorrent engine + bundled web player)"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Andrey Karadimov", email = "karadimov@gmail.com" }
 ]
