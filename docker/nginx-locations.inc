@@ -20,6 +20,11 @@ location = /stats.json         { proxy_pass http://127.0.0.1:11470; }
 location = /hwaccel-profiler   { proxy_pass http://127.0.0.1:11470; }
 location = /casting            { proxy_pass http://127.0.0.1:11470; }
 location = /opensubHash        { proxy_pass http://127.0.0.1:11470; }
+# Exact, and deliberately NOT covered by the /subtitles. prefix below — that prefix is
+# case-sensitive, so `/subtitleSignature` misses it at the `s`/`S` and would fall through to
+# index.html. The bundled web player is the main caller of this route, so falling through here
+# means the route effectively does not exist for the client it was added for.
+location = /subtitleSignature  { proxy_pass http://127.0.0.1:11470; }
 # Prefix (not exact): the client picks the extension it wants — `.srt` for native players
 # (Android/ExoPlayer), `.vtt` for the browser. Route every /subtitles.<ext> to the proxy, else a
 # `.srt` request falls through to the web-player index.html (HTML, not a subtitle).
