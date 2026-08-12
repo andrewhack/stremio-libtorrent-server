@@ -78,6 +78,27 @@ Query params observed on hlsv2 requests (from live logs): `mediaURL`, `videoCode
 | GET | `/subtitlesTracks` | 46693 | list subtitle tracks |
 | GET | `/opensubHash` | 46706 | **OpenSubtitles hash** — must match algorithm exactly |
 | GET | `/tracks/:url` | 46644 | track extraction |
+| GET | `/subtitleSignature` | *(absent)* | embedded-subtitle signature — **client-only, no reference** |
+
+### `/subtitleSignature` — the one route the reference does not define
+
+`stremio-video` 0.0.93 (2026-08-12, already the pin on `stremio-web@development`) calls
+`GET /subtitleSignature?videoUrl=<url>[&container=<format.name>]` once per load whose probe does not
+rule out an embedded subtitle track, and stores the answer on `videoParams.embeddedSubtitleSignature`.
+
+Unlike every other row above, there is nothing to match against:
+
+- `server.reference.js` (v4.20.16, 6.6 MB) — **0 occurrences**; the same is true of the copy published
+  at `dl.strem.io` and of the one inside `tsaridas/stremio-docker:latest`, which answers **404**;
+- nothing consumes the value — neither `stremio-core` nor `stremio-web` mentions it, and within
+  `stremio-video` it is only ever produced.
+
+We therefore serve the envelope with `signature: null`. That is the client's own documented "nothing
+here" value and the branch it already takes when the request fails. We do **not** invent a string:
+the client accepts any string, so a fabricated one would start being used the day a consumer ships
+upstream, and wrong subtitle matching is far harder to trace than absent subtitle matching. Revisit
+when a server release defines the algorithm — `subtitleSignatureAsks` in `/stats.json` counts the
+demand in the meantime.
 
 ## 5. Built-in addon (manifest) — 91xxx
 

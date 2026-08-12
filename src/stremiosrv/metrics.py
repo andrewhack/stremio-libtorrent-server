@@ -17,6 +17,7 @@ _stall_seconds = 0.0
 _timeouts = 0
 _prefetches = 0
 _prefetch_bytes = 0
+_subtitle_signature_asks = 0
 
 
 def record_stall(seconds: float) -> None:
@@ -44,6 +45,18 @@ def record_prefetch(planned_bytes: int) -> None:
         _prefetch_bytes += planned_bytes
 
 
+def record_subtitle_signature() -> None:
+    """A client asked /subtitleSignature (stremio-video >= 0.0.93, once per load whose probe does
+    not rule out an embedded subtitle track).
+
+    We answer null because the algorithm is unspecified upstream — see api/subs.py. This counter is
+    the evidence for when that changes: it says how often real clients want the feature, which is
+    what would justify reverse-engineering a signature rather than guessing one."""
+    global _subtitle_signature_asks
+    with _lock:
+        _subtitle_signature_asks += 1
+
+
 def playback_stats() -> dict:
     """Snapshot for /stats.json: cumulative stalls, total stall seconds, timeouts, and how often
     next-episode prefetch armed."""
@@ -51,12 +64,15 @@ def playback_stats() -> dict:
         return {
             "stalls": _stalls, "stallSeconds": round(_stall_seconds, 1), "timeouts": _timeouts,
             "prefetches": _prefetches, "prefetchBytes": _prefetch_bytes,
+            "subtitleSignatureAsks": _subtitle_signature_asks,
         }
 
 
 def reset() -> None:
     """Test helper — zero the counters."""
     global _stalls, _stall_seconds, _timeouts, _prefetches, _prefetch_bytes
+    global _subtitle_signature_asks
     with _lock:
         _stalls, _stall_seconds, _timeouts = 0, 0.0, 0
         _prefetches, _prefetch_bytes = 0, 0
+        _subtitle_signature_asks = 0

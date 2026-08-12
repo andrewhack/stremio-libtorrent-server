@@ -12,6 +12,7 @@ import zlib
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
+from stremiosrv import metrics
 from stremiosrv.stream.fileserver import file_disk_path
 from stremiosrv.subs.opensub import opensubtitles_hash_and_size
 from stremiosrv.transcode.probe import probe_media
@@ -187,6 +188,46 @@ def opensub_hash(request: Request, videoUrl: str | None = None, mediaURL: str | 
         hsh, size = opensubtitles_hash_and_size(src)
         return {"error": None, "result": {"size": size, "hash": hsh}}
     return {"error": None, "result": None}
+
+
+@router.get("/subtitleSignature")
+def subtitle_signature(videoUrl: str | None = None, container: str | None = None) -> dict:  # noqa: N803
+    """Embedded-subtitle signature, in the stock envelope:
+    `{"error": null, "result": {"signature": <string|null>}}`.
+
+    stremio-video 0.0.93 (already the pin on stremio-web@development) calls this once per load whose
+    probe does not rule out an embedded subtitle track, and puts the answer on
+    `videoParams.embeddedSubtitleSignature`. `container` is the probe's `format.name`, sent by the
+    client and accepted here to keep the declared contract complete; it is unused while the
+    signature is null.
+
+    **The signature is always null, and that is a decision, not a stub left behind.** There is
+    nothing yet to compute against:
+
+    * the reference implementation does not have this route. The published server.js v4.20.16
+      (6.45 MB from dl.strem.io) contains zero occurrences of `subtitleSignature` and answers 404;
+    * nothing consumes the value. Neither stremio-core nor stremio-web mentions it, and inside
+      stremio-video it is only ever produced.
+
+    So the algorithm is unspecified, and inventing one would be worse than returning nothing: the
+    client accepts *any* string (`typeof signature === 'string'`), so a value we made up would be
+    used the moment a consumer ships upstream — and wrong subtitle matching is a much harder bug to
+    trace than absent subtitle matching. `null` is the client's own documented "nothing here" value,
+    and the branch it already takes today.
+
+    What this does buy over the 404 it replaces: the client's `fetch().then(resp.json())` no longer
+    throws once per playback — on the player origin the SPA catch-all answered 200 with index.html,
+    so it raised a JSON parse error rather than a clean 404 — and the ask is counted, which is the
+    evidence for when implementing this properly becomes worth doing.
+
+    Deliberately does NOT ffprobe to confirm "there are no subtitle tracks at all". probe_media()
+    shells out uncached, and this is called at playback start on the same box that is serving the
+    stream; a second 30s-timeout subprocess there buys a nicety and risks the thing that matters.
+    """
+    if not videoUrl:
+        raise HTTPException(status_code=422, detail="videoUrl required")
+    metrics.record_subtitle_signature()
+    return {"error": None, "result": {"signature": None}}
 
 
 @router.get("/{info_hash}/{idx:int}/subtitles.json")

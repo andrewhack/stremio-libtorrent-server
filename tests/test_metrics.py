@@ -13,8 +13,18 @@ def test_record_stall_and_timeout_snapshot():
     metrics.record_timeout()
     assert metrics.playback_stats() == {
         "stalls": 2, "stallSeconds": 2.0, "timeouts": 1,
-        "prefetches": 0, "prefetchBytes": 0,
+        "prefetches": 0, "prefetchBytes": 0, "subtitleSignatureAsks": 0,
     }
+
+
+def test_subtitle_signature_asks_are_counted_and_reset():
+    metrics.reset()
+    assert metrics.playback_stats()["subtitleSignatureAsks"] == 0
+    metrics.record_subtitle_signature()
+    metrics.record_subtitle_signature()
+    assert metrics.playback_stats()["subtitleSignatureAsks"] == 2
+    metrics.reset()
+    assert metrics.playback_stats()["subtitleSignatureAsks"] == 0
 
 
 def test_record_prefetch_counts_arms_and_requested_bytes():
