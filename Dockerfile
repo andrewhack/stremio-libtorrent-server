@@ -10,7 +10,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /srv/app
 # Dependency metadata first (better layer caching), then source.
-COPY pyproject.toml uv.lock README.md ./
+# LICENSE is not optional here: pyproject declares `license-files = ["LICENSE"]`, so uv sync fails
+# with "glob `LICENSE` did not match any files" if it is missing from the context. Copying it also
+# means the image ships the licence alongside the software it grants rights to, which is the point.
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 COPY docker ./docker
 # Pin Python 3.12: libtorrent 2.0.11 only publishes cp312/cp313 wheels (no 3.14).
