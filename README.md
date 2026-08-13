@@ -323,6 +323,9 @@ uv run uvicorn stremiosrv.app:create_app --factory --host 0.0.0.0 --port 11470
 ```
 <!--/hub:skip-->
 
+How the TV HTTPS URL works (`*.stremio.rocks`), and the shared third-party hostname it relies on, are explained in the [README on GitHub](https://github.com/andrewhack/stremio-libtorrent-server#-appendix--how-the-tv-https-url-works-stremiorocks).
+
+<!--hub:skip-->
 ## 🔐 Appendix — how the TV HTTPS URL works (`*.stremio.rocks`)
 
 *Skip this unless you're curious or customizing certs — the Quick Start needs none of it.*
@@ -364,6 +367,7 @@ PEM as `certificates.pem` in the data volume, set `-e SERVER_URL=https://yourdom
 `IPADDRESS` unset** — the server uses your cert as-is. Or, on a trusted LAN, skip HTTPS entirely and
 use `http://<your-server-ip>:8080`.
 
+<!--/hub:skip-->
 ## 📜 License & spirit
 
 **MIT** — built on the MIT-licensed [stremio-docker](https://github.com/tsaridas/stremio-docker) fork.
