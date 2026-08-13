@@ -13,7 +13,12 @@ class Settings(BaseSettings):
     cert_file: str = "certificates.pem"  # active TLS cert (in cache_root); watched by /health
     cache_size: int = 19_327_352_832  # 18 GiB download-cache budget (must exceed your largest file)
     cache_evict_interval: int = 60  # seconds between eviction sweeps
-    cache_evict_grace: int = 300  # don't evict torrents served within this many seconds
+    # Don't evict torrents served within this many seconds. 30 min, not 5: the grace is refreshed by
+    # each byte-range request, and a 4K player that pulls a large chunk then plays it back locally
+    # can go minutes between requests — long enough, at 5 min, for the title being watched to become
+    # evictable while the cache is over budget. Reclaim is correspondingly later; the evictor sweeps
+    # every `cache_evict_interval`, so space comes back within a minute of the grace expiring.
+    cache_evict_grace: int = 1800
     bt_max_connections: int = 400
     download_rate_limit: int = 0  # bytes/sec cap on torrent download (0 = unlimited)
     upload_rate_limit: int = 0  # bytes/sec cap on torrent upload (0 = unlimited)

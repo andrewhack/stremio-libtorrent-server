@@ -169,6 +169,7 @@ Everything is a plain `-e NAME=value` environment variable:
 | `IPADDRESS` | *(unset)* | Your server IP → auto **trusted TV cert** via `*.stremio.rocks`. Unset → self-signed. |
 | `SERVER_URL` | auto | URL the web player targets. Set for a custom domain. |
 | `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | Download-cache budget in bytes (LRU-evicted). Keep it **above your largest file**. |
+| `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | Seconds a torrent stays safe from eviction after it was last served. Raise it if a player buffers long enough between range requests that the title being watched ages out. |
 | `STREMIOSRV_READAHEAD_BYTES` | `134217728` (128 MiB) | Playhead buffer — bigger absorbs more swarm jitter (fewer rebuffers). |
 | `STREMIOSRV_BT_LISTEN_PORT` | `6881` | BitTorrent peer port (TCP **and** UDP, IPv4 **and** IPv6). The one to forward. **If you change it, publish the *same* port** — the compose files and `docker/launch.sh` follow this var automatically; a hand-rolled `docker run` must use matching `-p <port>:<port>/tcp -p <port>:<port>/udp` (mapping to a *different* container port silently kills inbound peering). |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | Max peer connections. |

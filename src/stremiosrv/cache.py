@@ -135,12 +135,27 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
     now = time.time()
     in_use = {i["name"] for i in items if now - i["mtime"] <= grace}
     name_hash: dict[str, str] = {}
+    ages: dict[str, float] = {}
     if engine is not None:
         in_use |= set(engine.recent_names(grace))
         if hasattr(engine, "pinned_names"):
             in_use |= set(engine.pinned_names())
         name_hash = engine.name_to_hash()
+        if hasattr(engine, "access_ages"):
+            ages = engine.access_ages()
     victims = select_evictions(items, budget, frozenset(in_use))
+    # Over budget and nothing may be deleted. Previously this pass just did nothing and said
+    # nothing, so the cache could sit above its budget indefinitely while the log looked idle —
+    # and the bigger `grace` is, the likelier that becomes, because more items are protected.
+    # It is not an error (protecting a stream is the correct call), but it must be visible: the
+    # next thing that happens is the disk filling up.
+    if total > budget and not victims:
+        held = sum(i["size"] for i in items if i["name"] in in_use)
+        logger.warning(
+            "over budget by %.1f GiB and nothing is evictable: %d of %d items protected "
+            "(%.1f GiB) by grace=%ss or pins — cache will stay over budget until one ages out",
+            (total - budget) / 1073741824, len(in_use), len(items), held / 1073741824, grace,
+        )
     deleted = []
     for v in victims:
         ih = name_hash.get(v["name"])
@@ -148,7 +163,15 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
             engine.remove(ih)  # stop libtorrent before deleting its files
         _remove(v["path"])
         deleted.append({"name": v["name"], "size": v["size"]})
-        logger.info("evicted %s (%.1f MiB)", v["name"], v["size"] / 1048576)
+        # Age is the diagnostic that was missing: "last served 41m ago" is a clean reclaim,
+        # "last served 6m ago" means a viewer just lost their stream. `unserved` = never requested
+        # from this process (a leftover on disk, or downloaded but never played).
+        age = ages.get(v["name"])
+        logger.info(
+            "evicted %s [%s] (%.1f MiB, last served %s)",
+            v["name"], ih or "no-handle", v["size"] / 1048576,
+            f"{age / 60:.0f}m ago" if age is not None else "unserved",
+        )
     return {"before": total, "after": total - sum(d["size"] for d in deleted), "deleted": deleted}
 
 

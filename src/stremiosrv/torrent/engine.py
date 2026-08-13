@@ -666,6 +666,22 @@ class Engine:
                     names.add(h.name())
         return names
 
+    def access_ages(self) -> dict[str, float]:
+        """Seconds since each torrent was last served, by on-disk name.
+
+        Only used to annotate the eviction log. An eviction that says how stale the item was is the
+        difference between "reclaimed something nobody was watching" and "pulled the file out from
+        under a stream" — and after a 4K title vanished mid-evening with nothing recorded, the log
+        could not tell those apart.
+        """
+        now = time.monotonic()
+        out: dict[str, float] = {}
+        for ih, t in self._last_access.items():
+            h = self._torrents.get(ih)
+            if h is not None and h.has_metadata():
+                out[h.name()] = now - t
+        return out
+
     def name_to_hash(self) -> dict[str, str]:
         """Map on-disk torrent name -> infohash for active torrents (so eviction can stop them)."""
         return {h.name(): ih for ih, h in self._torrents.items() if h.has_metadata()}

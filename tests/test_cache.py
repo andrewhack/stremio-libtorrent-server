@@ -87,3 +87,94 @@ def test_evict_skips_pinned_names(tmp_path, monkeypatch):
     cache.evict_once(str(tmp_path), budget=1_000_000, engine=FakeEngine(), grace=0)
     assert "pinned-movie" not in removed
     assert "other-movie" in removed
+
+
+# --- eviction diagnostics. A 4K title vanished mid-evening on 2026-08-12 and the log could not say
+# whether it had been idle for an hour or was being watched: it recorded only name and size.
+
+
+class _AgeEngine:
+    """Engine stub exposing the three hooks evict_once uses, plus access_ages."""
+
+    def __init__(self, ages=None, hashes=None, recent=()):
+        self._ages, self._hashes, self._recent = ages or {}, hashes or {}, set(recent)
+
+    def recent_names(self, grace):
+        return self._recent
+
+    def pinned_names(self):
+        return set()
+
+    def name_to_hash(self):
+        return self._hashes
+
+    def access_ages(self):
+        return self._ages
+
+    def remove(self, ih):
+        pass
+
+
+def _oversize(tmp_path, *names, size=2_000_000):
+    old = time.time() - 10_000
+    for n in names:
+        f = tmp_path / n
+        f.write_bytes(b"x" * size)
+        os.utime(f, (old, old))
+
+
+def test_eviction_log_carries_infohash_and_age(tmp_path, caplog):
+    _oversize(tmp_path, "movie.mkv")
+    eng = _AgeEngine(ages={"movie.mkv": 2460.0}, hashes={"movie.mkv": "ab" * 20})
+    with caplog.at_level("INFO", logger="stremiosrv.cache"):
+        evict_once(str(tmp_path), budget=1000, engine=eng, grace=300)
+    line = "\n".join(r.getMessage() for r in caplog.records)
+    assert "ab" * 20 in line          # which torrent, not just which title
+    assert "41m ago" in line          # 2460s -> 41 minutes: a clean reclaim, not a live stream
+
+
+def test_eviction_log_says_unserved_when_never_requested(tmp_path, caplog):
+    """A leftover on disk with no access record must not be reported as freshly served."""
+    _oversize(tmp_path, "leftover.mkv")
+    with caplog.at_level("INFO", logger="stremiosrv.cache"):
+        evict_once(str(tmp_path), budget=1000, engine=_AgeEngine(), grace=300)
+    msgs = "\n".join(r.getMessage() for r in caplog.records)
+    assert "unserved" in msgs and "no-handle" in msgs
+
+
+def test_over_budget_with_nothing_evictable_warns(tmp_path, caplog):
+    """The silent case: protecting everything is correct, but the cache then sits over budget
+    forever and the log used to say nothing at all. Next stop is a full disk."""
+    _oversize(tmp_path, "a.mkv", "b.mkv")
+    eng = _AgeEngine(recent=("a.mkv", "b.mkv"))
+    with caplog.at_level("WARNING", logger="stremiosrv.cache"):
+        res = evict_once(str(tmp_path), budget=1000, engine=eng, grace=1800)
+    assert res["deleted"] == []
+    warn = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert warn, "over budget with nothing evictable must be visible"
+    assert "nothing is evictable" in warn[0].getMessage()
+    assert "grace=1800s" in warn[0].getMessage()
+
+
+def test_no_warning_when_under_budget(tmp_path, caplog):
+    _oversize(tmp_path, "a.mkv")
+    with caplog.at_level("WARNING", logger="stremiosrv.cache"):
+        evict_once(str(tmp_path), budget=10_000_000, engine=_AgeEngine(recent=("a.mkv",)), grace=1800)
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+
+def test_no_warning_when_something_was_evicted(tmp_path, caplog):
+    _oversize(tmp_path, "keep.mkv", "drop.mkv")
+    eng = _AgeEngine(recent=("keep.mkv",))
+    with caplog.at_level("WARNING", logger="stremiosrv.cache"):
+        res = evict_once(str(tmp_path), budget=2_500_000, engine=eng, grace=1800)
+    assert [d["name"] for d in res["deleted"]] == ["drop.mkv"]
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+
+def test_grace_default_is_long_enough_for_a_4k_player():
+    """300s was shorter than a 4K player's gap between range requests, so the title being watched
+    could age out of protection while the cache was over budget."""
+    from stremiosrv.config import Settings
+
+    assert Settings().cache_evict_grace >= 1800

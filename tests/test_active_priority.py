@@ -86,3 +86,49 @@ def test_mark_idle_underflow_is_safe() -> None:
     h.mark_idle()  # no active stream -> must not go negative or crash
     assert not h.is_active()
     assert fake.prio[0] == IDLE_FILE_PRIO
+
+
+def test_access_ages_reports_seconds_since_last_serve():
+    """Feeds the eviction log. Keyed by on-disk name, because that is what the cache scanner sees."""
+    import time as _t
+
+    from stremiosrv.torrent.engine import Engine
+
+    eng = Engine.__new__(Engine)          # no libtorrent session needed for this accessor
+    now = _t.monotonic()
+    eng._last_access = {"aa" * 20: now - 120.0, "bb" * 20: now - 3600.0}
+
+    class _H:
+        def __init__(self, n):
+            self._n = n
+
+        def has_metadata(self):
+            return True
+
+        def name(self):
+            return self._n
+
+    eng._torrents = {"aa" * 20: _H("recent.mkv"), "bb" * 20: _H("stale.mkv")}
+    ages = eng.access_ages()
+    assert 119 <= ages["recent.mkv"] <= 130
+    assert 3599 <= ages["stale.mkv"] <= 3610
+
+
+def test_access_ages_skips_handles_without_metadata():
+    """A magnet still resolving has no name to key on — it must not appear rather than crash."""
+    import time as _t
+
+    from stremiosrv.torrent.engine import Engine
+
+    eng = Engine.__new__(Engine)
+    eng._last_access = {"cc" * 20: _t.monotonic()}
+
+    class _NoMeta:
+        def has_metadata(self):
+            return False
+
+        def name(self):
+            raise AssertionError("name() must not be called without metadata")
+
+    eng._torrents = {"cc" * 20: _NoMeta()}
+    assert eng.access_ages() == {}

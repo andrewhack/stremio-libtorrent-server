@@ -79,7 +79,8 @@ update fails loudly. Note the overview has a length cap (~25k characters) the RE
 | `STREMIOSRV_HTTP_PORT` | `11470` | streaming-server API port |
 | `STREMIOSRV_BT_LISTEN_PORT` | `6881` | BitTorrent peer port (TCP+UDP) |
 | `STREMIOSRV_CACHE_ROOT` | `/root/.stremio-server` | download/transcode cache |
-| `STREMIOSRV_CACHE_SIZE` | `2147483648` | cache size in bytes |
+| `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | download-cache budget in bytes; keep it **above your largest file** |
+| `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | seconds a served torrent is safe from eviction |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `200` | libtorrent connection cap |
 | `STREMIOSRV_TRANSCODE_PROFILE` | autodetect | force a HW profile |
 
