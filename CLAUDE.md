@@ -105,6 +105,14 @@ in `docs/DEVOPS.md`.
   is an overlay, and a missing GPU must never block startup.
 - **Content-neutral infrastructure.** The server streams whatever a Stremio addon hands it; it
   bundles no content and is not a source. Keep that framing in code, docs, and commit messages.
+- **Public docs get illustrative values, never copied output.** Release notes, the README and the
+  Docker Hub overview are the most widely read things this project ships. A pasted log line carries
+  file sizes, cache totals and timestamps that together describe a real library and when someone was
+  watching it — redacting the titles does not fix that, because the numbers and the clock still do
+  the describing. Write the shape, not the capture: `evicted <name> [<infohash>] (<size> MiB, last
+  served 41m ago)`, never the line a real server printed. The same goes for `/stats.json` bodies,
+  `docker logs` excerpts and screenshots. v1.3.1 shipped with a real eviction log and had to be
+  rewritten after publication.
 - **This repo is public.** No internal hostnames, customer references, credentials, or planning
   scratch. MIT (`LICENSE`), declared in `pyproject.toml` and shipped in the image.
 - Dockerised-service conventions apply: `compose.yaml` carries the `monitor.*` labels and the
