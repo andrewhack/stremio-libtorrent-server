@@ -74,6 +74,8 @@ is not in `config.json`). It verifies the result by reading the page back, so a 
 update fails loudly. Note the overview has a length cap (~25k characters) the README is not far from.
 
 ### Configuration (env vars, prefix `STREMIOSRV_`)
+Sizes and rates accept units (`64GiB`, `512MiB`) as well as plain byte counts. `GiB` is binary, `GB`/`G` decimal; `b` never means bits.
+
 | Var | Default | Purpose |
 |---|---|---|
 | `STREMIOSRV_HTTP_PORT` | `11470` | streaming-server API port |
@@ -81,7 +83,7 @@ update fails loudly. Note the overview has a length cap (~25k characters) the RE
 | `STREMIOSRV_CACHE_ROOT` | `/root/.stremio-server` | download/transcode cache |
 | `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | download-cache budget in bytes; keep it **above your largest file** |
 | `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | seconds a served torrent is safe from eviction |
-| `STREMIOSRV_BT_MAX_CONNECTIONS` | `200` | libtorrent connection cap |
+| `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | libtorrent connection cap |
 | `STREMIOSRV_TRANSCODE_PROFILE` | autodetect | force a HW profile |
 
 ### Web player (all-in-one)

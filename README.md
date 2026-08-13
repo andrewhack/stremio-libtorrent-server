@@ -164,13 +164,15 @@ Notes:
 
 Everything is a plain `-e NAME=value` environment variable:
 
+> **Sizes and rates accept units.** `64GiB`, `512MiB`, `1.5GiB`, `2MiB` — or a plain byte count, which is what these have always taken and still do. Note `GiB` is binary while `GB`/`G` are decimal (`64G` is ~4.4 GiB *less* than `64GiB`), and a lowercase `b` does not mean bits: these are bytes, and the rate limits are bytes per second.
+
 | Setting | Default | What it does |
 |---|---|---|
 | `IPADDRESS` | *(unset)* | Your server IP → auto **trusted TV cert** via `*.stremio.rocks`. Unset → self-signed. |
 | `SERVER_URL` | auto | URL the web player targets. Set for a custom domain. |
 | `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | Download-cache budget in bytes (LRU-evicted). Keep it **above your largest file**. |
 | `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | Seconds a torrent stays safe from eviction after it was last served. Raise it if a player buffers long enough between range requests that the title being watched ages out. |
-| `STREMIOSRV_READAHEAD_BYTES` | `134217728` (128 MiB) | Playhead buffer — bigger absorbs more swarm jitter (fewer rebuffers). |
+| `STREMIOSRV_READAHEAD_BYTES` | `268435456` (256 MiB) | Playhead buffer — bigger absorbs more swarm jitter (fewer rebuffers). |
 | `STREMIOSRV_BT_LISTEN_PORT` | `6881` | BitTorrent peer port (TCP **and** UDP, IPv4 **and** IPv6). The one to forward. **If you change it, publish the *same* port** — the compose files and `docker/launch.sh` follow this var automatically; a hand-rolled `docker run` must use matching `-p <port>:<port>/tcp -p <port>:<port>/udp` (mapping to a *different* container port silently kills inbound peering). |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | Max peer connections. |
 | `STREMIOSRV_DOWNLOAD_RATE_LIMIT` | `0` | Cap download throughput in **bytes/sec** (`0` = unlimited). E.g. `12500000` ≈ 100 Mbit/s. |
