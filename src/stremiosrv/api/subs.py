@@ -130,10 +130,10 @@ def subtitles_proxy(ext: str, source: str = Query(alias="from")) -> Response:
         raise HTTPException(status_code=400, detail="only http(s) subtitle sources are allowed")
     req = urllib.request.Request(source, headers={"User-Agent": _FETCH_UA})
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 — scheme checked above
+        with urllib.request.urlopen(req, timeout=10) as r:
             raw = r.read()
             content_encoding = r.headers.get("Content-Encoding", "")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise HTTPException(status_code=502, detail="failed to fetch subtitle") from e
     text = decode_subtitle(_decompress(raw, content_encoding))
     if ext.lower() == "vtt":
@@ -191,7 +191,7 @@ def opensub_hash(request: Request, videoUrl: str | None = None, mediaURL: str | 
 
 
 @router.get("/subtitleSignature")
-def subtitle_signature(videoUrl: str | None = None, container: str | None = None) -> dict:  # noqa: N803
+def subtitle_signature(videoUrl: str | None = None, container: str | None = None) -> dict:
     """Embedded-subtitle signature, in the stock envelope:
     `{"error": null, "result": {"signature": <string|null>}}`.
 

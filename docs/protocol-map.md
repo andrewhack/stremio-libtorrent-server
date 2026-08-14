@@ -131,10 +131,16 @@ torrents. Low priority; many torrents aren't archived. Defer unless fixtures sho
 5. **§4 subtitles + opensubHash** (Stage 4).
 6. **§5 built-in addon, §6 archives, §7 yt/cast** — confirm need; likely skip.
 
-## Still TODO in Stage 0 (needs the running server — Task 0.3)
-Capture **response bodies** (shape ⏳) for: `/settings`, `/network-info`, `/device-info`,
-`/:hash/:idx/stats.json`, `/hwaccel-profiler`, `/hlsv2/probe`, a `master.m3u8` + `video0.m3u8`,
-and the Range response headers of `/:hash/:idx`. These become the conformance fixtures.
+## Response-body capture — done
+
+The shapes this section once listed as outstanding (`/settings`, `/network-info`, `/device-info`,
+`/:hash/:idx/stats.json`, `/hwaccel-profiler`, `/hlsv2/probe`, `master.m3u8` + `video0.m3u8`, and
+the Range response headers of `/:hash/:idx`) were captured and are recorded below. They became the
+conformance fixtures, which now live in the `stremio-loop` repo and gate every release.
+
+What is genuinely still unmapped is narrower: the `/proxy` route for non-torrent/debrid streams
+(§3), and the built-in addon / archive / cast families (§5–§7), which are listed above as
+confirm-need-then-likely-skip rather than as work in progress.
 
 ---
 

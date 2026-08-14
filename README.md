@@ -211,6 +211,9 @@ off for months and then gets plugged back in. A corrupt or missing file is not a
 falls back to a normal cold start. Set `STREMIOSRV_DHT_BOOTSTRAP_NODES` if you would rather not use
 the built-in routers for that first boot either.
 
+**Next-episode prefetch** (opt-in, off by default) pulls the head of the next episode in a pack so *Next* starts instantly — see [the full description on GitHub](https://github.com/andrewhack/stremio-libtorrent-server#next-episode-prefetch).
+
+<!--hub:skip-->
 ### Next-episode prefetch
 
 Off by default. With `STREMIOSRV_PREFETCH_NEXT=true`, the server watches how much of the current
@@ -265,6 +268,7 @@ across your own devices and anyone you share the tailnet with, with a browser/TV
 
 ---
 
+<!--/hub:skip-->
 ## 🧠 Why it exists
 
 The stock Stremio streaming server is closed-source and, in practice:

@@ -23,11 +23,11 @@ from fastapi.responses import StreamingResponse
 from stremiosrv.app import (
     _INCOMPLETE_MSG,
     _TRUNCATED_BODY_MSG,
+    SuppressClientDisconnect,
     _all_benign_stream_end,
     _DropTruncationFollowup,
     _is_truncated_body,
     _truncated,
-    SuppressClientDisconnect,
 )
 
 DECLARED = 100  # what the route promises in Content-Length

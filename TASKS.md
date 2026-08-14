@@ -12,12 +12,12 @@ what "done" looks like, so it can be picked up without context.
 
 ## Protocol
 
-- [ ] **`HEAD` is not accepted on the `hlsv2` routes.** `GET /hlsv2/probe` answers 200 and `HEAD`
-  answers 405, while the byte-range route handles both (`HEAD` → 206). The reference server accepts
-  `HEAD` across its surface, so this is a fidelity gap even though no client is currently known to
-  rely on it — a client that probes with `HEAD` before playing would see a hard failure.
-  *Done =* the `hlsv2` routes answer `HEAD` with the same headers as `GET` and an empty body, plus a
-  conformance check so it cannot regress.
+- [x] **`HEAD` is accepted on the `hlsv2` read routes.** FastAPI does not add HEAD to a `@router.get`
+  route the way bare Starlette does, so every hlsv2 route answered 405 while the byte-range route
+  answered 206. `/probe`, `/master.m3u8` and the segment route now declare both methods; the loop's
+  `head-parity` conformance check compares HEAD against GET on both surfaces so it cannot regress.
+  `/destroy` stays GET-only on purpose — HEAD is defined as safe, and that route tears a transcode
+  job down, so a crawler or link-checker must not be able to end a playback.
 
 - [ ] **`/subtitleSignature` always answers `{"signature": null}`.** `stremio-video` 0.0.93+ calls
   it once per load whose probe does not rule out an embedded subtitle track, but the reference
@@ -30,20 +30,21 @@ what "done" looks like, so it can be picked up without context.
 
 ## Tooling & docs
 
-- [ ] **Ruff 0.16 migration.** The project pins `ruff==0.15.15` and is clean against it; `0.16.x`
-  reports 73 findings under its newer default rules. Nothing is wrong with the code — the defaults
-  moved. Worth doing deliberately rather than discovering mid-release.
-  *Done =* the pin is raised, the findings are fixed or explicitly ignored in `pyproject.toml`, and
-  `ruff check` is clean at the new version.
+- [x] **Ruff 0.16 migration — done by pinning the rule *selection*, not chasing the findings.** The
+  code never rotted: 0.16 widened ruff's built-in default set, which turned a clean tree into 66
+  findings with no source change (0.16 against the classic `E4,E7,E9,F` set is clean). The lint
+  surface is now declared in `pyproject.toml`, so upgrading ruff changes behaviour only when we edit
+  that list. 35 findings were auto-fixed, 13 resolved by hand, `SIM105` and the prose-dash rules
+  ignored with reasons, and bugbear told that FastAPI's `Query`/`Depends` are immutable calls. Clean
+  under both 0.15.15 and 0.16.3.
 
-- [ ] **Stale TODO heading in `docs/protocol-map.md`.** "Still TODO in Stage 0" asks for response-body
-  captures that already exist in the "Captured shapes" section directly beneath it, and which have
-  since become the conformance fixtures. The heading outlived the work.
-  *Done =* the heading is removed or rewritten to describe what is genuinely still unmapped.
+- [x] **Stale TODO heading in `docs/protocol-map.md` rewritten.** "Still TODO in Stage 0" asked for
+  captures that already sat directly beneath it and had long since become the conformance fixtures.
+  It now records that work as done and names what is genuinely unmapped instead: `/proxy`, and the
+  built-in addon / archive / cast families.
 
-- [ ] **The Docker Hub overview is close to its length limit.** The page is capped at 25,000 bytes,
-  and the README had to have its TLS appendix moved behind `<!--hub:skip-->` markers to fit. About
-  2 KB of headroom remains. The publish step checks the size and fails before uploading, so this
-  cannot half-publish — but it will stop a release when it trips.
-  *Done =* either the README is restructured so the Hub copy has lasting headroom, or the overview
-  is reduced to a short summary that links to the full README.
+- [x] **The Docker Hub overview has lasting headroom.** The page is capped at 25,000 bytes and had
+  ~330 left, which is one edit from blocking a release. The TLS appendix and the next-episode
+  prefetch section — reference material for someone already running the server, not getting-started
+  material — moved behind `<!--hub:skip-->` with pointers to the full README. The Hub copy is now
+  ~18.9 kB, leaving over 6 kB. The publish step still checks the size and fails before uploading.

@@ -22,8 +22,7 @@ except ImportError:  # libtorrent not installed (e.g. test environments without 
 from stremiosrv import cache as cachemod
 from stremiosrv import metrics
 from stremiosrv import pins as pinsmod
-from stremiosrv.torrent import dht_state
-from stremiosrv.torrent import prefetch
+from stremiosrv.torrent import dht_state, prefetch
 from stremiosrv.torrent.picker import pieces_for_range
 from stremiosrv.torrent.trackers import merge_trackers
 
@@ -85,9 +84,7 @@ def should_stop_seeding(*, pinned: bool, finished: bool, completed_at: float | N
         return False
     if not seed_on_complete:
         return True
-    if max_seed_minutes > 0 and (now - completed_at) >= max_seed_minutes * 60:
-        return True
-    return False
+    return max_seed_minutes > 0 and (now - completed_at) >= max_seed_minutes * 60
 
 
 def should_resume_on_open(*, paused: bool, finished: bool) -> bool:
@@ -118,7 +115,7 @@ def adaptive_sequential(buffer_bytes: int, currently_sequential: bool, low: int,
 class Handle:
     """Thin wrapper over `lt.torrent_handle` exposing only what the API layer needs."""
 
-    def __init__(self, h: "lt.torrent_handle") -> None:
+    def __init__(self, h: lt.torrent_handle) -> None:
         self._h = h
         self.pinned = False
         # Playhead pieces rushed to priority 7 (see boost_piece). Mutated from the streaming thread
@@ -459,7 +456,7 @@ class Handle:
         except Exception:  # noqa: BLE001 — deadline is best-effort
             pass
 
-    def raw(self) -> "lt.torrent_handle":
+    def raw(self) -> lt.torrent_handle:
         return self._h
 
 
@@ -697,12 +694,12 @@ class Engine:
             h.pinned = True
             self._full_priority(h)
 
-    def _full_priority(self, h: "Handle") -> None:
+    def _full_priority(self, h: Handle) -> None:
         n = h.num_pieces() if h.has_metadata() else 0
         if n:
             h.raw().prioritize_pieces([1] * n)
 
-    def _remaining_bytes(self, h: "Handle") -> int:
+    def _remaining_bytes(self, h: Handle) -> int:
         st = h.status()
         return max(0, st.total_wanted - st.total_done)
 
@@ -829,7 +826,7 @@ class Engine:
                 idle_limit=self._idle_download_rate_limit,
             ))
 
-    def note_stream_open(self, h: "Handle") -> None:
+    def note_stream_open(self, h: Handle) -> None:
         """A playback stream opened: promote its played file to active priority and re-apply the
         cross-torrent bandwidth caps so idle torrents yield to it.
 
@@ -844,7 +841,7 @@ class Engine:
         h.mark_active()
         self._apply_bandwidth_policy()
 
-    def note_stream_close(self, h: "Handle") -> None:
+    def note_stream_close(self, h: Handle) -> None:
         """A playback stream closed: demote to idle-low and re-apply cross-torrent bandwidth caps."""
         h.mark_idle()
         self._apply_bandwidth_policy()
@@ -904,7 +901,7 @@ class Engine:
                         warned = True
                         logger.warning("prefetch tick failed (further failures suppressed): %s", exc)
 
-    def _prefetch_tick(self, h: "Handle") -> None:
+    def _prefetch_tick(self, h: Handle) -> None:
         """One prefetch decision for one torrent.
 
         Gates are ordered cheapest-first on purpose: the O(pieces-in-file) completeness scan only

@@ -1,4 +1,5 @@
 """Next-episode prefetch at the Handle / Engine level (fake libtorrent handle, no session)."""
+import itertools
 import threading
 
 from stremiosrv import metrics
@@ -154,16 +155,16 @@ def test_focus_file_does_not_reset_the_cursor_when_focus_is_unchanged():
 
 
 def test_file_complete_true_when_every_piece_present():
-    assert Handle(_FakeLT(have=range(0, 100))).file_complete(0) is True
+    assert Handle(_FakeLT(have=range(100))).file_complete(0) is True
 
 
 def test_file_complete_false_on_a_single_hole():
-    h = Handle(_FakeLT(have=set(range(0, 100)) - {57}))
+    h = Handle(_FakeLT(have=set(range(100)) - {57}))
     assert h.file_complete(0) is False
 
 
 def test_file_complete_false_for_an_untouched_file():
-    assert Handle(_FakeLT(have=range(0, 100))).file_complete(1) is False
+    assert Handle(_FakeLT(have=range(100))).file_complete(1) is False
 
 
 def test_file_complete_false_for_a_zero_size_file():
@@ -219,7 +220,7 @@ class _StubEngine:
 
 def _armed(*, complete_current=True, paused=False):
     """A 3-episode pack: episode 1 focused and (by default) fully on disk, cursor past the trigger."""
-    lt_h = _FakeLT(have=range(0, 100) if complete_current else range(0, 99))
+    lt_h = _FakeLT(have=range(100) if complete_current else range(99))
     h = Handle(lt_h)
     h.focus_file(0)
     h.mark_active()
@@ -348,7 +349,7 @@ def test_tick_deduplicates_overlapping_head_and_tail_pieces(monkeypatch):
     feeds `planned` (and the info log) must not be inflated by counting a piece twice."""
     monkeypatch.setattr(prefetch, "head_pieces", lambda *a, **kw: [100, 101, 102])
     monkeypatch.setattr(prefetch, "tail_pieces", lambda *a, **kw: [102, 103])
-    h, lt_h = _armed()
+    h, _lt_h = _armed()
     metrics.reset()
 
     armed_calls = []
@@ -379,7 +380,7 @@ def test_tick_returns_when_metadata_is_not_yet_available():
 
 
 def test_tick_returns_when_nothing_is_focused_yet():
-    lt_h = _FakeLT(have=range(0, 100))
+    lt_h = _FakeLT(have=range(100))
     h = Handle(lt_h)
     h.mark_active()
     _StubEngine()._prefetch_tick(h)
@@ -547,7 +548,7 @@ def test_route_records_positions_monotonically_across_multiple_chunks(tmp_path):
     assert r.status_code == 206
     assert len(recorded) > 1, "file spans multiple chunks; the cursor must be recorded per chunk"
     positions = [pos for pos, _ in recorded]
-    assert all(a < b for a, b in zip(positions, positions[1:])), \
+    assert all(a < b for a, b in itertools.pairwise(positions)), \
         "recorded positions must increase monotonically"
     assert all(total == file_size for _, total in recorded), "total must stay the whole-file size"
     assert recorded[-1] == (file_size, file_size)
@@ -632,7 +633,7 @@ def test_unaligned_boundary_piece_is_already_downloaded_when_armed():
     test that would catch a future change that relaxes file_complete's all-or-nothing check."""
     # File 0 spans pieces 0..100 with this unaligned size -- piece 100 is the boundary, shared with
     # the start of file 1's byte range.
-    lt_h = _FakeLT(have=range(0, 101), size=EP_UNALIGNED)
+    lt_h = _FakeLT(have=range(101), size=EP_UNALIGNED)
     h = Handle(lt_h)
     h.focus_file(0)
     h.mark_active()

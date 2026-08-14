@@ -13,7 +13,7 @@ def test_range_serves_first_bytes():
         pytest.skip("set TEST_MAGNET to a legal magnet")
     try:
         from stremiosrv.torrent.engine import Engine
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any import failure means 'skip', not 'fail'
         pytest.skip(f"libtorrent unavailable: {e}")
     from stremiosrv.app import create_app
 

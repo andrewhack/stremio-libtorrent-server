@@ -5,8 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from stremiosrv import health
-from stremiosrv.api import casting, handshake, hls, netcheck, pins, playback, subs
 from stremiosrv.api import cache as cache_api
+from stremiosrv.api import casting, handshake, hls, netcheck, pins, playback, subs
 from stremiosrv.config import Settings
 
 # Exception leaf types that mean "the client went away mid-stream" (vs a real server bug). Matched by
@@ -113,7 +113,7 @@ class SuppressClientDisconnect:
     async def __call__(self, scope, receive, send) -> None:
         try:
             await self.app(scope, receive, send)
-        except BaseException as exc:  # noqa: BLE001 — re-raised below unless it's a benign end
+        except BaseException as exc:
             if scope.get("type") == "http" and _all_benign_stream_end(exc):
                 if any(_is_truncated_body(leaf) for leaf in _leaves(exc)):
                     _truncated.set(True)  # silences uvicorn's follow-up for THIS request only
@@ -154,17 +154,15 @@ def build_app() -> FastAPI:
 
     Run with:  uvicorn stremiosrv.app:build_app --factory --host 0.0.0.0 --port <p>
     """
+    import os
     import threading
 
     from stremiosrv.cache import run_evictor
     from stremiosrv.torrent.engine import Engine
-    from stremiosrv.transcode.converter import Converter
-    from stremiosrv.transcode.profiler import detect_profile
-
-    import os
-
     from stremiosrv.torrent.tracker_source import TrackerSource
     from stremiosrv.torrent.trackers import parse_tracker_string
+    from stremiosrv.transcode.converter import Converter
+    from stremiosrv.transcode.profiler import detect_profile
 
     settings = Settings()
     settings.transcode_profile = settings.transcode_profile or detect_profile()

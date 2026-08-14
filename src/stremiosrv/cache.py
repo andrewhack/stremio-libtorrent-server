@@ -193,6 +193,6 @@ def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: 
                     "evicted %d item(s), %.1f -> %.1f GiB",
                     len(res["deleted"]), res["before"] / 1073741824, res["after"] / 1073741824,
                 )
-        except Exception:  # noqa: BLE001 — never let the evictor thread die
+        except Exception:
             logger.exception("eviction pass failed")
         time.sleep(interval)

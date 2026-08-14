@@ -20,23 +20,23 @@ def build_audio_cmd(media_url: str, decision: dict, channels: int = 2) -> list[s
 def build_video_cmd(media_url: str, decision: dict, profile: str | None) -> list[str]:
     base = ["ffmpeg", "-hide_banner"]
     if decision.get("action") == "copy":
-        return base + ["-i", media_url, "-map", "v:0",
-                       "-c:v", "copy", "-force_key_frames:v", "source",
-                       "-f", "mp4", "pipe:1"]
+        return [*base, "-i", media_url, "-map", "v:0",
+                "-c:v", "copy", "-force_key_frames:v", "source",
+                "-f", "mp4", "pipe:1"]
 
     w = decision.get("scale_width")
     if profile == "nvenc-linux":
         # NVDEC decode, CPU scale (Pascal-safe: 10-bit p010 -> 8-bit), NVENC encode
-        cmd = base + ["-hwaccel", "cuda", "-i", media_url, "-map", "v:0"]
+        cmd = [*base, "-hwaccel", "cuda", "-i", media_url, "-map", "v:0"]
         vf = f"scale={w}:-2:flags=lanczos,format=yuv420p" if w else "format=yuv420p"
         cmd += ["-vf", vf, "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull"]
     elif profile and profile.startswith("vaapi"):
-        cmd = base + ["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi",
-                      "-i", media_url, "-map", "v:0"]
+        cmd = [*base, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi",
+               "-i", media_url, "-map", "v:0"]
         vf = f"scale_vaapi=w={w}:h=-2" if w else "format=nv12|vaapi,hwupload"
         cmd += ["-vf", vf, "-c:v", "h264_vaapi"]
     else:  # CPU fallback
-        cmd = base + ["-i", media_url, "-map", "v:0"]
+        cmd = [*base, "-i", media_url, "-map", "v:0"]
         if w:
             cmd += ["-vf", f"scale={w}:-2:flags=lanczos"]
         cmd += ["-c:v", "libx264", "-preset", "veryfast"]

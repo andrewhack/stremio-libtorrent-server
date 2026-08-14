@@ -13,7 +13,7 @@ pytest.importorskip("libtorrent")
 def _engine_or_skip(port: int):
     try:
         from stremiosrv.torrent.engine import Engine
-    except Exception as e:  # libtorrent not installed (e.g. dev laptop)
+    except Exception as e:  # noqa: BLE001 — any import failure means 'skip', not 'fail'
         pytest.skip(f"libtorrent unavailable: {e}")
     return Engine(listen_port=port, cache_root="/tmp/st-cache")
 

@@ -13,7 +13,8 @@ def test_health_ok():
 
 
 def test_health_reports_version():
-    from stremiosrv.app import create_app
     from starlette.testclient import TestClient
+
+    from stremiosrv.app import create_app
     body = TestClient(create_app()).get("/health").json()
     assert "version" in body  # running server version for the admin Software Updates card

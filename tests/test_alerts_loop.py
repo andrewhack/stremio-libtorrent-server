@@ -5,7 +5,7 @@ import pytest
 
 pytest.importorskip("libtorrent")  # Engine imports libtorrent at module load
 
-from stremiosrv.torrent.engine import Engine  # noqa: E402
+from stremiosrv.torrent.engine import Engine
 
 
 def test_alerts_loop_polls_pop_never_wait():

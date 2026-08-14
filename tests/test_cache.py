@@ -64,10 +64,11 @@ def test_evict_once_protects_recent(tmp_path):
 
 
 def test_evict_skips_pinned_names(tmp_path, monkeypatch):
-    from stremiosrv import cache
     # two oversize entries; one is pinned -> only the unpinned one is evicted
     import os
     import time
+
+    from stremiosrv import cache
     old = time.time() - 10_000
     for name in ("pinned-movie", "other-movie"):
         d = tmp_path / name

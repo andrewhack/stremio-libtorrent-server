@@ -17,6 +17,7 @@ DEBIAN_MAGNET = (
 
 def test_pin_is_pinned_and_pinned_status(tmp_path):
     import json
+
     from stremiosrv.torrent.engine import Engine
     eng = Engine(listen_port=0, cache_root=str(tmp_path), cache_size=10 * 1024 ** 3)
     h = eng.add(DEBIAN_MAGNET)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _cache: dict[str, tuple[float, int | None]] = {}  # path -> (mtime, days_left|None)
 
@@ -17,10 +17,10 @@ def _parse_enddate(line: str) -> int | None:
     """Parse an openssl `notAfter=...` line into whole days from now (UTC). None if unparseable."""
     try:
         ds = line.strip().split("=", 1)[1]
-        exp = datetime.strptime(ds, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+        exp = datetime.strptime(ds, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=UTC)
     except (IndexError, ValueError):
         return None
-    return int((exp - datetime.now(timezone.utc)).total_seconds() // 86400)
+    return int((exp - datetime.now(UTC)).total_seconds() // 86400)
 
 
 def cert_days_left(path: str) -> int | None:

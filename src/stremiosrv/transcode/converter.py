@@ -79,7 +79,10 @@ class Converter:
             d = self.job_dir(job_id)
             d.mkdir(parents=True, exist_ok=True)
             argv = build_hls_cmd(media_url, decision, self.profile, d)
-            log = open(d / "ffmpeg.log", "wb")
+            # Not a context manager on purpose: this handle IS ffmpeg's stderr for the lifetime
+            # of the child process, so closing it at the end of a with-block would truncate the
+            # job's log the moment it starts writing. Released when the Popen is collected.
+            log = open(d / "ffmpeg.log", "wb")  # noqa: SIM115
             self._jobs[job_id] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
             return d
 

@@ -14,11 +14,11 @@ def test_decode_cyrillic_windows1251_not_mangled():
 
 
 def test_decode_clean_utf8_passthrough():
-    assert decode_subtitle("Héllo — привет".encode("utf-8")) == "Héllo — привет"
+    assert decode_subtitle("Héllo — привет".encode()) == "Héllo — привет"
 
 
 def test_decode_utf8_bom_stripped():
-    assert decode_subtitle("﻿hi".encode("utf-8")) == "hi"
+    assert decode_subtitle("﻿hi".encode()) == "hi"
 
 
 def test_decode_utf16():

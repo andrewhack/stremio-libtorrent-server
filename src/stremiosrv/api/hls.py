@@ -32,12 +32,22 @@ def _wait_file(path: Path, timeout: float) -> bool:
     return path.exists()
 
 
-@router.get("/probe")
+# HEAD is accepted on the read routes below. FastAPI, unlike bare Starlette, does NOT add HEAD to a
+# GET route, so `@router.get` alone answers 405 — which is what the byte-range route already avoids
+# by declaring both methods explicitly. Clients that probe a URL before playing it get a hard
+# failure otherwise.
+#
+# /destroy is deliberately NOT in that set. It is the one route here whose GET has a side effect
+# (it tears a transcode job down), and HEAD is defined as safe: a crawler, proxy or link-checker
+# sending HEAD must not be able to kill someone's playback. It stays GET-only until the reference
+# is shown to require otherwise.
+
+@router.api_route("/probe", methods=["GET", "HEAD"])
 def probe(mediaURL: str) -> dict:
     return probe_media(mediaURL)
 
 
-@router.get("/{job_id}/master.m3u8")
+@router.api_route("/{job_id}/master.m3u8", methods=["GET", "HEAD"])
 def master(
     job_id: str,
     request: Request,
@@ -66,7 +76,7 @@ def destroy(job_id: str, request: Request) -> dict:
     return {"ok": True}
 
 
-@router.get("/{job_id}/{filename}")
+@router.api_route("/{job_id}/{filename}", methods=["GET", "HEAD"])
 def serve_file(job_id: str, filename: str, request: Request):
     conv = _converter(request)
     if conv is None:

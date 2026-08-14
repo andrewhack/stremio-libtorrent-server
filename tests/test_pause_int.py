@@ -18,7 +18,11 @@ pytestmark = pytest.mark.integration
 
 lt = pytest.importorskip("libtorrent")
 
-from stremiosrv.torrent.engine import Engine, Handle, should_stop_seeding  # noqa: E402  (after importorskip)
+from stremiosrv.torrent.engine import (  # noqa: E402  (after importorskip)
+    Engine,
+    Handle,
+    should_stop_seeding,
+)
 
 AUTO_MANAGED = lt.torrent_flags.auto_managed
 PAUSED = lt.torrent_flags.paused

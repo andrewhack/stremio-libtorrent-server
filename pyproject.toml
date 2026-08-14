@@ -30,12 +30,32 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
-    "ruff>=0.15.15",
+    "ruff>=0.16.2",
 ]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+# The package requires >=3.12; py311 here was holding pyupgrade back from rewrites this code can use.
+target-version = "py312"
+
+# Selected explicitly, not left to the default. ruff 0.16 widened its built-in default set, which
+# turned a clean tree into 66 findings overnight without a line of code changing — a lint surface
+# that moves when the tool updates is not a standard, it is a surprise during a release. This list
+# is the project's own choice; upgrading ruff now changes behaviour only when we edit it.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "BLE", "SIM", "PIE", "RUF"]
+ignore = [
+    # try/except/pass here is deliberate and each instance carries a comment saying why it is safe
+    # to swallow. contextlib.suppress would be terser and would delete the explanation.
+    "SIM105",
+    # Prose in comments and docstrings uses en/em dashes and typographic quotes on purpose.
+    "RUF001", "RUF002", "RUF003",
+]
+
+# FastAPI's parameter markers are *called* in defaults by design — that is the framework's whole
+# signature idiom, not the mutable-default bug B008 exists to catch.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Query", "fastapi.Depends", "fastapi.Path", "fastapi.Body", "fastapi.Header"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

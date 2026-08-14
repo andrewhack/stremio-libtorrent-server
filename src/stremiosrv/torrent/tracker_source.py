@@ -27,7 +27,7 @@ def _http_get(url: str, timeout: float) -> str:
     """Fetch `url` and return the body text. Mirrors subs.py's urllib usage (scheme-guarded)."""
     if not url.startswith(("http://", "https://")):
         raise ValueError(f"refusing non-http(s) tracker list URL: {url!r}")
-    with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310 — scheme checked above
+    with urllib.request.urlopen(url, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
 
 
