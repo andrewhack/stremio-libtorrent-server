@@ -173,6 +173,8 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | Download-cache budget in bytes (LRU-evicted). Keep it **above your largest file**. |
 | `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | Seconds a torrent stays safe from eviction after it was last served. Raise it if a player buffers long enough between range requests that the title being watched ages out. |
 | `STREMIOSRV_READAHEAD_BYTES` | `268435456` (256 MiB) | Playhead buffer — bigger absorbs more swarm jitter (fewer rebuffers). |
+| `STREMIOSRV_STREAM_PIECE_TIMEOUT` | `30` | Seconds a request waits for one piece **mid-stream** before ending the stream (the player then re-requests). Raise it on a slow or thinly-peered swarm where the piece does arrive, just late — but it cuts both ways: when the piece is never coming, this is how long playback freezes before the retry that would have recovered it. |
+| `STREMIOSRV_STREAM_FIRST_PIECE_TIMEOUT` | `120` | Same, for the **first** piece of a request — a cold start: the beginning of playback, or a seek into a region nothing has downloaded yet. |
 | `STREMIOSRV_BT_LISTEN_PORT` | `6881` | BitTorrent peer port (TCP **and** UDP, IPv4 **and** IPv6). The one to forward. **If you change it, publish the *same* port** — the compose files and `docker/launch.sh` follow this var automatically; a hand-rolled `docker run` must use matching `-p <port>:<port>/tcp -p <port>:<port>/udp` (mapping to a *different* container port silently kills inbound peering). |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | Max peer connections. |
 | `STREMIOSRV_DOWNLOAD_RATE_LIMIT` | `0` | Cap download throughput in **bytes/sec** (`0` = unlimited). E.g. `12500000` ≈ 100 Mbit/s. |

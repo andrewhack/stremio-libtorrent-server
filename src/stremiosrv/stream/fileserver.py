@@ -40,6 +40,7 @@ def wait_and_read(
     save_path: str, handle, idx: int, start: int, end: int,
     timeout: float = 30.0, first_timeout: float = 120.0,
     chunk: int = 262144, window_bytes: int = 50_331_648, step_ms: int = 50,
+    info_hash: str = "",
 ) -> Generator[bytes, None, None]:
     """Yield bytes [start, end] (inclusive, file-relative) of file `idx`, blocking per chunk
     until the covering piece is available.
@@ -58,14 +59,19 @@ def wait_and_read(
     Maintains a sliding window of boosted+deadlined pieces ahead of the read position. The window
     is a fixed *byte budget* (not a piece count) so on big torrents with large pieces it stays a
     tight ~50 MiB region — a seek rushes the first piece at the target instead of spreading
-    bandwidth over ~1 GB."""
+    bandwidth over ~1 GB.
+
+    `info_hash` is only ever logged. It is passed in rather than read back off the handle for the
+    same reason the read cursor is recorded by the caller: this generator must never raise into the
+    ASGI layer, and `handle.status().info_hashes.v1` is one more call that could — on a handle the
+    evictor has just removed, precisely when the stream is failing and the log matters most."""
+    pos = start  # bound before the try so the except handler can always report where it stopped
     try:
         plen = handle.piece_length()
         base = handle.file_offset(idx)
         path = file_disk_path(save_path, handle, idx)
         total = handle.num_pieces()
         window = max(4, min(total, window_bytes // plen))  # pieces, derived from the byte budget
-        pos = start
         deadlined_to = (base + start) // plen - 1  # last piece we've already boosted
         yielded = False  # the first piece (cold start) gets the longer first_timeout budget
         while pos <= end:
@@ -85,8 +91,16 @@ def wait_and_read(
                 # Give up gracefully: end the stream (no raise) so the player just retries. Common on
                 # peer-starved boxes — surfaced via /netcheck. The resulting short body is absorbed
                 # by SuppressClientDisconnect; this warning is the diagnostic that survives.
+                # `served` is the field to read first. 0 means the stall was AT the requested offset
+                # — a cold seek target — so the swarm never delivered the piece the player asked for.
+                # Non-zero means the window ran dry partway through and the budget that expired was
+                # the shorter `timeout`, not `first_timeout`.
                 metrics.record_timeout()
-                logger.warning("piece %d not available within %.0fs (peer-starved?); ending stream", gp, budget)
+                logger.warning(
+                    "piece %d/%d not available within %.0fs (peer-starved?); ending stream "
+                    "[%s file %d, byte %d of range %d-%d, %d served]",
+                    gp, total, budget, info_hash or "?", idx, pos, start, end, pos - start,
+                )
                 return
             if had_to_wait:
                 metrics.record_stall(time.time() - wait_start)
@@ -110,5 +124,9 @@ def wait_and_read(
         # SuppressClientDisconnect. (Client disconnects raise GeneratorExit, not Exception, so they
         # pass through and close the generator normally.)
         metrics.record_timeout()
-        logger.warning("stream ended early (%s: %s); player will retry", type(e).__name__, e)
+        logger.warning(
+            "stream ended early (%s: %s); player will retry "
+            "[%s file %d, byte %d of range %d-%d, %d served]",
+            type(e).__name__, e, info_hash or "?", idx, pos, start, end, pos - start,
+        )
         return

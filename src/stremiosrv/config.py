@@ -49,6 +49,16 @@ class Settings(BaseSettings):
     seed_policy_interval: int = 15  # seconds between seeding-policy sweeps
     readahead_bytes: ByteSize = 268_435_456  # 256 MiB rushed playhead window (deeper = fewer rebuffers);
     # the rest of the played file fills via the full sequential background download (engine.focus_file)
+    # How long a byte-range request waits for one piece before giving up and ending the stream (the
+    # player then re-requests, so this is a stall budget, not a failure budget). The FIRST piece of a
+    # request gets the longer budget: it is a cold start — either the very beginning of playback or a
+    # seek into a region nothing has downloaded yet — while later pieces are being fed by an already
+    # warm sequential window. Raising `stream_piece_timeout` helps a slow or thinly-peered swarm,
+    # where the piece does arrive and the wait beats an interruption — but it cuts both ways: when
+    # the piece is never coming, it is exactly how long playback freezes before the retry that would
+    # have recovered it. Tune it against what the ending-stream warnings say actually happened.
+    stream_piece_timeout: float = 30.0
+    stream_first_piece_timeout: float = 120.0
     resume_save_interval: int = 30  # seconds between periodic fast-resume saves (survives ungraceful stop)
     transcode_profile: str | None = None  # set by HW autodetect (later stage)
     # Operator-supplied extra trackers appended to every torrent's announce list (in addition to the

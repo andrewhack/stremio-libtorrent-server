@@ -167,7 +167,8 @@ def serve(info_hash: str, idx: int, request: Request):
         return Response(status_code=206, headers=headers)
 
     # The sliding boost window (in wait_and_read) concentrates bandwidth on the playhead.
-    readahead = request.app.state.settings.readahead_bytes
+    settings = request.app.state.settings
+    readahead = settings.readahead_bytes
 
     def tracked_stream():
         # Mark the torrent active for the life of the stream so its played file gets full download
@@ -191,7 +192,14 @@ def serve(info_hash: str, idx: int, request: Request):
         eng.note_stream_open(h)
         try:
             pos = start
-            stream = wait_and_read(eng.save_path(), h, idx, start, end, window_bytes=readahead)
+            stream = wait_and_read(
+                eng.save_path(), h, idx, start, end, window_bytes=readahead,
+                timeout=settings.stream_piece_timeout,
+                first_timeout=settings.stream_first_piece_timeout,
+                # Logged only, so a stream that dies names its torrent instead of just a piece
+                # number — which is the difference between "one title is starved" and "the box is".
+                info_hash=info_hash,
+            )
             try:
                 for chunk in stream:
                     pos += len(chunk)
