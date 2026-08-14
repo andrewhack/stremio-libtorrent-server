@@ -64,6 +64,9 @@ Python ≥3.12 · **FastAPI** + **uvicorn** · **libtorrent 2.0.11** · `pydanti
 - **`tests/`** — 48 files plus `tests/fixtures/`
 - **`docs/`** — `protocol-map.md`, `DEVOPS.md`, `cert-guide.md`, `monitoring.md`, `releases/`
   (one file per version, the release-notes source), `plans/`
+- **`TASKS.md`** — the open backlog: what the server does not do yet and why each item is still
+  open. Public, like the rest of the repo, so it carries no host names or deployment specifics —
+  operational chores belong in the ops notes, not here.
 
 The gate, the live monitor and the upstream drift detector are **not in this repo** — they are the
 four layers of `stremio-loop`, which references this server by image name and never imports it.
