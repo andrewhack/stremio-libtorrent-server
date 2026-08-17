@@ -10,6 +10,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+from stremiosrv import metrics
+
 
 def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: str | Path) -> list[str]:
     out_dir = str(out_dir)
@@ -84,6 +86,9 @@ class Converter:
             # job's log the moment it starts writing. Released when the Popen is collected.
             log = open(d / "ffmpeg.log", "wb")  # noqa: SIM115
             self._jobs[job_id] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
+            # Counted here, not in the route: the early return above means a player re-fetching
+            # master.m3u8 mid-playback reuses this job, and counting requests would multiply it.
+            metrics.record_hls_session(decision)
             return d
 
     def active_count(self) -> int:

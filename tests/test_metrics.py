@@ -4,6 +4,7 @@ import time
 from stremiosrv import metrics
 from stremiosrv.cache import usage
 from stremiosrv.stream.fileserver import wait_and_read
+from stremiosrv.transcode import converter
 
 
 def test_record_stall_and_timeout_snapshot():
@@ -14,7 +15,61 @@ def test_record_stall_and_timeout_snapshot():
     assert metrics.playback_stats() == {
         "stalls": 2, "stallSeconds": 2.0, "timeouts": 1,
         "prefetches": 0, "prefetchBytes": 0, "subtitleSignatureAsks": 0,
+        "hlsSessions": 0, "hlsReencodes": 0,
     }
+
+
+def test_hls_sessions_split_remux_from_reencode():
+    """Two numbers, not one: they cost wildly different amounts. An all-`copy` decision is a REMUX
+    — the container is rewrapped as HLS and not one frame is re-encoded."""
+    metrics.reset()
+    metrics.record_hls_session({"video": {"action": "copy"}, "audio": {"action": "copy"}})
+    metrics.record_hls_session({"video": {"action": "transcode", "scale_width": 1920},
+                                "audio": {"action": "copy"}})
+    metrics.record_hls_session({"video": {"action": "copy"}, "audio": {"action": "transcode"}})
+    s = metrics.playback_stats()
+    assert s["hlsSessions"] == 3
+    assert s["hlsReencodes"] == 2  # remuxes = sessions - reencodes = 1
+
+
+def test_hls_session_without_an_audio_stream_still_counts():
+    """decide() omits the audio key entirely for a video-only file; that must not crash or be
+    mistaken for a re-encode."""
+    metrics.reset()
+    metrics.record_hls_session({"video": {"action": "copy"}})
+    s = metrics.playback_stats()
+    assert s["hlsSessions"] == 1
+    assert s["hlsReencodes"] == 0
+
+
+def test_hls_counters_reset():
+    metrics.reset()
+    metrics.record_hls_session({"video": {"action": "transcode"}})
+    assert metrics.playback_stats()["hlsReencodes"] == 1
+    metrics.reset()
+    assert metrics.playback_stats() == {
+        "stalls": 0, "stallSeconds": 0.0, "timeouts": 0,
+        "prefetches": 0, "prefetchBytes": 0, "subtitleSignatureAsks": 0,
+        "hlsSessions": 0, "hlsReencodes": 0,
+    }
+
+
+def test_ensure_job_counts_one_session_per_new_job(tmp_path, monkeypatch):
+    """The count must follow JOBS, not requests. A player re-fetches master.m3u8 several times per
+    playback (three times in one observed capture), and ensure_job returns early for a job that is
+    still running — so the counter has to sit behind that check, not in the route."""
+    metrics.reset()
+
+    class _Running:
+        def poll(self): return None  # never exited, so the job stays "live"
+
+    monkeypatch.setattr(converter.subprocess, "Popen", lambda *a, **k: _Running())
+    conv = converter.Converter(str(tmp_path), profile=None)
+    decision = {"video": {"action": "copy"}, "audio": {"action": "copy"}}
+    conv.ensure_job("job-a", "http://example.invalid/a", decision)
+    conv.ensure_job("job-a", "http://example.invalid/a", decision)  # same live job
+    conv.ensure_job("job-b", "http://example.invalid/b", decision)
+    assert metrics.playback_stats()["hlsSessions"] == 2
 
 
 def test_subtitle_signature_asks_are_counted_and_reset():
