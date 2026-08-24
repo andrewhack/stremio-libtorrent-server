@@ -43,6 +43,13 @@ def serialize_stats(handle, idx: int | None = None) -> dict:
     return {
         "infoHash": str(st.info_hashes.v1), "name": (ti.name() if ti else ""),
         "peers": st.num_peers, "unchoked": unchoked, "queued": 0, "unique": st.num_peers,
+        # `queued`, `connectionTries` and `swarmPaused` are CONSTANTS, present only because the stock
+        # server's schema has them and stremio-core parses the whole object or none of it. libtorrent
+        # exposes no equivalent counter, so they are not diagnostics — do not read peering health out
+        # of them. A `connectionTries: 0` next to a live `swarmSize` looks like the engine has stopped
+        # dialling out; it means nothing at all, and it has already cost one wrong diagnosis.
+        # The real peering signals in this payload are `peers`/`swarmConnections` (st.num_peers,
+        # currently connected) and `swarmSize` (st.list_peers, known of) — plus /netcheck.json.
         "connectionTries": 0, "swarmPaused": False,
         "swarmConnections": st.num_peers, "swarmSize": st.list_peers,
         "selections": [], "wires": wires, "files": files,
