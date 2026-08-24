@@ -28,11 +28,30 @@ PROTECTED = frozenset({
 })
 
 
+def _real_size(st) -> int:
+    """Bytes a file actually occupies on disk, not what it will eventually be.
+
+    libtorrent pre-allocates the WHOLE torrent as a sparse file the moment it is added, so `st_size`
+    reports the finished size from the start and counts data nobody has downloaded yet. A
+    64%-complete 86.2 GiB torrent measured 92,598,768,617 by `st_size` and 56 GiB by `du` — the
+    evictor was deciding on a figure 31 GiB larger than the disk agreed with, and the operator was
+    reading an over-budget warning inflated by the same amount.
+
+    `min` of apparent and allocated rather than `st_blocks` alone: allocation rounds up to the block
+    size, so a 500-byte file would otherwise be billed 4 KiB, and a cache of many small files would
+    drift the other way. Under-counting slightly is the safe direction for a budget whose whole job
+    is predicting disk pressure. `st_blocks` is POSIX-only — absent on Windows, where the dev tests
+    run and where nothing is sparse anyway, so apparent size is the correct fallback there.
+    """
+    blocks = getattr(st, "st_blocks", None)
+    return st.st_size if blocks is None else min(st.st_size, blocks * 512)
+
+
 def _stat_tree(path: str) -> tuple[int, float]:
     """(total size in bytes, newest mtime) for a file or directory tree."""
     if os.path.isfile(path):
         st = os.stat(path)
-        return st.st_size, st.st_mtime
+        return _real_size(st), st.st_mtime
     total = 0
     latest = 0.0
     for dirpath, _dirs, files in os.walk(path):
@@ -41,7 +60,7 @@ def _stat_tree(path: str) -> tuple[int, float]:
                 st = os.stat(os.path.join(dirpath, f))
             except OSError:
                 continue
-            total += st.st_size
+            total += _real_size(st)
             latest = max(latest, st.st_mtime)
     return total, latest
 

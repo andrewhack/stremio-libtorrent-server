@@ -179,3 +179,57 @@ def test_grace_default_is_long_enough_for_a_4k_player():
     from stremiosrv.config import Settings
 
     assert Settings().cache_evict_grace >= 1800
+
+
+# --- sparse-file accounting. libtorrent pre-allocates the FULL torrent up front, so `st_size` counts
+# bytes that have not been downloaded. On 2026-08-24 a 64%-complete 86.2 GiB torrent was reported as
+# `cacheUsed: 92598768617` while `du` measured 56 GiB on disk — the evictor was acting on a number
+# 31 GiB larger than the disk agreed with.
+
+
+def test_real_size_ignores_undownloaded_bytes():
+    """A sparse file must be charged for what it occupies, not what it will eventually be."""
+    from stremiosrv.cache import _real_size
+
+    class St:  # 86 GiB apparent, 56 GiB allocated
+        st_size = 92_598_768_617
+        st_blocks = 60_129_542_144 // 512
+
+    assert _real_size(St()) == 60_129_542_144
+
+
+def test_real_size_does_not_round_small_files_up_to_a_block():
+    """Allocation rounds up; a 500-byte file must not be billed 4 KiB. Under-counting is the safe
+    direction for a budget whose job is predicting disk pressure."""
+    from stremiosrv.cache import _real_size
+
+    class St:
+        st_size = 500
+        st_blocks = 8  # one 4 KiB block
+
+    assert _real_size(St()) == 500
+
+
+def test_real_size_falls_back_to_apparent_without_st_blocks():
+    """Windows `os.stat_result` has no `st_blocks`; the dev machine must not crash on it."""
+    from stremiosrv.cache import _real_size
+
+    class St:
+        st_size = 1234
+
+    assert _real_size(St()) == 1234
+
+
+def test_scan_cache_reports_allocated_not_apparent(tmp_path):
+    """End-to-end on a real sparse file: this is the bug as the evictor actually sees it."""
+    import pytest
+
+    f = tmp_path / "torrent.mkv"
+    with open(f, "wb") as fh:
+        fh.truncate(64 * 1024 * 1024)  # 64 MiB apparent
+        fh.seek(0)
+        fh.write(b"x" * 4096)          # a few KiB actually written
+    if getattr(os.stat(f), "st_blocks", None) is None:
+        pytest.skip("no st_blocks on this platform (Windows); helper covered by unit tests above")
+    size = next(i["size"] for i in scan_cache(str(tmp_path)) if i["name"] == "torrent.mkv")
+    assert size < 8 * 1024 * 1024, f"sparse file charged {size} bytes of its 64 MiB apparent size"
