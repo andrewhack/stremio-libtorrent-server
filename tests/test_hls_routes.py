@@ -83,6 +83,9 @@ class _FakeConv:
 
         return pathlib.Path("/nonexistent")
 
+    def job_file(self, job_id, filename):
+        return self.job_dir(job_id) / filename
+
 
 def test_head_cannot_tear_down_a_transcode_job():
     """HEAD is defined as safe, and /destroy is the one route here whose GET has a side effect. It
