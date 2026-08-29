@@ -161,7 +161,7 @@ def build_app() -> FastAPI:
     from stremiosrv.torrent.engine import Engine
     from stremiosrv.torrent.tracker_source import TrackerSource
     from stremiosrv.torrent.trackers import parse_tracker_string
-    from stremiosrv.transcode.converter import Converter
+    from stremiosrv.transcode.converter import Converter, run_transcode_gc
     from stremiosrv.transcode.profiler import detect_profile
 
     settings = Settings()
@@ -200,11 +200,26 @@ def build_app() -> FastAPI:
     )
     engine.load_pins_into_session()
     converter = Converter(settings.cache_root, settings.transcode_profile)
+    # Every transcode directory on disk right now belongs to a process that no longer exists, so
+    # this sweep takes no grace. Without it a crash or a `docker restart` orphans the whole segment
+    # tree permanently: the evictor may not touch it, and only its own job id could have destroyed
+    # it. One such directory survived two months of restarts before this existed.
+    converter.sweep(max_age=0)
     # Background cache eviction so the download cache stays under budget during long real-world use.
     threading.Thread(
         target=run_evictor,
         args=(settings.cache_root, settings.cache_size, engine),
         kwargs={"interval": settings.cache_evict_interval, "grace": settings.cache_evict_grace},
+        daemon=True,
+    ).start()
+    # ...and the same for transcode output, which the evictor is forbidden to reclaim.
+    threading.Thread(
+        target=run_transcode_gc,
+        args=(converter,),
+        kwargs={
+            "interval": settings.transcode_gc_interval,
+            "max_age": settings.transcode_gc_max_age,
+        },
         daemon=True,
     ).start()
     # Wrap outermost so a mid-stream client disconnect doesn't spam the ASGI error log (see

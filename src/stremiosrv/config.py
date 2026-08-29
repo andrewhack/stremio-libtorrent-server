@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     stream_first_piece_timeout: float = 120.0
     resume_save_interval: int = 30  # seconds between periodic fast-resume saves (survives ungraceful stop)
     transcode_profile: str | None = None  # set by HW autodetect (later stage)
+    # Transcode output GC. HLS segments live in <cache_root>/transcode, which the evictor is
+    # forbidden to touch (it is in cache.PROTECTED), so nothing but this reclaims them. At
+    # `-hls_time 4` an hour of transcoded playback writes ~900 segment files, and a client that
+    # never calls /destroy — a killed TV app, a dropped connection, a restart — leaves every one of
+    # them behind. `max_age` is a grace, not a retention target: a directory younger than this is
+    # spared even when no process claims it, so a job caught between segment writes is never taken
+    # for garbage. Jobs with a live ffmpeg are spared regardless of age.
+    transcode_gc_interval: int = 300  # seconds between sweeps
+    transcode_gc_max_age: int = 600   # an unclaimed job dir older than this is removed
     # Operator-supplied extra trackers appended to every torrent's announce list (in addition to the
     # built-in DEFAULT_TRACKERS). Comma/space/newline separated; udp/http(s)/ws(s) URLs only.
     extra_trackers: str = ""

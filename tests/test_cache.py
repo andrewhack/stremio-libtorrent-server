@@ -233,3 +233,38 @@ def test_scan_cache_reports_allocated_not_apparent(tmp_path):
         pytest.skip("no st_blocks on this platform (Windows); helper covered by unit tests above")
     size = next(i["size"] for i in scan_cache(str(tmp_path)) if i["name"] == "torrent.mkv")
     assert size < 8 * 1024 * 1024, f"sparse file charged {size} bytes of its 64 MiB apparent size"
+
+
+# Transcode output lives under <cache_root>/transcode, which scan_cache skips because "transcode" is
+# in PROTECTED. That made a disk fill invisible: segments accumulated while cacheUsed still read
+# under budget and nothing in /stats.json accounted for the gap.
+
+def test_usage_reports_transcode_separately(tmp_path):
+    from stremiosrv.cache import usage
+
+    (tmp_path / "movie").mkdir()
+    (tmp_path / "movie" / "a.mkv").write_bytes(b"x" * 4096)
+    seg = tmp_path / "transcode" / "job1"
+    seg.mkdir(parents=True)
+    (seg / "seg0.m4s").write_bytes(b"y" * 8192)
+
+    u = usage(str(tmp_path), budget=1_000_000)
+    assert u["transcodeUsed"] > 0, "transcode footprint still invisible in /stats.json"
+    assert u["cacheUsed"] > 0
+    # Kept apart on purpose: folding transcode into cacheUsed would show the cache over budget
+    # while the evictor correctly refused to reclaim a protected directory.
+    assert u["transcodeUsed"] not in (u["cacheUsed"],) or u["cacheUsed"] != u["transcodeUsed"]
+
+
+def test_usage_reports_zero_transcode_before_anything_has_transcoded(tmp_path):
+    from stremiosrv.cache import usage
+
+    assert usage(str(tmp_path), budget=1_000_000)["transcodeUsed"] == 0
+
+
+def test_transcode_is_still_never_evictable(tmp_path):
+    """Regression guard: reporting it must not have made it a deletion candidate."""
+    seg = tmp_path / "transcode" / "job1"
+    seg.mkdir(parents=True)
+    (seg / "seg0.m4s").write_bytes(b"y" * 8192)
+    assert [i["name"] for i in scan_cache(str(tmp_path))] == []

@@ -106,14 +106,29 @@ def scan_cache(root: str, protected: frozenset[str] = PROTECTED) -> list[dict]:
 
 def usage(root: str, budget: int) -> dict:
     """Cache footprint vs budget + free disk — for the appliance suggestion advisor.
-    `cacheUsed` sums the same evictable entries the evictor manages (protected names excluded)."""
+
+    `cacheUsed` sums the same evictable entries the evictor manages (protected names excluded), so
+    it stays comparable with `cacheSize`. `transcodeUsed` is reported *beside* it rather than folded
+    into it, because the two answer different questions and merging them would make both useless:
+    transcode output is not evictable (it is in PROTECTED), so adding it to `cacheUsed` would show
+    the cache over budget while the evictor correctly refused to act.
+
+    It is reported at all because leaving it out was actively misleading. HLS segments land under
+    `<cache_root>/transcode`, which `scan_cache` skips — so a disk could fill with segment files
+    while `cacheUsed` still read comfortably under budget and nothing in the response accounted for
+    the difference. `diskFree`/`diskTotal` showed the symptom; this names the cause.
+    """
     used = sum(i["size"] for i in scan_cache(root))
+    transcode, _ = _stat_tree(os.path.join(root, "transcode"))
     try:
         du = shutil.disk_usage(root)
         free, total = du.free, du.total
     except OSError:
         free, total = 0, 0
-    return {"cacheUsed": used, "cacheSize": budget, "diskFree": free, "diskTotal": total}
+    return {
+        "cacheUsed": used, "cacheSize": budget, "transcodeUsed": transcode,
+        "diskFree": free, "diskTotal": total,
+    }
 
 
 def select_evictions(

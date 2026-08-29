@@ -102,7 +102,7 @@ def test_cache_usage(tmp_path):
 
 def test_cache_usage_missing_dir_is_safe():
     assert usage("/no/such/dir", budget=42) == {
-        "cacheUsed": 0, "cacheSize": 42, "diskFree": 0, "diskTotal": 0,
+        "cacheUsed": 0, "cacheSize": 42, "transcodeUsed": 0, "diskFree": 0, "diskTotal": 0,
     }
 
 
