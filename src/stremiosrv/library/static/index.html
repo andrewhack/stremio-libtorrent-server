@@ -172,6 +172,26 @@ const LIB = (() => {
     $('auth').hidden = true; $('app').hidden = false; $('signout').hidden = false;
   }
 
+  // Whatever shows the sign-in panel must also decide what is IN it. Sign-out used to call
+  // showAuth() alone, which only sets the message -- leaving the intro on its initial "Signing
+  // in..." and the password form hidden, so signing out locked the owner out until a reload.
+  async function showSignInPanel(msg) {
+    const cfg = await api('/library/api/config')
+      .catch(() => ({ passwordLogin: false, certShared: false }));
+    const NO_SESSION = 'No Stremio session on this device. ';
+    $('auth-intro').textContent = cfg.passwordLogin
+      ? NO_SESSION + 'Sign in with your Stremio account.'
+      : cfg.certShared
+        ? NO_SESSION + 'This server uses the shared stremio.rocks certificate, whose private key '
+          + 'is public, so signing in with a password here is not offered. Open the Stremio web '
+          + 'player on this address and sign in there first, or install your own certificate.'
+        : NO_SESSION + 'The TLS certificate on this server could not be read, so signing in with a '
+          + 'password here is not offered. Open the Stremio web player on this address and sign '
+          + 'in there first, or check the certificate.';
+    $('pw-form').hidden = !cfg.passwordLogin;
+    showAuth(msg);
+  }
+
   async function signIn() {
     const key = storedAuthKey();
     // A live session cookie is enough to get in. Without this the page ignored it and demanded a
@@ -194,23 +214,7 @@ const LIB = (() => {
         }
       }
     }
-    const cfg = await api('/library/api/config')
-      .catch(() => ({ passwordLogin: false, certShared: false }));
-    // Three distinct situations, three distinct messages. Saying "you are using the shared
-    // certificate" when the truth is "your certificate could not be read" sends the owner off to
-    // fix something that is not broken.
-    const NO_SESSION = 'No Stremio session on this device. ';
-    $('auth-intro').textContent = cfg.passwordLogin
-      ? NO_SESSION + 'Sign in with your Stremio account.'
-      : cfg.certShared
-        ? NO_SESSION + 'This server uses the shared stremio.rocks certificate, whose private key '
-          + 'is public, so signing in with a password here is not offered. Open the Stremio web '
-          + 'player on this address and sign in there first, or install your own certificate.'
-        : NO_SESSION + 'The TLS certificate on this server could not be read, so signing in with a '
-          + 'password here is not offered. Open the Stremio web player on this address and sign '
-          + 'in there first, or check the certificate.';
-    $('pw-form').hidden = !cfg.passwordLogin;
-    showAuth();
+    await showSignInPanel();
     return false;
   }
 
@@ -423,7 +427,11 @@ const LIB = (() => {
 
   function renderLibrary(data) {
     const offline = offlineMetaIds(data);
-    const items = Object.values(storedLibrary()).filter(i => i && !i.removed && i._id);
+    // `removed` does NOT mean deleted. Stremio marks an item `temp` when it was added by simply
+    // playing something, and those Continue-Watching entries carry removed:true — so filtering on
+    // `!removed` alone threw away almost the entire library and reported it as empty.
+    const all = Object.values(storedLibrary()).filter(i => i && i._id);
+    const items = all.filter(i => !i.removed || i.temp);
     $('library').innerHTML = items.map(i => `
       <div class="card">
         <div class="poster">
@@ -437,8 +445,9 @@ const LIB = (() => {
                      data-type="${esc(i.type)}">Download</button>`}
       </div>`).join('')
       || `<p class="note">${esc(libraryError
-           || (authKey ? 'Your Stremio library came back empty.'
-                       : 'No Stremio key on this device, so the library could not be loaded.'))}</p>`;
+           || (!authKey ? 'No Stremio key on this device, so the library could not be loaded.'
+               : all.length ? `Loaded ${all.length} library entries but none are shown.`
+                            : 'Your Stremio library came back empty.'))}</p>`;
     document.querySelectorAll('[data-get]').forEach(btn => {
       btn.onclick = async () => {
         btn.disabled = true; btn.textContent = 'Finding...';
@@ -467,8 +476,11 @@ const LIB = (() => {
     };
     $('signout').onclick = async () => {
       await api('/library/api/session', { method: 'DELETE' }).catch(() => {});
-      rememberAuthKey(null); remoteLibrary = null; remoteAddons = null;
-      showAuth('Signed out.');
+      rememberAuthKey(null); remoteLibrary = null; remoteAddons = null; libraryError = '';
+      // Rebuild the panel rather than re-running signIn(): on an origin where the player is also
+      // signed in, retrying would read its key back out of localStorage and sign straight back in,
+      // which is not what clicking Sign out means.
+      await showSignInPanel('Signed out.');
     };
     if (await signIn()) { await loadStremioData(); await loadState(); }
     setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);

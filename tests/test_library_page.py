@@ -191,3 +191,16 @@ def test_an_existing_session_cookie_is_honoured():
 def test_empty_library_says_why():
     """A silently empty shelf is indistinguishable from a broken fetch. It must name which one."""
     assert "libraryError" in _page()
+
+
+def test_continue_watching_items_are_not_filtered_out():
+    """In Stremio's model `removed` does not mean deleted: an item auto-added by playing something
+    is `temp`, and those Continue-Watching entries carry removed:true. Filtering on `!removed`
+    alone discards nearly the whole library and reports it as empty."""
+    assert "!i.removed || i.temp" in _page()
+
+
+def test_empty_library_distinguishes_fetched_from_filtered():
+    """'Came back empty' and 'fetched plenty, showed none' are different faults with different
+    fixes, and looked identical from the outside for two rounds of debugging."""
+    assert "library entries but none are shown" in _page()
