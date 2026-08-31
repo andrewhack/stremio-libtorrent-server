@@ -306,3 +306,19 @@ def test_offline_detection_uses_the_client_labels():
     page = _page()
     body = page[page.index("function offlineMetaIds"):page.index("function renderContinue")]
     assert "withClientLabels(data.entries)" in body
+
+
+def test_library_sources_are_merged_not_chosen():
+    """The player's local bucket and the account's synced library are DIFFERENT sets. Preferring one
+    made the same server look correct in one browser and empty in another, purely because they were
+    reading different libraries."""
+    page = _page()
+    assert "Object.assign({}, remoteLibrary || {}, localLibrary())" in page
+
+
+def test_catalog_metas_also_feed_the_name_matcher():
+    """A title can live only in another device's local bucket, which no merging can reach. The
+    catalog rows are already fetched for the board and carry names, so they cost nothing to use."""
+    page = _page()
+    assert "catalogMetas" in page
+    assert "Object.assign({}, catalogMetas, storedLibrary())" in page

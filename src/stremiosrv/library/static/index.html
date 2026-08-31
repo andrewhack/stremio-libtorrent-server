@@ -345,10 +345,12 @@ const LIB = (() => {
       return items;
     } catch { return {}; }
   };
-  const storedLibrary = () => {
-    const local = localLibrary();
-    return Object.keys(local).length ? local : (remoteLibrary || {});
-  };
+  // MERGE, never choose. The player's local bucket and the account's synced library are different
+  // sets: a browser that has run the player knows about items that were never synced, and a browser
+  // that has not knows only the synced ones. Preferring one meant the same server looked correct in
+  // one browser and empty in another, purely because they were reading different libraries.
+  // Local wins on conflict -- it is the fresher record on the device that made it.
+  const storedLibrary = () => Object.assign({}, remoteLibrary || {}, localLibrary());
 
   // Fetched once per sign-in, only for what this device is actually missing.
   async function loadStremioData() {
@@ -359,7 +361,7 @@ const LIB = (() => {
               { authKey, update: true })) || {}).addons || []; }
       catch (e) { $('status').textContent = 'Could not load your addons from Stremio: ' + e.message; }
     }
-    if (!Object.keys(localLibrary()).length) {
+    {
       try {
         const items = (await stremioApi('datastoreGet',
           { authKey, collection: 'libraryItem', ids: [], all: true })) || [];
@@ -470,8 +472,13 @@ const LIB = (() => {
   // syncs it -- so on a browser that has not run the player there is no infohash->title map at all.
   // The server does know the torrent's own name, which is what a torrent client matches on. Prefer
   // the exact infohash join; fall back to finding a library title inside the release name.
+  // Every meta seen in a catalog row, so a release name can be recognised even when the title is
+  // in neither library -- e.g. it lives only in the player's local bucket on a DIFFERENT device,
+  // which no amount of merging can reach. Costs nothing: these are already fetched for the board.
+  const catalogMetas = {};
+
   function nameMatcher() {
-    const byWords = Object.values(storedLibrary())
+    const byWords = Object.values(Object.assign({}, catalogMetas, storedLibrary()))
       .filter(i => i && i._id && i.name)
       .map(i => ({ item: i, words: norm(i.name) }))
       .filter(x => x.words.length >= 3)
@@ -619,6 +626,8 @@ const LIB = (() => {
         const res = await fetch(r.url);
         const body = await res.json();
         const metas = (body.metas || []).filter(m => m && m.id && m.name);
+        metas.forEach(m => { catalogMetas[m.id] = { _id: m.id, name: m.name,
+                                                    poster: m.poster, type: m.type }; });
         el.innerHTML = metas.length
           ? metas.map(m => metaCardHtml(m, offline.has(m.id))).join('')
           : '<p class="note">Nothing returned.</p>';
@@ -701,7 +710,7 @@ const LIB = (() => {
     });
   });
   return { signIn, loadState, render, renderBoard, catalogRows, resolveStreams,
-           magnetFor, offlineMetaIds, getAuthKey: () => authKey };
+           loadStremioData, storedLibrary, magnetFor, offlineMetaIds, getAuthKey: () => authKey };
 })();
 </script>
 </body>
