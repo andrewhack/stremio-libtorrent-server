@@ -194,6 +194,9 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_PREFETCH_NEXT_FRACTION` | `0.05` | How much of the next episode to fetch, as a fraction of its size. |
 | `STREMIOSRV_PREFETCH_NEXT_MAX_BYTES` | `134217728` (128 MiB) | Ceiling on that head, so a very large episode doesn't pull 200 MB. |
 | `STREMIOSRV_PREFETCH_TRIGGER_FRACTION` | `0.90` | How far into the current episode the trigger sits. |
+| `STREMIOSRV_LIBRARY_UI` | `false` | **Opt-in download manager** at `/library` on the same origin as the web player: browse your Stremio library, download a title in full, and manage what is on disk as titles rather than folder names. Off by default — it is an authenticated page, so enabling it is a deliberate choice. See [docs/library-ui.md](docs/library-ui.md). |
+| `STREMIOSRV_LIBRARY_OWNER` | *(unset)* | Which Stremio account may use it — the account id or its email. Unset = the **first** account to sign in claims the server. |
+| `STREMIOSRV_LIBRARY_ALLOW_HTTP` | `false` | Allow the library UI without TLS. Its session cookie is `Secure`, so plain HTTP is refused unless you set this — only do so on a trusted LAN or behind a VPN. |
 | `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
 | `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
 
