@@ -5,36 +5,63 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Library</title>
 <style>
-  :root { --bg:#12141a; --card:#1b1e26; --fg:#e8eaf0; --dim:#9aa0ae; --accent:#5b8def; --bad:#e05c5c; }
+  :root {
+    --bg:#0f0d1c; --bg2:#151230; --card:#1c1836; --fg:#eceaf6; --dim:#9d99bd;
+    --accent:#7b5bf5; --accent2:#5b8def; --bad:#e05c5c; --ok:#7b5bf5;
+    --poster-w:150px;
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:16px 20px; border-bottom:1px solid #262a34; display:flex;
-           align-items:center; gap:16px; flex-wrap:wrap; }
-  h1 { font-size:17px; margin:0; font-weight:600; }
-  main { padding:20px; max-width:1200px; margin:0 auto; }
-  section { margin-bottom:32px; }
-  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
-       color:var(--dim); margin:0 0 12px; }
-  .row { display:flex; align-items:center; gap:12px; padding:10px 12px;
-         background:var(--card); border-radius:8px; margin-bottom:6px; }
-  .row .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
-               white-space:nowrap; }
-  .size { color:var(--dim); font-variant-numeric:tabular-nums; }
-  button { background:var(--accent); color:#fff; border:0; border-radius:6px;
-           padding:7px 12px; cursor:pointer; font:inherit; }
-  button.ghost { background:#2a2f3a; }
-  button.danger { background:var(--bad); }
-  input { background:#0e1015; border:1px solid #2a2f3a; border-radius:6px;
-          padding:9px 11px; color:var(--fg); font:inherit; width:100%; }
-  .panel { max-width:380px; margin:60px auto; background:var(--card);
-           padding:24px; border-radius:12px; }
-  .panel label { display:block; margin:14px 0 6px; color:var(--dim); font-size:13px; }
+  body { margin:0; background:linear-gradient(180deg,var(--bg2) 0,var(--bg) 420px) no-repeat var(--bg);
+         color:var(--fg); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:14px 24px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+           background:rgba(15,13,28,.7); backdrop-filter:blur(8px); position:sticky; top:0; z-index:5; }
+  h1 { font-size:18px; margin:0; font-weight:700; letter-spacing:.01em; }
+  main { padding:8px 24px 48px; max-width:1600px; margin:0 auto; }
+  section { margin-bottom:34px; }
+  h2 { font-size:22px; font-weight:600; margin:0 0 14px; letter-spacing:.01em; }
   .note { color:var(--dim); font-size:13px; }
-  .err { color:var(--bad); margin-top:12px; min-height:20px; }
-  .bar { height:4px; background:#2a2f3a; border-radius:2px; overflow:hidden; width:90px; }
-  .bar > i { display:block; height:100%; background:var(--accent); }
+  .err { color:var(--bad); margin-top:10px; min-height:20px; }
+
+  /* Horizontal poster row, the shape the Stremio client uses. Scrolls inside itself so the page
+     body never scrolls sideways on a phone. */
+  .shelf { display:flex; gap:16px; overflow-x:auto; padding:4px 0 10px;
+           scrollbar-width:thin; scroll-snap-type:x proximity; }
+  .shelf::-webkit-scrollbar { height:8px; }
+  .shelf::-webkit-scrollbar-thumb { background:#2a2550; border-radius:4px; }
+  .card { width:var(--poster-w); flex:0 0 auto; scroll-snap-align:start; }
+  .poster { position:relative; width:100%; aspect-ratio:2/3; border-radius:10px;
+            background:#241f45; overflow:hidden; display:flex; align-items:center;
+            justify-content:center; box-shadow:0 4px 14px rgba(0,0,0,.35); }
+  .poster img { width:100%; height:100%; object-fit:cover; display:block; }
+  .poster .fallback { padding:10px; font-size:12px; color:var(--dim); text-align:center;
+                      word-break:break-word; max-height:100%; overflow:hidden; }
+  .badge { position:absolute; top:8px; left:8px; width:22px; height:22px; border-radius:50%;
+           background:var(--ok); color:#fff; font-size:13px; line-height:22px; text-align:center;
+           box-shadow:0 2px 6px rgba(0,0,0,.4); }
+  .prog { position:absolute; left:8px; right:8px; bottom:8px; height:4px; border-radius:2px;
+          background:rgba(255,255,255,.28); overflow:hidden; }
+  .prog > i { display:block; height:100%; background:#fff; }
+  .act { position:absolute; top:6px; right:6px; opacity:0; transition:opacity .12s; }
+  .card:hover .act, .card:focus-within .act { opacity:1; }
+  .cap { margin-top:8px; font-size:13px; text-align:center; line-height:1.3;
+         display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .sub { color:var(--dim); font-size:12px; text-align:center; }
+  .dl { display:block; width:100%; margin-top:6px; }
+
+  button { background:var(--accent); color:#fff; border:0; border-radius:7px;
+           padding:7px 12px; cursor:pointer; font:inherit; font-size:13px; }
+  button.ghost { background:#2a2550; }
+  button.danger { background:var(--bad); border-radius:50%; width:26px; height:26px; padding:0;
+                  font-size:15px; line-height:26px; }
+  input { background:#0c0a18; border:1px solid #2a2550; border-radius:7px;
+          padding:10px 12px; color:var(--fg); font:inherit; width:100%; }
+  .addbar { display:flex; gap:10px; align-items:center; max-width:720px; }
+  .panel { max-width:400px; margin:60px auto; background:var(--card);
+           padding:24px; border-radius:14px; }
+  .panel label { display:block; margin:14px 0 6px; color:var(--dim); font-size:13px; }
   [hidden] { display:none !important; }
+  @media (max-width:640px) { :root { --poster-w:116px; } main { padding:8px 14px 40px; }
+                             h2 { font-size:18px; } }
 </style>
 </head>
 <body>
@@ -61,24 +88,28 @@
   <div id="app" hidden>
     <section id="sec-add">
       <h2>Add</h2>
-      <div class="row">
+      <div class="addbar">
         <input id="magnet" placeholder="magnet:?xt=urn:btih:&hellip;">
         <button id="addmagnet">Download</button>
       </div>
       <div class="err" id="add-err"></div>
     </section>
-    <section id="sec-library">
-      <h2>Your library</h2>
-      <div id="library"></div>
+    <section id="sec-downloading" hidden>
+      <h2>Downloading</h2>
+      <div class="shelf" id="downloading"></div>
     </section>
     <section id="sec-titles">
       <h2>Downloaded</h2>
-      <div id="titles"></div>
+      <div class="shelf" id="titles"></div>
+    </section>
+    <section id="sec-library">
+      <h2>Your library</h2>
+      <div class="shelf" id="library"></div>
     </section>
     <section id="sec-other" hidden>
       <h2>Other on disk</h2>
       <p class="note">Not matched to a title &mdash; still taking up space.</p>
-      <div id="other"></div>
+      <div class="shelf" id="other"></div>
     </section>
   </div>
 </main>
@@ -185,29 +216,53 @@ const LIB = (() => {
 
   const pct = e => Math.round((e.progress || 0) * 100);
 
-  const rowHtml = e => `
-    <div class="row">
-      <span class="name">${esc((e.label && e.label.name) || e.name)}</span>
-      ${e.state === 'downloading'
-        ? `<span class="bar"><i style="width:${Math.round(pct(e))}%"></i></span>
-           <span class="size">${Math.round(pct(e))}%</span>`
-        : `<span class="size">${esc(e.peers === 0 && e.progress < 1 ? 'no seeds' : '')}</span>`}
-      <span class="size">${esc(fmt(e.size))}</span>
-      <button class="danger" data-remove="${esc(e.infoHash || '')}">Remove</button>
+  // A poster if we have one, the name if we do not. Unmatched torrents and pasted magnets have no
+  // artwork at all, and they still have to be visible and removable — that is the whole point of
+  // the "Other on disk" shelf.
+  const posterHtml = (url, name) => url
+    ? `<img src="${esc(url)}" alt="${esc(name)}" loading="lazy"
+           onerror="this.replaceWith(Object.assign(document.createElement('div'),
+                    {className:'fallback', textContent:this.alt}))">`
+    : `<div class="fallback">${esc(name)}</div>`;
+
+  const cardHtml = e => {
+    const label = e.label || {};
+    const title = label.name || e.name;
+    const downloading = e.state === 'downloading';
+    return `
+    <div class="card">
+      <div class="poster">
+        ${posterHtml(label.poster, title)}
+        ${downloading ? '' : '<span class="badge">&#10003;</span>'}
+        ${downloading
+          ? `<div class="prog"><i style="width:${Math.round(pct(e))}%"></i></div>`
+          : ''}
+        <span class="act"><button class="danger" title="Remove"
+              data-remove="${esc(e.infoHash || '')}">&times;</button></span>
+      </div>
+      <div class="cap">${esc(title)}</div>
+      <div class="sub">${esc(downloading
+        ? String(Math.round(pct(e))) + '%'
+        : (e.peers === 0 && e.progress < 1 ? 'no seeds' : fmt(e.size)))}</div>
     </div>`;
+  };
+
+  const EMPTY = '<p class="note">Nothing here yet.</p>';
 
   function render(data) {
     const entries = data.entries || [];
-    const titled = entries.filter(e => e.label);
-    const other = entries.filter(e => !e.label);
-    $('titles').innerHTML = titled.map(rowHtml).join('')
-      || '<p class="note">Nothing downloaded yet.</p>';
-    // Always rendered when present. A library-only view would let the disk fill invisibly.
+    const downloading = entries.filter(e => e.state === 'downloading');
+    const done = entries.filter(e => e.label && e.state !== 'downloading');
+    const other = entries.filter(e => !e.label && e.state !== 'downloading');
+    $('sec-downloading').hidden = downloading.length === 0;
+    $('downloading').innerHTML = downloading.map(cardHtml).join('');
+    $('titles').innerHTML = done.map(cardHtml).join('') || EMPTY;
+    // Always shown when present. A library-only view would let the disk fill invisibly.
     $('sec-other').hidden = other.length === 0;
-    $('other').innerHTML = other.map(rowHtml).join('');
+    $('other').innerHTML = other.map(cardHtml).join('');
     const b = data.budget || {};
     $('budget').textContent = b.cacheSize
-      ? `${fmt(b.cacheUsed)} of ${fmt(b.cacheSize)}` : '';
+      ? fmt(b.cacheUsed) + ' of ' + fmt(b.cacheSize) : '';
     document.querySelectorAll('[data-remove]').forEach(btn => {
       btn.onclick = async () => {
         if (!btn.dataset.remove) return;
@@ -309,13 +364,18 @@ const LIB = (() => {
     const offline = offlineMetaIds(data);
     const items = Object.values(storedLibrary()).filter(i => i && !i.removed && i._id);
     $('library').innerHTML = items.map(i => `
-      <div class="row">
-        <span class="name">${esc(i.name)}</span>
-        <span class="size">${esc(i.type === 'series' ? 'series' : 'movie')}</span>
+      <div class="card">
+        <div class="poster">
+          ${posterHtml(i.poster, i.name)}
+          ${offline.has(i._id) ? '<span class="badge">&#10003;</span>' : ''}
+        </div>
+        <div class="cap">${esc(i.name)}</div>
         ${offline.has(i._id)
-          ? '<span class="size">&#10003; offline</span>'
-          : `<button data-get="${esc(i._id)}" data-type="${esc(i.type)}">Download</button>`}
-      </div>`).join('') || '<p class="note">Your Stremio library is empty on this device.</p>';
+          ? '<div class="sub">offline</div>'
+          : `<button class="dl" data-get="${esc(i._id)}"
+                     data-type="${esc(i.type)}">Download</button>`}
+      </div>`).join('')
+      || '<p class="note">Your Stremio library is empty on this device.</p>';
     document.querySelectorAll('[data-get]').forEach(btn => {
       btn.onclick = async () => {
         btn.disabled = true; btn.textContent = 'Finding...';

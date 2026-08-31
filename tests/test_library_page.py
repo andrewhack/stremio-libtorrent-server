@@ -74,12 +74,21 @@ def test_every_interpolated_value_is_escaped():
     offenders = []
     for expr in _interpolations(_page()):
         e = expr.strip()
-        if e.startswith(("esc(", "Math.", "fmt(")):
+        # esc()/fmt()/Math.* are safe by construction. posterHtml() is an HTML *builder* that
+        # escapes both of its arguments — allowed here only because
+        # `test_poster_builder_escapes_both_arguments` below pins that, so this exemption cannot
+        # quietly become false.
+        if e.startswith(("esc(", "Math.", "fmt(", "posterHtml(")):
             continue
         # A ternary whose branches are themselves template literals: its own `${...}` were already
         # collected separately by the scanner above, so judge them there, not here.
         if "?" in e and "`" in e:
             continue
+        # A ternary choosing between two static string literals — no data reaches the output.
+        if "?" in e and "${" not in e and "`" not in e:
+            branches = e.split("?", 1)[1]
+            if all(part.strip()[:1] in ("'", '"') for part in branches.split(":") if part.strip()):
+                continue
         offenders.append(e)
     assert not offenders, f"unescaped interpolations into innerHTML: {offenders}"
 
@@ -123,3 +132,13 @@ def test_page_joins_downloads_to_titles_through_the_streams_bucket():
     page = _page()
     assert "localStorage.getItem('streams')" in page
     assert "offlineMetaIds" in page
+
+
+def test_poster_builder_escapes_both_arguments():
+    """`posterHtml(url, name)` is exempted from the interpolation scan above because it builds HTML
+    itself. That exemption is only honest while it escapes what it is handed — a poster URL and a
+    title both come from third parties."""
+    page = _page()
+    body = page[page.index("const posterHtml"):page.index("const cardHtml")]
+    assert "esc(url)" in body, "posterHtml does not escape the URL it is given"
+    assert "esc(name)" in body, "posterHtml does not escape the name it is given"
