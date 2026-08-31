@@ -196,14 +196,42 @@ def test_empty_library_says_why():
 def test_continue_watching_items_are_not_filtered_out():
     """In Stremio's model `removed` does not mean deleted: an item auto-added by playing something
     is `temp`, and those Continue-Watching entries carry removed:true. Filtering on `!removed`
-    alone discards nearly the whole library and reports it as empty."""
-    assert "!i.removed || i.temp" in _page()
+    alone discards nearly the whole row."""
+    assert "i.temp || !i.removed" in _page()
 
 
-def test_empty_library_distinguishes_fetched_from_filtered():
-    """'Came back empty' and 'fetched plenty, showed none' are different faults with different
-    fixes, and looked identical from the outside for two rounds of debugging."""
-    assert "library entries but none are shown" in _page()
+def test_board_renders_addon_catalogs_not_a_saved_library():
+    """The client's home board is built from the INSTALLED addons' catalogs, in the order they
+    declare them -- that is what produces "Popular - Movie", "Popular - Series", "Featured - ...".
+    A list of saved library items is a different surface."""
+    page = _page()
+    assert "catalogRows" in page and "'catalog/'" in page
+    assert "res.includes('catalog')" in page
+
+
+def test_catalogs_requiring_an_extra_are_skipped():
+    """Cinemeta's `New` catalog requires a genre and its `last-videos` requires ids: asking without
+    them returns nothing, which is why the client does not show those rows either."""
+    assert "e.isRequired" in _page()
+
+
+def test_catalog_row_count_is_capped():
+    """Every row is a network call. An addon collection with many catalogs must not fan out into a
+    request storm on page load."""
+    assert "CATALOG_ROW_CAP" in _page()
+
+
+def test_a_failing_catalog_row_says_so():
+    """One catalog that will not answer must not blank the board or fail silently."""
+    assert "Could not load: " in _page()
+
+
+def test_page_cannot_render_blank_on_a_script_error():
+    """Both panels used to start hidden, so any error painted an entirely blank page with no clue
+    what broke -- which is exactly what happened in one browser and not another."""
+    page = _page()
+    assert '<div id="auth" class="panel">' in page, "auth panel must not start hidden"
+    assert "window.addEventListener('error'" in page
 
 
 def test_page_is_not_cacheable(tmp_path):

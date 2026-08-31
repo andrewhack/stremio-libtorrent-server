@@ -73,7 +73,7 @@
 </header>
 
 <main>
-  <div id="auth" class="panel" hidden>
+  <div id="auth" class="panel">
     <div class="note" id="auth-intro">Signing in&hellip;</div>
     <div id="pw-form" hidden>
       <label for="email">Stremio email</label>
@@ -102,10 +102,11 @@
       <h2>Downloaded</h2>
       <div class="shelf" id="titles"></div>
     </section>
-    <section id="sec-library">
-      <h2>Your library</h2>
-      <div class="shelf" id="library"></div>
+    <section id="sec-continue" hidden>
+      <h2>Continue watching</h2>
+      <div class="shelf" id="continue"></div>
     </section>
+    <div id="catalogs"></div>
     <section id="sec-other" hidden>
       <h2>Other on disk</h2>
       <p class="note">Not matched to a title &mdash; still taking up space.</p>
@@ -294,7 +295,7 @@ const LIB = (() => {
         await loadState();
       };
     });
-    renderLibrary(data);
+    renderBoard(data).catch(() => {});
   }
 
   async function loadState() {
@@ -425,44 +426,121 @@ const LIB = (() => {
     return ids;
   }
 
-  function renderLibrary(data) {
-    const offline = offlineMetaIds(data);
-    // `removed` does NOT mean deleted. Stremio marks an item `temp` when it was added by simply
-    // playing something, and those Continue-Watching entries carry removed:true — so filtering on
-    // `!removed` alone threw away almost the entire library and reported it as empty.
-    const all = Object.values(storedLibrary()).filter(i => i && i._id);
-    const items = all.filter(i => !i.removed || i.temp);
-    $('library').innerHTML = items.map(i => `
-      <div class="card">
-        <div class="poster">
-          ${posterHtml(i.poster, i.name)}
-          ${offline.has(i._id) ? '<span class="badge">&#10003;</span>' : ''}
-        </div>
-        <div class="cap">${esc(i.name)}</div>
-        ${offline.has(i._id)
-          ? '<div class="sub">offline</div>'
-          : `<button class="dl" data-get="${esc(i._id)}"
-                     data-type="${esc(i.type)}">Download</button>`}
-      </div>`).join('')
-      || `<p class="note">${esc(libraryError
-           || (!authKey ? 'No Stremio key on this device, so the library could not be loaded.'
-               : all.length ? `Loaded ${all.length} library entries but none are shown.`
-                            : 'Your Stremio library came back empty.'))}</p>`;
-    document.querySelectorAll('[data-get]').forEach(btn => {
+  // ---- the client's home board -------------------------------------------------------------
+  // Catalog rows come from the INSTALLED addons' manifests, in the order they declare them, which
+  // is what produces "Popular - Movie", "Popular - Series", "Featured - Movie" and so on. This is
+  // the browsing surface the Stremio client shows; a list of saved library items is a different
+  // thing and was the wrong shelf to build.
+  const addonList = () => {
+    const p = storedProfile() || {};
+    return (p.addons || []).length ? p.addons : (remoteAddons || []);
+  };
+
+  const CATALOG_ROW_CAP = 12;   // each row is a network call; do not fan out without bound
+
+  // A catalog needing a required `extra` (a genre, a list of ids) cannot be asked for without one,
+  // which is why the client shows Popular and Featured but not "New".
+  function catalogRows() {
+    const rows = [];
+    addonList().forEach(a => {
+      const m = a.manifest || {};
+      const res = (m.resources || []).map(r => (typeof r === 'string' ? r : r && r.name));
+      if (!res.includes('catalog')) return;
+      (m.catalogs || []).forEach(c => {
+        if (!c || !c.type || !c.id) return;
+        if ((c.extra || []).some(e => e && e.isRequired)) return;
+        rows.push({
+          key: a.transportUrl + '|' + c.type + '|' + c.id,
+          title: (c.name || c.id) + ' - ' + c.type.charAt(0).toUpperCase() + c.type.slice(1),
+          type: c.type,
+          url: a.transportUrl.replace(/manifest\.json$/, '')
+               + 'catalog/' + encodeURIComponent(c.type) + '/' + encodeURIComponent(c.id) + '.json',
+        });
+      });
+    });
+    return rows.slice(0, CATALOG_ROW_CAP);
+  }
+
+  const metaCardHtml = (meta, offline) => `
+    <div class="card">
+      <div class="poster">
+        ${posterHtml(meta.poster, meta.name)}
+        ${offline ? '<span class="badge">&#10003;</span>' : ''}
+      </div>
+      <div class="cap">${esc(meta.name)}</div>
+      ${offline
+        ? '<div class="sub">offline</div>'
+        : `<button class="dl" data-get="${esc(meta.id)}"
+                   data-type="${esc(meta.type)}">Download</button>`}
+    </div>`;
+
+  function wireDownloadButtons(scope) {
+    scope.querySelectorAll('[data-get]').forEach(btn => {
       btn.onclick = async () => {
+        const id = btn.dataset.get, type = btn.dataset.type;
         btn.disabled = true; btn.textContent = 'Finding...';
-        const { streams, failed } = await resolveStreams(btn.dataset.type, btn.dataset.get);
+        const { streams, failed } = await resolveStreams(type, id);
         $('add-err').textContent = failed.length
           ? 'No response from: ' + failed.join(', ') : '';
         if (!streams.length) { btn.textContent = 'No sources'; return; }
-        const item = storedLibrary()[btn.dataset.get] || {};
-        await startDownload(magnetFor(streams[0]), {
-          metaId: btn.dataset.get, type: btn.dataset.type,
-          name: item.name, poster: item.poster,
-        });
+        await startDownload(magnetFor(streams[0]),
+          { metaId: id, type, name: btn.dataset.name || '', poster: btn.dataset.poster || '' });
         btn.textContent = 'Download'; btn.disabled = false;
       };
     });
+  }
+
+  // Continue watching: the library entries that were actually played, newest first. `temp` marks an
+  // item auto-added by playing something, which is exactly what belongs in this row.
+  function renderContinue(offline) {
+    const items = Object.values(storedLibrary())
+      .filter(i => i && i._id && (i.temp || !i.removed))
+      .sort((a, b) => new Date(b._mtime || 0) - new Date(a._mtime || 0))
+      .slice(0, 20);
+    $('sec-continue').hidden = items.length === 0;
+    $('continue').innerHTML = items.map(i => metaCardHtml(
+      { id: i._id, type: i.type, name: i.name, poster: i.poster }, offline.has(i._id))).join('');
+    wireDownloadButtons($('continue'));
+  }
+
+  async function renderCatalogs(offline) {
+    const rows = catalogRows();
+    const host = $('catalogs');
+    if (!rows.length) {
+      host.innerHTML = '<p class="note">'
+        + esc(addonList().length
+              ? 'None of your addons offer a catalog to browse.'
+              : 'No addons loaded, so there are no catalogs to show.')
+        + '</p>';
+      return;
+    }
+    // Placeholders first so the rows appear in the addons' own order regardless of which
+    // catalog answers first.
+    host.innerHTML = rows.map(r => `
+      <section><h2>${esc(r.title)}</h2>
+        <div class="shelf" id="cat-${esc(r.key.replace(/[^a-zA-Z0-9]/g, ''))}">
+          <p class="note">Loading...</p></div></section>`).join('');
+    await Promise.all(rows.map(async r => {
+      const el = document.getElementById('cat-' + r.key.replace(/[^a-zA-Z0-9]/g, ''));
+      if (!el) return;
+      try {
+        const res = await fetch(r.url);
+        const body = await res.json();
+        const metas = (body.metas || []).filter(m => m && m.id && m.name);
+        el.innerHTML = metas.length
+          ? metas.map(m => metaCardHtml(m, offline.has(m.id))).join('')
+          : '<p class="note">Nothing returned.</p>';
+        wireDownloadButtons(el);
+      } catch (e) {
+        el.innerHTML = '<p class="note">' + esc('Could not load: ' + e.message) + '</p>';
+      }
+    }));
+  }
+
+  async function renderBoard(data) {
+    const offline = offlineMetaIds(data);
+    renderContinue(offline);
+    await renderCatalogs(offline);
   }
 
   async function boot() {
@@ -486,9 +564,26 @@ const LIB = (() => {
     setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);
   }
 
-  document.addEventListener('DOMContentLoaded', boot);
-  return { signIn, loadState, render, renderLibrary, resolveStreams, magnetFor,
-           offlineMetaIds, getAuthKey: () => authKey };
+  // A blank page is the worst possible failure: it says nothing about what broke. Anything that
+  // escapes boot(), or any uncaught error at all, is put on screen instead.
+  window.addEventListener('error', e => {
+    const el = document.getElementById('auth-err');
+    if (el && !el.textContent) el.textContent = 'Page error: ' + (e.message || e.type);
+    const a = document.getElementById('auth');
+    if (a) a.hidden = false;
+  });
+  document.addEventListener('DOMContentLoaded', () => {
+    boot().catch(err => {
+      const el = document.getElementById('auth-err');
+      if (el) el.textContent = 'Could not start: ' + (err && err.message ? err.message : err);
+      const a = document.getElementById('auth');
+      if (a) a.hidden = false;
+      const app = document.getElementById('app');
+      if (app) app.hidden = true;
+    });
+  });
+  return { signIn, loadState, render, renderBoard, catalogRows, resolveStreams,
+           magnetFor, offlineMetaIds, getAuthKey: () => authKey };
 })();
 </script>
 </body>
