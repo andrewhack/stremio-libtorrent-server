@@ -28,6 +28,16 @@ def _names(san: str) -> list[str]:
     return out
 
 
+def is_shared_cert(san: str | None) -> bool:
+    """True only when the cert really can answer for the known-public name.
+
+    Distinct from `not password_login_allowed(...)`, which is also true when the SAN cannot be read
+    at all. Both refuse the password form, but they are different facts about the operator's setup
+    and telling them the wrong one sends them to fix the wrong thing.
+    """
+    return bool(san) and SHARED_NAME.casefold() in _names(san)
+
+
 def password_login_allowed(san: str | None) -> bool:
     """False when the cert can answer for the shared name, and false when the SAN cannot be read at
     all — if we cannot prove the key is not shared, we must not invite a password.

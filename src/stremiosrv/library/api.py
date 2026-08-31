@@ -143,7 +143,9 @@ def index() -> FileResponse:
 def config(request: Request) -> dict:
     """What the page needs before anyone is signed in: whether to render the password form at all."""
     _require_tls(request)
-    return {"passwordLogin": _password_login_allowed(request)}
+    san = certcheck.cert_san(_cert_path(_settings(request)))
+    return {"passwordLogin": authmode.password_login_allowed(san),
+            "certShared": authmode.is_shared_cert(san)}
 
 
 @router.post("/api/session")

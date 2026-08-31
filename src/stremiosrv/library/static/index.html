@@ -1,4 +1,232 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Library</title>
-<body><div id="app">Loading…</div></body>
+<style>
+  :root { --bg:#12141a; --card:#1b1e26; --fg:#e8eaf0; --dim:#9aa0ae; --accent:#5b8def; --bad:#e05c5c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:16px 20px; border-bottom:1px solid #262a34; display:flex;
+           align-items:center; gap:16px; flex-wrap:wrap; }
+  h1 { font-size:17px; margin:0; font-weight:600; }
+  main { padding:20px; max-width:1200px; margin:0 auto; }
+  section { margin-bottom:32px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
+       color:var(--dim); margin:0 0 12px; }
+  .row { display:flex; align-items:center; gap:12px; padding:10px 12px;
+         background:var(--card); border-radius:8px; margin-bottom:6px; }
+  .row .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+               white-space:nowrap; }
+  .size { color:var(--dim); font-variant-numeric:tabular-nums; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px;
+           padding:7px 12px; cursor:pointer; font:inherit; }
+  button.ghost { background:#2a2f3a; }
+  button.danger { background:var(--bad); }
+  input { background:#0e1015; border:1px solid #2a2f3a; border-radius:6px;
+          padding:9px 11px; color:var(--fg); font:inherit; width:100%; }
+  .panel { max-width:380px; margin:60px auto; background:var(--card);
+           padding:24px; border-radius:12px; }
+  .panel label { display:block; margin:14px 0 6px; color:var(--dim); font-size:13px; }
+  .note { color:var(--dim); font-size:13px; }
+  .err { color:var(--bad); margin-top:12px; min-height:20px; }
+  .bar { height:4px; background:#2a2f3a; border-radius:2px; overflow:hidden; width:90px; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Library</h1>
+  <span id="budget" class="note"></span>
+  <span style="flex:1"></span>
+  <button id="signout" class="ghost" hidden>Sign out</button>
+</header>
+
+<main>
+  <div id="auth" class="panel" hidden>
+    <div class="note" id="auth-intro">Signing in&hellip;</div>
+    <div id="pw-form" hidden>
+      <label for="email">Stremio email</label>
+      <input id="email" type="email" autocomplete="username">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password">
+      <p><button id="dologin">Sign in</button></p>
+    </div>
+    <div class="err" id="auth-err"></div>
+  </div>
+
+  <div id="app" hidden>
+    <section id="sec-titles">
+      <h2>Downloaded</h2>
+      <div id="titles"></div>
+    </section>
+    <section id="sec-other" hidden>
+      <h2>Other on disk</h2>
+      <p class="note">Not matched to a title &mdash; still taking up space.</p>
+      <div id="other"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const LIB = (() => {
+  const $ = id => document.getElementById(id);
+  let authKey = null;
+
+  const api = async (path, opts = {}) => {
+    const r = await fetch(path, {
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+    if (r.status === 401) { showAuth(); throw new Error('unauthenticated'); }
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(r.statusText), { body, status: r.status });
+    return body;
+  };
+
+  // The player stores its whole profile on THIS origin, so the authKey is already here and no
+  // password is needed. That is the entire reason the UI lives on the player's origin.
+  const storedProfile = () => {
+    try { return JSON.parse(localStorage.getItem('profile') || 'null'); }
+    catch { return null; }
+  };
+  const storedAuthKey = () => {
+    const p = storedProfile();
+    return (p && p.auth && p.auth.key) || null;
+  };
+
+  const fmt = b => {
+    if (!b) return '—';
+    const u = ['B','KB','MB','GB','TB']; let i = 0, n = b;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+  };
+  // Torrent names and Stremio library titles are third-party text going into innerHTML. Escaping
+  // is not defensive tidiness here: this page holds a session on an internet-facing origin, so a
+  // crafted name would be stored XSS against the owner.
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function showAuth(msg) {
+    $('app').hidden = true; $('signout').hidden = true; $('auth').hidden = false;
+    if (msg) $('auth-err').textContent = msg;
+  }
+  function showApp() {
+    $('auth').hidden = true; $('app').hidden = false; $('signout').hidden = false;
+  }
+
+  async function signIn() {
+    const key = storedAuthKey();
+    if (key) {
+      try {
+        await api('/library/api/session', { method: 'POST',
+          body: JSON.stringify({ authKey: key }) });
+        authKey = key;
+        return true;
+      } catch (e) {
+        if (e.status === 403) {
+          showAuth('That Stremio account does not own this server.');
+          return false;
+        }
+      }
+    }
+    const cfg = await api('/library/api/config')
+      .catch(() => ({ passwordLogin: false, certShared: false }));
+    // Three distinct situations, three distinct messages. Saying "you are using the shared
+    // certificate" when the truth is "your certificate could not be read" sends the owner off to
+    // fix something that is not broken.
+    const NO_SESSION = 'No Stremio session on this device. ';
+    $('auth-intro').textContent = cfg.passwordLogin
+      ? NO_SESSION + 'Sign in with your Stremio account.'
+      : cfg.certShared
+        ? NO_SESSION + 'This server uses the shared stremio.rocks certificate, whose private key '
+          + 'is public, so signing in with a password here is not offered. Open the Stremio web '
+          + 'player on this address and sign in there first, or install your own certificate.'
+        : NO_SESSION + 'The TLS certificate on this server could not be read, so signing in with a '
+          + 'password here is not offered. Open the Stremio web player on this address and sign '
+          + 'in there first, or check the certificate.';
+    $('pw-form').hidden = !cfg.passwordLogin;
+    showAuth();
+    return false;
+  }
+
+  async function passwordLogin() {
+    $('auth-err').textContent = '';
+    try {
+      const out = await api('/library/api/login', { method: 'POST',
+        body: JSON.stringify({ email: $('email').value, password: $('password').value }) });
+      // Held in memory only, for calling the owner's addons. Never persisted: this device is
+      // precisely the one we could not confirm belongs to the owner.
+      authKey = out.authKey;
+      $('password').value = '';
+      await loadState();
+    } catch (e) {
+      $('auth-err').textContent = e.status === 429
+        ? 'Too many attempts. Wait a few minutes.'
+        : 'Sign-in failed.';
+    }
+  }
+
+  const pct = e => Math.round((e.progress || 0) * 100);
+
+  const rowHtml = e => `
+    <div class="row">
+      <span class="name">${esc((e.label && e.label.name) || e.name)}</span>
+      ${e.state === 'downloading'
+        ? `<span class="bar"><i style="width:${Math.round(pct(e))}%"></i></span>
+           <span class="size">${Math.round(pct(e))}%</span>`
+        : `<span class="size">${esc(e.peers === 0 && e.progress < 1 ? 'no seeds' : '')}</span>`}
+      <span class="size">${esc(fmt(e.size))}</span>
+      <button class="danger" data-remove="${esc(e.infoHash || '')}">Remove</button>
+    </div>`;
+
+  function render(data) {
+    const entries = data.entries || [];
+    const titled = entries.filter(e => e.label);
+    const other = entries.filter(e => !e.label);
+    $('titles').innerHTML = titled.map(rowHtml).join('')
+      || '<p class="note">Nothing downloaded yet.</p>';
+    // Always rendered when present. A library-only view would let the disk fill invisibly.
+    $('sec-other').hidden = other.length === 0;
+    $('other').innerHTML = other.map(rowHtml).join('');
+    const b = data.budget || {};
+    $('budget').textContent = b.cacheSize
+      ? `${fmt(b.cacheUsed)} of ${fmt(b.cacheSize)}` : '';
+    document.querySelectorAll('[data-remove]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!btn.dataset.remove) return;
+        btn.disabled = true;
+        await api('/library/api/remove', { method: 'POST',
+          body: JSON.stringify({ infoHash: btn.dataset.remove }) });
+        await loadState();
+      };
+    });
+  }
+
+  async function loadState() {
+    const data = await api('/library/api/state');
+    showApp();
+    render(data);
+    return data;
+  }
+
+  async function boot() {
+    $('dologin').onclick = passwordLogin;
+    $('signout').onclick = async () => {
+      await api('/library/api/session', { method: 'DELETE' }).catch(() => {});
+      authKey = null; showAuth('Signed out.');
+    };
+    if (await signIn()) await loadState();
+    setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);
+  }
+
+  document.addEventListener('DOMContentLoaded', boot);
+  return { signIn, loadState, render, getAuthKey: () => authKey };
+})();
+</script>
+</body>
+</html>

@@ -38,3 +38,13 @@ def test_missing_san_is_treated_as_unsafe():
     """Cannot read the cert -> cannot prove the key is not shared. Fail closed."""
     assert authmode.password_login_allowed(None) is False
     assert authmode.password_login_allowed("") is False
+
+
+def test_is_shared_cert_distinguishes_unreadable_from_shared():
+    """Both refuse the password form, but they are different facts about the operator's setup: one
+    says "your key is public", the other says "I could not read your certificate". Reporting the
+    wrong one sends them to fix something that is not broken."""
+    assert authmode.is_shared_cert("DNS:*.519b6502d940.stremio.rocks") is True
+    assert authmode.is_shared_cert("DNS:stremio.example.com") is False
+    assert authmode.is_shared_cert(None) is False
+    assert authmode.is_shared_cert("") is False
