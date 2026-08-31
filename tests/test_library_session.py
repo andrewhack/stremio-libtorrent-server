@@ -112,3 +112,44 @@ def test_state_file_is_owner_only(tmp_path):
     S.claim_owner(str(tmp_path), USER, "")
     mode = os.stat(tmp_path / S.STATE_FILE).st_mode & 0o777
     assert mode & 0o077 == 0, f"state file is group/world readable: {mode:o}"
+
+
+def test_concurrent_sign_ins_keep_the_owner_pin_and_every_session():
+    """The auth endpoints run in uvicorn's threadpool, so these mutators really are called
+    concurrently. Unsynchronised, 16 concurrent new_session calls raised PermissionError from
+    os.replace on Windows (every thread wrote the same `.tmp`), and where it did not raise it left
+    invalid JSON — at which point load_state falls back to a blank owner_id, the pin is GONE, and
+    the next account to sign in claims the box.
+
+    setswitchinterval is what makes this catch the regression rather than describe it.
+    """
+    import sys
+    import tempfile
+    import threading
+
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-9)
+    try:
+        d = tempfile.mkdtemp()
+        S.claim_owner(d, USER, "")
+        start = threading.Barrier(16)
+        sids = []
+        guard = threading.Lock()
+
+        def worker():
+            start.wait()
+            sid = S.new_session(d)
+            with guard:
+                sids.append(sid)
+
+        threads = [threading.Thread(target=worker) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        state = S.load_state(d)
+        assert state["owner_id"] == "user-1", "owner pin lost to a concurrent write"
+        assert len(sids) == 16, "a sign-in raised instead of returning"
+        assert len(state["sessions"]) == 16, "sessions lost to a concurrent write"
+    finally:
+        sys.setswitchinterval(old)
