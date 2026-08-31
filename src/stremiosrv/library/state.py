@@ -80,6 +80,8 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "progress": pin.get("progress", 1.0),
             "state": pin.get("state", "idle"),
             "peers": pin.get("peers", 0),
+            "seeds": pin.get("seeds", 0),
+            "downloadSpeed": pin.get("downloadSpeed", 0),
             "uploaded": pin.get("uploaded", 0),
             "ratio": pin.get("ratio", 0.0),
             "uploadSpeed": pin.get("uploadSpeed", 0),
@@ -95,6 +97,7 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "name": pin.get("name", ""), "infoHash": ih, "size": 0, "mtime": 0,
             "pinned": True, "progress": pin.get("progress", 0.0),
             "state": pin.get("state", "downloading"), "peers": pin.get("peers", 0),
+            "seeds": pin.get("seeds", 0), "downloadSpeed": pin.get("downloadSpeed", 0),
             "uploaded": pin.get("uploaded", 0), "ratio": pin.get("ratio", 0.0),
             "uploadSpeed": pin.get("uploadSpeed", 0), "label": all_labels.get(ih),
             "removable": True,
@@ -106,6 +109,7 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         entries.append({
             "name": f"incomplete download data ({ih[:8]})", "infoHash": ih, "size": size,
             "mtime": 0, "pinned": False, "progress": 0.0, "state": "idle", "peers": 0,
+            "seeds": 0, "downloadSpeed": 0,
             "uploaded": 0, "ratio": 0.0, "uploadSpeed": 0, "label": None, "removable": False,
         })
 

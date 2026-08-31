@@ -46,6 +46,10 @@
   .cap { margin-top:8px; font-size:13px; text-align:center; line-height:1.3;
          display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .sub { color:var(--dim); font-size:12px; text-align:center; }
+  /* The release the download actually picked. Long, so clip it and keep the full name in the
+     tooltip -- two identical-looking episodes differ only here. */
+  .rel2 { color:#6f6a95; font-size:11px; text-align:center; margin-top:2px;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .dl { display:block; width:100%; margin-top:6px; }
 
   button { background:var(--accent); color:#fff; border:0; border-radius:7px;
@@ -286,7 +290,7 @@ const LIB = (() => {
     const title = label.name || e.name;
     const downloading = e.state === 'downloading';
     return `
-    <div class="card">
+    <div class="card" data-infohash="${esc(e.infoHash || '')}">
       <div class="poster">
         ${posterHtml(label.poster, title)}
         ${e.pinned && !downloading ? '<span class="badge">&#10003;</span>' : ''}
@@ -297,9 +301,13 @@ const LIB = (() => {
               data-remove="${esc(e.infoHash || '')}">&times;</button></span>`}
       </div>
       <div class="cap">${esc(title)}</div>
-      <div class="sub">${esc(downloading
-        ? String(Math.round(pct(e))) + '%'
-        : (e.peers === 0 && e.progress < 1 ? 'no seeds' : fmt(e.size)))}</div>
+      ${downloading
+        ? `<div class="sub">${esc(String(Math.round(pct(e))) + '%'
+             + (e.downloadSpeed ? ' - ' + fmt(e.downloadSpeed) + '/s' : '')
+             + ' - ' + String(e.seeds || 0) + ' seeders')}</div>
+           <div class="rel2" title="${esc(e.name)}">${esc(e.name)}</div>`
+        : `<div class="sub">${esc(e.peers === 0 && e.progress < 1
+             ? 'no seeds' : fmt(e.size))}</div>`}
     </div>`;
   };
 
@@ -537,6 +545,19 @@ const LIB = (() => {
     });
   }
 
+  // How many entries each title has on disk. A film is either there or not; a series is not --
+  // one episode on disk does not make the series "offline", and saying so is wrong in the way
+  // that matters most, because it hides that the rest is missing.
+  function onDiskCounts(data) {
+    const entries = withClientLabels(data.entries);
+    const counts = {};
+    entries.forEach(e => {
+      const id = e.label && e.label.metaId;
+      if (id) counts[id] = (counts[id] || 0) + 1;
+    });
+    return counts;
+  }
+
   function offlineMetaIds(data) {
     // Client-side labels first: without them this only saw labels the SERVER wrote, so a title on
     // disk from ordinary playback was never recognised and its card kept offering Download.
@@ -587,18 +608,30 @@ const LIB = (() => {
     return rows.slice(0, CATALOG_ROW_CAP);
   }
 
-  const metaCardHtml = (meta, offline) => `
+  const metaCardHtml = (meta, count) => {
+    const n = count || 0;
+    const series = meta.type === 'series';
+    // A series keeps its Download button however many episodes are held -- there is always more
+    // to fetch -- and the badge carries the count rather than a tick that overstates it.
+    const badgeHtml = n > 0
+      ? (series ? `<span class="badge">${esc(String(n))}</span>`
+                : '<span class="badge">&#10003;</span>')
+      : '';
+    const footHtml = (n > 0 && !series)
+      ? '<div class="sub">offline</div>'
+      : `${n > 0 ? `<div class="sub">${esc(n + ' on disk')}</div>` : ''}
+         <button class="dl" data-get="${esc(meta.id)}" data-type="${esc(meta.type)}"
+                 data-poster="${esc(meta.poster || '')}">Download</button>`;
+    return `
     <div class="card" data-metaid="${esc(meta.id)}">
       <div class="poster">
         ${posterHtml(meta.poster, meta.name)}
-        ${offline ? '<span class="badge">&#10003;</span>' : ''}
+        ${badgeHtml}
       </div>
       <div class="cap">${esc(meta.name)}</div>
-      ${offline
-        ? '<div class="sub">offline</div>'
-        : `<button class="dl" data-get="${esc(meta.id)}" data-type="${esc(meta.type)}"
-                   data-poster="${esc(meta.poster || '')}">Download</button>`}
+      ${footHtml}
     </div>`;
+  };
 
   // Opens the chooser. Taking the first stream an addon happened to return was never right: a
   // series needs a season and an episode picked, and even a film has releases worth choosing
@@ -619,7 +652,7 @@ const LIB = (() => {
   // item auto-added by playing something, which is exactly what belongs in this row.
   const ts = v => { const n = Date.parse(v || 0); return Number.isNaN(n) ? 0 : n; };
 
-  function renderContinue(offline) {
+  function renderContinue(counts) {
     const items = Object.values(storedLibrary())
       .filter(i => i && i._id && (i.temp || !i.removed))
       // Date.parse is stricter in some browsers than others; an unparsed stamp must sort last,
@@ -628,11 +661,11 @@ const LIB = (() => {
       .slice(0, 20);
     $('sec-continue').hidden = items.length === 0;
     $('continue').innerHTML = items.map(i => metaCardHtml(
-      { id: i._id, type: i.type, name: i.name, poster: i.poster }, offline.has(i._id))).join('');
+      { id: i._id, type: i.type, name: i.name, poster: i.poster }, counts[i._id])).join('');
     wireDownloadButtons($('continue'));
   }
 
-  async function renderCatalogs(offline) {
+  async function renderCatalogs(counts) {
     const rows = catalogRows();
     const host = $('catalogs');
     if (!rows.length) {
@@ -659,7 +692,7 @@ const LIB = (() => {
         metas.forEach(m => { catalogMetas[m.id] = { _id: m.id, name: m.name,
                                                     poster: m.poster, type: m.type }; });
         el.innerHTML = metas.length
-          ? metas.map(m => metaCardHtml(m, offline.has(m.id))).join('')
+          ? metas.map(m => metaCardHtml(m, counts[m.id])).join('')
           : '<p class="note">Nothing returned.</p>';
         wireDownloadButtons(el);
       } catch (e) {
@@ -671,26 +704,44 @@ const LIB = (() => {
   let lastState = { entries: [] };
 
   async function renderBoard(data) {
-    const offline = offlineMetaIds(data);
-    renderContinue(offline);
-    await renderCatalogs(offline);
+    const counts = onDiskCounts(data);
+    renderContinue(counts);
+    await renderCatalogs(counts);
   }
 
   // Cheap per-poll update: flip the check badge / Download button on cards already on screen. No
   // network, no innerHTML rewrite, so nothing flickers and the row scroll position is kept.
   function refreshOfflineMarks(data) {
-    const offline = offlineMetaIds(data);
+    const counts = onDiskCounts(data);
+    // Speed and seed counts are the whole point of a progress row: they have to move between
+    // polls, so they are updated here rather than only when the board is rebuilt.
+    const byHash = {};
+    (data.entries || []).forEach(e => { if (e.infoHash) byHash[e.infoHash.toLowerCase()] = e; });
+    document.querySelectorAll('#titles .card, #downloading .card').forEach(card => {
+      const e = byHash[(card.dataset.infohash || '').toLowerCase()];
+      const sub = e && card.querySelector('.sub');
+      if (!e || !sub || e.state !== 'downloading') return;
+      sub.textContent = Math.round((e.progress || 0) * 100) + '%'
+        + (e.downloadSpeed ? ' - ' + fmt(e.downloadSpeed) + '/s' : '')
+        + ' - ' + (e.seeds || 0) + ' seeders';
+    });
     document.querySelectorAll('#continue .card, #catalogs .card').forEach(card => {
-      const btn = card.querySelector('[data-get]');
-      const id = btn ? btn.dataset.get : card.dataset.metaid;
+      const id = card.dataset.metaid;
       if (!id) return;
-      const isOffline = offline.has(id);
-      const hasBadge = !!card.querySelector('.badge');
-      if (isOffline === hasBadge) return;
-      if (isOffline) {
+      const btn = card.querySelector('[data-get]');
+      const n = counts[id] || 0;
+      const series = btn ? btn.dataset.type === 'series' : false;
+      const badge = card.querySelector('.badge');
+      const want = n > 0 ? (series ? String(n) : String.fromCharCode(10003)) : '';
+      if (!want) return;
+      if (badge) { badge.textContent = want; }
+      else {
         card.querySelector('.poster').insertAdjacentHTML(
-          'beforeend', '<span class="badge">&#10003;</span>');
-        if (btn) btn.replaceWith(Object.assign(document.createElement('div'),
+          'beforeend', '<span class="badge">' + want + '</span>');
+      }
+      // A film with a copy on disk has nothing left to fetch; a series always might.
+      if (!series && btn) {
+        btn.replaceWith(Object.assign(document.createElement('div'),
           { className: 'sub', textContent: 'offline' }));
       }
     });
@@ -852,7 +903,7 @@ const LIB = (() => {
     });
   });
   return { signIn, loadState, render, renderBoard, catalogRows, resolveStreams,
-           loadStremioData, storedLibrary, openDetail, fetchMeta, magnetFor, offlineMetaIds, getAuthKey: () => authKey };
+           loadStremioData, storedLibrary, openDetail, fetchMeta, onDiskCounts, magnetFor, offlineMetaIds, getAuthKey: () => authKey };
 })();
 </script>
 </body>

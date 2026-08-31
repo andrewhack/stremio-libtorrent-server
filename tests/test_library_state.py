@@ -148,3 +148,35 @@ def test_ordinary_cache_entry_with_a_hash_is_removable(tmp_path):
     _seed_cache(tmp_path, "a-download")
     eng = FakeEngine(names={"a-download": "aa" * 20})
     assert state.build(str(tmp_path), eng)["entries"][0]["removable"] is True
+
+
+def test_download_speed_and_seeds_are_reported(tmp_path):
+    """Progress alone does not say whether a download is moving. `seeds` counts peers that have the
+    whole thing — the figure that predicts whether it will finish — while `peers` counts every
+    connection, leechers included."""
+    eng = FakeEngine(pinned=[{"infoHash": "aabb", "name": "x", "progress": 0.5,
+                              "state": "downloading", "downloaded": 5, "uploaded": 1,
+                              "ratio": 0.2, "uploadSpeed": 10, "peers": 9,
+                              "seeds": 4, "downloadSpeed": 2_500_000}])
+    e = state.build(str(tmp_path), eng)["entries"][0]
+    assert e["seeds"] == 4 and e["downloadSpeed"] == 2_500_000 and e["peers"] == 9
+
+
+def test_missing_speed_fields_default_to_zero(tmp_path):
+    """An older engine, or a torrent with no status yet, must not make the row render 'undefined'."""
+    eng = FakeEngine(pinned=[{"infoHash": "ccdd", "name": "y", "progress": 0.0,
+                              "state": "downloading"}])
+    e = state.build(str(tmp_path), eng)["entries"][0]
+    assert e["seeds"] == 0 and e["downloadSpeed"] == 0
+
+
+def test_engine_pinned_status_reports_the_fields_the_ui_needs():
+    """The engine dict is the contract state.build passes through; if a key is renamed there the
+    UI silently shows zeros."""
+    import inspect
+
+    from stremiosrv.torrent.engine import Engine
+    src = inspect.getsource(Engine.pinned_status)
+    for key in ('"downloadSpeed"', '"seeds"', '"peers"', '"uploadSpeed"'):
+        assert key in src, f"pinned_status no longer reports {key}"
+    assert "st.download_rate" in src and "st.num_seeds" in src

@@ -80,6 +80,11 @@ def test_every_interpolated_value_is_escaped():
         # quietly become false.
         if e.startswith(("esc(", "Math.", "fmt(", "posterHtml(")):
             continue
+        # A variable whose name ends in `Html` is a fragment this file built. The convention is
+        # only honest because `test_html_builders_escape_their_data` below checks that every one
+        # of them is assembled with esc().
+        if e.endswith("Html"):
+            continue
         # A ternary whose branches are themselves template literals: its own `${...}` were already
         # collected separately by the scanner above, so judge them there, not here.
         if "?" in e and "`" in e:
@@ -355,3 +360,58 @@ def test_releases_show_something_to_choose_between():
     page = _page()
     assert "relLabel" in page
     assert "bh.videoSize" in page
+
+
+def test_a_downloading_card_shows_speed_seeders_and_the_release():
+    """A percentage alone does not say whether a download is moving, and two episodes of the same
+    show look identical without the release name."""
+    page = _page()
+    assert "seeders" in page
+    assert "e.downloadSpeed" in page
+    assert "rel2" in page, "the chosen release is not shown on a downloading card"
+
+
+def test_speed_and_seeders_update_between_polls():
+    """These numbers only mean something if they move. The poll refreshes them in place rather
+    than waiting for a board rebuild, which no longer happens."""
+    page = _page()
+    start = page.index("function refreshOfflineMarks")
+    # Slice to the NEXT function, not to a name that happens to sit earlier in the file — that
+    # produced a negative range and a test that could only ever fail.
+    nxt = min(x for x in (page.find(chr(10) + "  function ", start + 10),
+                          page.find(chr(10) + "  async function ", start + 10)) if x > 0)
+    body = page[start:nxt]
+    assert "downloadSpeed" in body and "seeders" in body
+
+
+def test_cards_carry_their_infohash_for_in_place_updates():
+    """The poll finds the card to update by infohash; without it the numbers could never refresh."""
+    assert 'data-infohash="${esc(e.infoHash' in _page()
+
+
+def test_html_builders_escape_their_data():
+    """`${somethingHtml}` is exempt from the interpolation scan because it is a fragment this file
+    assembled. That exemption holds only while each of those builders escapes what it interpolates
+    — otherwise the naming convention becomes a way to smuggle raw data into innerHTML."""
+    page = _page()
+    for name in ("badgeHtml", "footHtml"):
+        start = page.index("const " + name)
+        body = page[start:start + 700]
+        head = body[:body.index(";")] if ";" in body else body
+        assert "esc(" in head or "&#" in head, f"{name} interpolates without escaping"
+
+
+def test_a_series_is_counted_not_ticked():
+    """One episode on disk does not make a series 'offline'. Saying so is wrong in the way that
+    matters most: it hides that the rest is missing — and it appeared next to a progress bar
+    showing the same series still downloading."""
+    page = _page()
+    assert "onDiskCounts" in page
+    assert "on disk" in page, "a series shows no count of what is held"
+
+
+def test_a_series_keeps_its_download_button():
+    """A film with a copy has nothing left to fetch; a series always might."""
+    page = _page()
+    body = page[page.index("const metaCardHtml"):page.index("function wireDownloadButtons")]
+    assert "n > 0 && !series" in body, "the button is removed for series as well as films"

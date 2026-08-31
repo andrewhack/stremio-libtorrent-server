@@ -760,7 +760,12 @@ class Engine:
                 "uploaded": up,
                 "ratio": round(up / down, 3) if down else 0.0,
                 "uploadSpeed": st.upload_rate,
+                # Progress alone does not say whether a download is actually moving. `seeds` is
+                # the number of peers that have the whole thing -- the figure that predicts whether
+                # it will finish -- while `peers` counts every connection including other leechers.
+                "downloadSpeed": st.download_rate,
                 "peers": st.num_peers,
+                "seeds": st.num_seeds,
             })
         return out
 
