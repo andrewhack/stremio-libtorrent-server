@@ -59,6 +59,23 @@
   .panel { max-width:400px; margin:60px auto; background:var(--card);
            padding:24px; border-radius:14px; }
   .panel label { display:block; margin:14px 0 6px; color:var(--dim); font-size:13px; }
+  /* detail overlay: pick a season, an episode, then a release */
+  .overlay { position:fixed; inset:0; background:rgba(6,5,14,.82); z-index:20; overflow:auto;
+             padding:24px; }
+  .sheet { max-width:820px; margin:24px auto; background:var(--card); border-radius:14px;
+           padding:22px 24px 26px; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+  .sheet h3 { margin:0 0 4px; font-size:20px; }
+  .sheet h4 { margin:14px 0 8px; font-size:15px; font-weight:600; }
+  .sheethead { display:flex; align-items:flex-start; gap:14px; margin-bottom:16px; }
+  .sheethead .poster { width:92px; flex:0 0 auto; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px; }
+  .chip { background:#2a2550; border:0; border-radius:999px; padding:6px 13px; cursor:pointer;
+          color:var(--fg); font:inherit; font-size:13px; }
+  .chip.on { background:var(--accent); }
+  .rel { display:flex; align-items:center; gap:12px; padding:10px 12px; background:#161233;
+         border-radius:9px; margin-bottom:7px; }
+  .rel .who { flex:1; min-width:0; }
+  .rel .meta2 { color:var(--dim); font-size:12px; word-break:break-word; }
   [hidden] { display:none !important; }
   @media (max-width:640px) { :root { --poster-w:116px; } main { padding:8px 14px 40px; }
                              h2 { font-size:18px; } }
@@ -115,6 +132,20 @@
     </section>
   </div>
 </main>
+
+<div id="detail" class="overlay" hidden>
+  <div class="sheet">
+    <div class="sheethead">
+      <div class="poster" id="detail-poster"></div>
+      <div style="flex:1">
+        <h3 id="detail-title"></h3>
+        <div class="note" id="detail-sub"></div>
+      </div>
+      <button class="ghost" id="detail-close">Close</button>
+    </div>
+    <div id="detail-body"></div>
+  </div>
+</div>
 
 <script>
 const LIB = (() => {
@@ -565,23 +596,22 @@ const LIB = (() => {
       <div class="cap">${esc(meta.name)}</div>
       ${offline
         ? '<div class="sub">offline</div>'
-        : `<button class="dl" data-get="${esc(meta.id)}"
-                   data-type="${esc(meta.type)}">Download</button>`}
+        : `<button class="dl" data-get="${esc(meta.id)}" data-type="${esc(meta.type)}"
+                   data-poster="${esc(meta.poster || '')}">Download</button>`}
     </div>`;
 
+  // Opens the chooser. Taking the first stream an addon happened to return was never right: a
+  // series needs a season and an episode picked, and even a film has releases worth choosing
+  // between -- which is exactly what the Stremio client asks you for.
   function wireDownloadButtons(scope) {
     scope.querySelectorAll('[data-get]').forEach(btn => {
-      btn.onclick = async () => {
-        const id = btn.dataset.get, type = btn.dataset.type;
-        btn.disabled = true; btn.textContent = 'Finding...';
-        const { streams, failed } = await resolveStreams(type, id);
-        $('add-err').textContent = failed.length
-          ? 'No response from: ' + failed.join(', ') : '';
-        if (!streams.length) { btn.textContent = 'No sources'; return; }
-        await startDownload(magnetFor(streams[0]),
-          { metaId: id, type, name: btn.dataset.name || '', poster: btn.dataset.poster || '' });
-        btn.textContent = 'Download'; btn.disabled = false;
-      };
+      const card = btn.closest('.card');
+      const cap = card && card.querySelector('.cap');
+      const open = () => openDetail(btn.dataset.get, btn.dataset.type,
+        cap ? cap.textContent.trim() : '', btn.dataset.poster || '');
+      btn.onclick = open;
+      const poster = card && card.querySelector('.poster');
+      if (poster) { poster.style.cursor = 'pointer'; poster.onclick = open; }
     });
   }
 
@@ -666,8 +696,120 @@ const LIB = (() => {
     });
   }
 
+  // ---- detail: choose a season, an episode, then a release ---------------------------------
+  let detailCtx = null;
+
+  const metaAddons = type => addonList().filter(a => {
+    const m = a.manifest || {};
+    const res = (m.resources || []).map(r => (typeof r === 'string' ? r : r && r.name));
+    return res.includes('meta') && (m.types || []).includes(type);
+  });
+
+  async function fetchMeta(type, id) {
+    for (const a of metaAddons(type)) {
+      try {
+        const url = a.transportUrl.replace(/manifest\.json$/, '')
+          + 'meta/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '.json';
+        const b = await (await fetch(url)).json();
+        if (b && b.meta) return b.meta;
+      } catch (e) { /* try the next meta addon */ }
+    }
+    return null;
+  }
+
+  const relLabel = st => {
+    const bh = st.behaviorHints || {};
+    const head = st.name || st.addon || 'Release';
+    const detail = [st.description || st.title || bh.filename || '',
+                    bh.videoSize ? fmt(bh.videoSize) : ''].filter(Boolean).join(' - ');
+    return { head: head, detail: detail };
+  };
+
+  async function showReleases(type, videoId, extra) {
+    const host = $('detail-body');
+    const heading = (extra && extra.heading) ? `<h4>${esc(extra.heading)}</h4>` : '';
+    host.innerHTML = heading + '<p class="note">Looking for releases...</p>';
+    const found = await resolveStreams(type, videoId);
+    const streams = found.streams, failed = found.failed;
+    if (!streams.length) {
+      host.innerHTML = heading + `<p class="note">${esc(failed.length
+        ? 'No addon answered (' + failed.join(', ') + ').'
+        : 'No releases found for this one.')}</p>`;
+      return;
+    }
+    host.innerHTML = heading + streams.map((st, i) => {
+        const l = relLabel(st);
+        return `<div class="rel"><span class="who"><b>${esc(l.head)}</b>
+          <div class="meta2">${esc(l.detail)}</div></span>
+          <button data-rel="${esc(String(i))}">Download</button></div>`;
+      }).join('')
+      + (failed.length ? `<p class="note">${esc('No answer from: ' + failed.join(', '))}</p>` : '');
+    host.querySelectorAll('[data-rel]').forEach(btn => {
+      btn.onclick = async () => {
+        const st = streams[Number(btn.dataset.rel)];
+        btn.disabled = true; btn.textContent = 'Starting...';
+        await startDownload(magnetFor(st), Object.assign({
+          metaId: detailCtx.id, type: detailCtx.type,
+          name: detailCtx.name, poster: detailCtx.poster,
+        }, (extra && extra.label) || {}));
+        btn.textContent = 'Queued';
+      };
+    });
+  }
+
+  function renderSeries(meta) {
+    const vids = (meta.videos || []).filter(v => v && v.id);
+    if (!vids.length) { showReleases(detailCtx.type, detailCtx.id, {}); return; }
+    const seasons = [...new Set(vids.map(v => v.season))]
+      .filter(x => x !== null && x !== undefined).sort((a, b) => a - b);
+    const host = $('detail-body');
+    const paint = season => {
+      const eps = vids.filter(v => v.season === season);
+      host.innerHTML =
+        `<div class="chips">${seasons.map(sn =>
+          `<button class="chip${sn === season ? ' on' : ''}" data-season="${esc(String(sn))}">${
+            esc('Season ' + sn)}</button>`).join('')}</div>`
+        + `<div class="chips">${eps.map((v, i) =>
+          `<button class="chip" data-ep="${esc(String(i))}">${
+            esc((v.episode !== undefined ? 'E' + v.episode : '') + (v.name ? ' ' + v.name : ''))
+          }</button>`).join('')}</div>`
+        + '<div class="note">Pick an episode.</div>';
+      host.querySelectorAll('[data-season]').forEach(b => {
+        b.onclick = () => paint(Number(b.dataset.season));
+      });
+      host.querySelectorAll('[data-ep]').forEach(b => {
+        b.onclick = () => {
+          const v = eps[Number(b.dataset.ep)];
+          showReleases('series', v.id, {
+            heading: 'Season ' + v.season + ' - Episode ' + v.episode,
+            label: { season: v.season, episode: v.episode, videoId: v.id },
+          });
+        };
+      });
+    };
+    paint(seasons[0]);
+  }
+
+  async function openDetail(id, type, name, poster) {
+    detailCtx = { id: id, type: type, name: name, poster: poster };
+    $('detail-title').textContent = name || id;
+    $('detail-sub').textContent = type === 'series'
+      ? 'Pick a season, an episode, then a release' : 'Pick a release';
+    $('detail-poster').innerHTML = posterHtml(poster, name || '');
+    $('detail-body').innerHTML = '<p class="note">Loading...</p>';
+    $('detail').hidden = false;
+    if (type === 'series') {
+      const meta = await fetchMeta(type, id);
+      if (meta) renderSeries(meta); else showReleases(type, id, {});
+    } else {
+      await showReleases(type, id, {});
+    }
+  }
+
   async function boot() {
     $('dologin').onclick = passwordLogin;
+    $('detail-close').onclick = () => { $('detail').hidden = true; };
+    $('detail').onclick = e => { if (e.target === $('detail')) $('detail').hidden = true; };
     $('addmagnet').onclick = () => {
       const m = $('magnet').value.trim();
       $('add-err').textContent = '';
@@ -710,7 +852,7 @@ const LIB = (() => {
     });
   });
   return { signIn, loadState, render, renderBoard, catalogRows, resolveStreams,
-           loadStremioData, storedLibrary, magnetFor, offlineMetaIds, getAuthKey: () => authKey };
+           loadStremioData, storedLibrary, openDetail, fetchMeta, magnetFor, offlineMetaIds, getAuthKey: () => authKey };
 })();
 </script>
 </body>

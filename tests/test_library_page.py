@@ -322,3 +322,36 @@ def test_catalog_metas_also_feed_the_name_matcher():
     page = _page()
     assert "catalogMetas" in page
     assert "Object.assign({}, catalogMetas, storedLibrary())" in page
+
+
+def test_download_opens_a_chooser_rather_than_grabbing_the_first_stream():
+    """A series needs a season and an episode picked, and even a film has releases worth choosing
+    between — which is exactly what the Stremio client asks for. Taking streams[0] was never right."""
+    page = _page()
+    assert "openDetail" in page
+    body = page[page.index("function wireDownloadButtons"):page.index("function renderContinue")]
+    assert "streams[0]" not in body, "the button still downloads the first stream blindly"
+
+
+def test_series_detail_uses_the_meta_resource():
+    """Seasons and episodes come from a meta-capable addon: meta/<type>/<id>.json -> meta.videos,
+    each with `season`, `episode` and an id of the form <metaId>:<season>:<episode>."""
+    page = _page()
+    assert "metaAddons" in page and "'meta/'" in page
+    assert "res.includes('meta')" in page
+    assert "renderSeries" in page
+
+
+def test_the_chosen_episode_is_recorded_on_the_download():
+    """Without season/episode on the label, every episode of a series would be indistinguishable
+    once downloaded."""
+    page = _page()
+    assert "season: v.season, episode: v.episode" in page
+
+
+def test_releases_show_something_to_choose_between():
+    """A list of identical rows is not a choice. Show the addon's own name plus whatever detail it
+    gives — description, filename, size."""
+    page = _page()
+    assert "relLabel" in page
+    assert "bh.videoSize" in page
