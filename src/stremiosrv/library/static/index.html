@@ -59,6 +59,18 @@
   </div>
 
   <div id="app" hidden>
+    <section id="sec-add">
+      <h2>Add</h2>
+      <div class="row">
+        <input id="magnet" placeholder="magnet:?xt=urn:btih:&hellip;">
+        <button id="addmagnet">Download</button>
+      </div>
+      <div class="err" id="add-err"></div>
+    </section>
+    <section id="sec-library">
+      <h2>Your library</h2>
+      <div id="library"></div>
+    </section>
     <section id="sec-titles">
       <h2>Downloaded</h2>
       <div id="titles"></div>
@@ -205,6 +217,7 @@ const LIB = (() => {
         await loadState();
       };
     });
+    renderLibrary(data);
   }
 
   async function loadState() {
@@ -214,8 +227,121 @@ const LIB = (() => {
     return data;
   }
 
+  const storedLibrary = () => {
+    try { return JSON.parse(localStorage.getItem('library') || 'null') || {}; }
+    catch { return {}; }
+  };
+  const storedStreams = () => {
+    try { return JSON.parse(localStorage.getItem('streams') || 'null') || {}; }
+    catch { return {}; }
+  };
+
+  // Only addons that declare the `stream` resource for this type. Cinemeta, for instance, serves
+  // catalog/meta and no streams -- querying it on every click would be pure latency.
+  const streamAddons = type => {
+    const p = storedProfile() || {};
+    return (p.addons || []).filter(a => {
+      const m = a.manifest || {};
+      const res = (m.resources || []).map(r => (typeof r === 'string' ? r : r && r.name));
+      return res.includes('stream') && (m.types || []).includes(type);
+    });
+  };
+
+  const streamUrl = (addon, type, id) =>
+    addon.transportUrl.replace(/manifest\.json$/, '')
+    + 'stream/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '.json';
+
+  // Each addon is queried independently and a failure is named, not fatal. CORS is a per-addon
+  // property, and one addon that omits the header must not empty the whole list.
+  async function resolveStreams(type, id) {
+    const out = [], failed = [];
+    await Promise.all(streamAddons(type).map(async a => {
+      try {
+        const r = await fetch(streamUrl(a, type, id));
+        const body = await r.json();
+        (body.streams || []).forEach(st => {
+          if (st.infoHash) out.push({ ...st, addon: (a.manifest || {}).name });
+        });
+      } catch { failed.push((a.manifest || {}).name || a.transportUrl); }
+    }));
+    return { streams: out, failed };
+  }
+
+  const magnetFor = st => {
+    const tr = (st.sources || []).filter(x => String(x).startsWith('tracker:'))
+      .map(x => '&tr=' + encodeURIComponent(String(x).slice(8))).join('');
+    return 'magnet:?xt=urn:btih:' + encodeURIComponent(st.infoHash) + tr;
+  };
+
+  async function startDownload(magnet, label) {
+    $('add-err').textContent = '';
+    try {
+      await api('/library/api/download', { method: 'POST',
+        body: JSON.stringify({ magnet, label: label || null }) });
+      await loadState();
+    } catch (e) {
+      const b = e.body || {};
+      $('add-err').textContent = e.status === 409
+        ? 'Not enough free disk. Needs ' + fmt(b.needed) + ', ' + fmt(b.free)
+          + ' free - remove something first.'
+        : 'Could not start the download.';
+    }
+  }
+
+  // Which library items are already on disk. The server knows infohashes, not meta ids, so the
+  // join goes through the player's own `streams` bucket -- the record of which stream played each
+  // video, whose torrent source carries infoHash/fileIdx.
+  function offlineMetaIds(data) {
+    const have = new Set((data.entries || [])
+      .filter(e => e.infoHash).map(e => e.infoHash.toLowerCase()));
+    const ids = new Set();
+    // Downloads started from this page carry their metaId in the label -- the direct route.
+    (data.entries || []).forEach(e => { if (e.label && e.label.metaId) ids.add(e.label.metaId); });
+    // Anything played through the client is reachable via the streams bucket.
+    Object.values(storedStreams()).forEach(item => {
+      const ih = ((item && item.stream && item.stream.infoHash) || '').toLowerCase();
+      if (ih && have.has(ih) && item.metaId) ids.add(item.metaId);
+    });
+    return ids;
+  }
+
+  function renderLibrary(data) {
+    const offline = offlineMetaIds(data);
+    const items = Object.values(storedLibrary()).filter(i => i && !i.removed && i._id);
+    $('library').innerHTML = items.map(i => `
+      <div class="row">
+        <span class="name">${esc(i.name)}</span>
+        <span class="size">${esc(i.type === 'series' ? 'series' : 'movie')}</span>
+        ${offline.has(i._id)
+          ? '<span class="size">&#10003; offline</span>'
+          : `<button data-get="${esc(i._id)}" data-type="${esc(i.type)}">Download</button>`}
+      </div>`).join('') || '<p class="note">Your Stremio library is empty on this device.</p>';
+    document.querySelectorAll('[data-get]').forEach(btn => {
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = 'Finding...';
+        const { streams, failed } = await resolveStreams(btn.dataset.type, btn.dataset.get);
+        $('add-err').textContent = failed.length
+          ? 'No response from: ' + failed.join(', ') : '';
+        if (!streams.length) { btn.textContent = 'No sources'; return; }
+        const item = storedLibrary()[btn.dataset.get] || {};
+        await startDownload(magnetFor(streams[0]), {
+          metaId: btn.dataset.get, type: btn.dataset.type,
+          name: item.name, poster: item.poster,
+        });
+        btn.textContent = 'Download'; btn.disabled = false;
+      };
+    });
+  }
+
   async function boot() {
     $('dologin').onclick = passwordLogin;
+    $('addmagnet').onclick = () => {
+      const m = $('magnet').value.trim();
+      $('add-err').textContent = '';
+      if (!m.startsWith('magnet:')) { $('add-err').textContent = 'Not a magnet link.'; return; }
+      $('magnet').value = '';
+      startDownload(m, null);
+    };
     $('signout').onclick = async () => {
       await api('/library/api/session', { method: 'DELETE' }).catch(() => {});
       authKey = null; showAuth('Signed out.');
@@ -225,7 +351,8 @@ const LIB = (() => {
   }
 
   document.addEventListener('DOMContentLoaded', boot);
-  return { signIn, loadState, render, getAuthKey: () => authKey };
+  return { signIn, loadState, render, renderLibrary, resolveStreams, magnetFor,
+           offlineMetaIds, getAuthKey: () => authKey };
 })();
 </script>
 </body>

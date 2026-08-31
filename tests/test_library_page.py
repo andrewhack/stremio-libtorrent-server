@@ -90,3 +90,36 @@ def test_the_escape_scanner_actually_catches_something():
     found = _interpolations(_page())
     assert len(found) > 5, f"scanner found only {len(found)} interpolations — it is not working"
     assert any(e.strip().startswith("esc(") for e in found)
+
+
+def test_page_resolves_streams_in_the_browser():
+    """The server never contacts an addon — that is what keeps it content-neutral. The page must
+    therefore build the /stream/ URL itself and hand the server only a magnet."""
+    page = _page()
+    assert "/library/api/download" in page
+    # The addon's own transportUrl is rewritten into a /stream/ request, in the browser.
+    assert "transportUrl" in page
+    assert "'stream/'" in page
+
+
+def test_page_filters_addons_by_resource():
+    """Only addons whose manifest declares `stream` for this type are queried, so a catalog-only
+    addon is not fanned out to on every click."""
+    page = _page()
+    assert "resources" in page and "'stream'" in page
+
+
+def test_page_reads_the_library_bucket():
+    assert "localStorage.getItem('library')" in _page()
+
+
+def test_page_offers_magnet_paste():
+    assert 'id="magnet"' in _page()
+
+
+def test_page_joins_downloads_to_titles_through_the_streams_bucket():
+    """`streams` is how an infohash the server holds becomes a title the owner recognises, for
+    anything played through the client rather than downloaded from this page."""
+    page = _page()
+    assert "localStorage.getItem('streams')" in page
+    assert "offlineMetaIds" in page
