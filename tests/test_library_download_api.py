@@ -1,0 +1,196 @@
+import pytest
+from fastapi.testclient import TestClient
+
+from stremiosrv.app import create_app
+from stremiosrv.config import Settings
+from stremiosrv.library import api as lib
+from stremiosrv.library import labels
+from stremiosrv.torrent.engine import PinSpaceError
+
+HTTPS = {"X-Forwarded-Proto": "https"}
+USER = {"_id": "user-1", "email": "owner@example.com"}
+MAGNET = "magnet:?xt=urn:btih:aabbccddeeff00112233445566778899aabbccdd"
+IH = "aabbccddeeff00112233445566778899aabbccdd"
+
+
+class FakeHandle:
+    def __init__(self, ih):
+        self._ih = ih
+
+    def info_hash(self):
+        return self._ih
+
+
+class FakeEngine:
+    def __init__(self, pin_error=None, add_error=None, names=None):
+        self.added, self.pinned, self.removed, self.unpinned = [], [], [], []
+        self.pin_error = pin_error
+        self.add_error = add_error
+        self._names = names or {}
+
+    def add(self, magnet, trackers=None):
+        if self.add_error:
+            raise self.add_error
+        self.added.append(magnet)
+        return FakeHandle(IH)
+
+    def pin(self, ih):
+        if self.pin_error:
+            raise self.pin_error
+        self.pinned.append(ih)
+        return {"infoHash": ih}
+
+    def unpin(self, ih):
+        self.unpinned.append(ih)
+
+    def remove(self, ih):
+        self.removed.append(ih)
+
+    def name_to_hash(self):
+        return self._names
+
+    def pinned_status(self):
+        return []
+
+
+def _signed_in(tmp_path, monkeypatch, engine):
+    monkeypatch.setattr(lib.certcheck, "cert_san", lambda p: "DNS:stremio.example.com")
+    monkeypatch.setattr(lib.stremio_api, "get_user", lambda key, **kw: USER)
+    s = Settings(library_ui=True, cache_root=str(tmp_path))
+    c = TestClient(create_app(settings=s, engine=engine), base_url="https://testserver")
+    c.post("/library/api/session", json={"authKey": "good"}, headers=HTTPS)
+    return c
+
+
+@pytest.fixture()
+def ctx(tmp_path, monkeypatch):
+    eng = FakeEngine()
+    return _signed_in(tmp_path, monkeypatch, eng), eng, tmp_path
+
+
+def test_download_requires_a_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(lib.certcheck, "cert_san", lambda p: "DNS:stremio.example.com")
+    s = Settings(library_ui=True, cache_root=str(tmp_path))
+    c = TestClient(create_app(settings=s, engine=FakeEngine()), base_url="https://testserver")
+    assert c.post("/library/api/download", json={"magnet": MAGNET},
+                  headers=HTTPS).status_code == 401
+
+
+def test_download_adds_then_pins(ctx):
+    c, eng, _ = ctx
+    r = c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
+    assert r.status_code == 200
+    assert eng.added == [MAGNET]
+    assert eng.pinned == [IH]
+
+
+def test_download_records_the_label(ctx):
+    c, _eng, tmp = ctx
+    c.post("/library/api/download",
+           json={"magnet": MAGNET,
+                 "label": {"metaId": "m1", "name": "Placeholder", "type": "movie"}},
+           headers=HTTPS)
+    assert labels.load(str(tmp))[IH]["name"] == "Placeholder"
+
+
+def test_download_without_a_label_stores_none(ctx):
+    c, _, tmp = ctx
+    c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
+    assert labels.load(str(tmp)) == {}
+
+
+def test_download_rejects_a_non_magnet(ctx):
+    c, eng, _ = ctx
+    r = c.post("/library/api/download", json={"magnet": "https://example.com/x.torrent"},
+               headers=HTTPS)
+    assert r.status_code == 400
+    assert eng.added == []
+
+
+def test_download_maps_a_malformed_magnet_to_400(tmp_path, monkeypatch):
+    """`engine.add` runs lt.parse_magnet_uri, which raises on a magnet that passes the prefix check
+    but is otherwise garbage. Unhandled that is a 500 — an operator error reported as a server
+    fault."""
+    eng = FakeEngine(add_error=RuntimeError("invalid magnet uri"))
+    c = _signed_in(tmp_path, monkeypatch, eng)
+    r = c.post("/library/api/download", json={"magnet": "magnet:?xt=nonsense"}, headers=HTTPS)
+    assert r.status_code == 400
+    assert eng.pinned == []
+
+
+def test_disk_guard_maps_to_409(tmp_path, monkeypatch):
+    eng = FakeEngine(pin_error=PinSpaceError(needed=1100, free=500))
+    c = _signed_in(tmp_path, monkeypatch, eng)
+    r = c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
+    assert r.status_code == 409
+    body = r.json()
+    assert body["error"] == "insufficient_space"
+    assert body["needed"] == 1100 and body["free"] == 500
+
+
+def test_disk_guard_shape_matches_the_existing_pin_route(tmp_path, monkeypatch):
+    """/{ih}/pin has always answered the flat {error, needed, free}. Two spellings of one error is
+    how they drift apart, so the new route must not answer {"detail": {...}}."""
+    eng = FakeEngine(pin_error=PinSpaceError(needed=1100, free=500))
+    c = _signed_in(tmp_path, monkeypatch, eng)
+    assert "detail" not in c.post("/library/api/download",
+                                  json={"magnet": MAGNET}, headers=HTTPS).json()
+
+
+def test_download_without_an_engine_is_503(tmp_path, monkeypatch):
+    monkeypatch.setattr(lib.certcheck, "cert_san", lambda p: "DNS:stremio.example.com")
+    monkeypatch.setattr(lib.stremio_api, "get_user", lambda key, **kw: USER)
+    s = Settings(library_ui=True, cache_root=str(tmp_path))
+    c = TestClient(create_app(settings=s, engine=None), base_url="https://testserver")
+    c.post("/library/api/session", json={"authKey": "good"}, headers=HTTPS)
+    assert c.post("/library/api/download", json={"magnet": MAGNET},
+                  headers=HTTPS).status_code == 503
+
+
+def test_remove_unpins_and_drops_the_torrent(ctx):
+    c, eng, _ = ctx
+    r = c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
+    assert r.status_code == 200
+    assert eng.unpinned == [IH] and eng.removed == [IH]
+
+
+def test_remove_drops_the_label(ctx):
+    c, _, tmp = ctx
+    c.post("/library/api/download",
+           json={"magnet": MAGNET, "label": {"name": "Placeholder"}}, headers=HTTPS)
+    c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
+    assert labels.load(str(tmp)) == {}
+
+
+def test_remove_rejects_a_bad_infohash(ctx):
+    c, eng, _ = ctx
+    for bad in ("../../etc", "not-hex", "", "a" * 41):
+        assert c.post("/library/api/remove", json={"infoHash": bad},
+                      headers=HTTPS).status_code == 400
+    assert eng.removed == []
+
+
+def test_remove_cannot_delete_outside_the_cache_root(tmp_path, monkeypatch):
+    """The name comes from the TORRENT, which the operator did not author. A torrent whose name is
+    a traversal must not steer the delete out of cache_root — the same class of hole that was fixed
+    on the /hlsv2 routes in 1.3.7."""
+    outside = tmp_path.parent / "must-survive.txt"
+    outside.write_text("do not delete me", encoding="utf-8")
+    root = tmp_path / "cache"
+    root.mkdir()
+    eng = FakeEngine(names={f"..{chr(92)}must-survive.txt": IH, "../must-survive.txt": IH})
+    c = _signed_in(root, monkeypatch, eng)
+    r = c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
+    assert r.status_code == 200          # the torrent is still stopped
+    assert outside.exists(), "remove escaped cache_root and deleted a file outside it"
+
+
+def test_remove_refuses_to_delete_a_protected_name(tmp_path, monkeypatch):
+    """A torrent named `pins.json` must not let a remove take the pin registry with it."""
+    root = tmp_path / "cache"
+    root.mkdir()
+    (root / "pins.json").write_text("[]", encoding="utf-8")
+    eng = FakeEngine(names={"pins.json": IH})
+    c = _signed_in(root, monkeypatch, eng)
+    c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
+    assert (root / "pins.json").exists(), "remove deleted a PROTECTED file"

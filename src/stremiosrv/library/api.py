@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -20,11 +21,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from stremiosrv import cache as cachemod
 from stremiosrv import certcheck
 from stremiosrv.library import authmode, stremio_api
+from stremiosrv.library import labels as labelsmod
 from stremiosrv.library import session as sessionmod
 from stremiosrv.library import state as statemod
 from stremiosrv.library.ratelimit import RateLimiter
+from stremiosrv.torrent.engine import PinSpaceError
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/library")
@@ -38,6 +42,9 @@ COOKIE = "stremiosrv_library"
 _login_limiter = RateLimiter(limit=5, window=900)
 
 
+_INFOHASH_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
 class SessionBody(BaseModel):
     authKey: str
 
@@ -45,6 +52,15 @@ class SessionBody(BaseModel):
 class LoginBody(BaseModel):
     email: str
     password: str
+
+
+class DownloadBody(BaseModel):
+    magnet: str
+    label: dict | None = None
+
+
+class RemoveBody(BaseModel):
+    infoHash: str
 
 
 def _settings(request: Request):
@@ -195,3 +211,63 @@ def destroy_session(request: Request, response: Response) -> dict:
 def state(request: Request) -> dict:
     s = _settings(request)
     return statemod.build(s.cache_root, request.app.state.engine, budget=int(s.cache_size))
+
+
+def _engine_or_503(request: Request):
+    eng = request.app.state.engine
+    if eng is None:
+        raise HTTPException(status_code=503, detail="torrent engine unavailable")
+    return eng
+
+
+@router.post("/api/download", dependencies=[Depends(require_session)])
+def download(body: DownloadBody, request: Request) -> dict:
+    """Start a full download of a magnet the PAGE resolved.
+
+    The server does not talk to addons — stream lookup happens in the browser, so what arrives here
+    is a magnet, exactly as on the streaming path. Add first, then pin: `Engine.pin` can re-add from
+    a resume file, but a title this box has never seen has neither a handle nor a resume file.
+    """
+    if not body.magnet.startswith("magnet:"):
+        raise HTTPException(status_code=400, detail="a magnet URI is required")
+    eng = _engine_or_503(request)
+    try:
+        handle = eng.add(body.magnet)
+    except Exception as e:  # noqa: BLE001 - a magnet libtorrent cannot parse is a bad request
+        log.warning("library: add failed: %s: %s", type(e).__name__, e)
+        raise HTTPException(status_code=400, detail="could not parse that magnet") from None
+    info_hash = handle.info_hash().lower()
+    try:
+        eng.pin(info_hash)
+    except PinSpaceError as e:
+        # Leave the torrent added but unpinned: it is now an ordinary evictable cache entry, which
+        # is what an unpinned torrent has always been. Removing it here would also discard a
+        # partially-downloaded copy the owner may already have been streaming.
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "insufficient_space", "needed": e.needed, "free": e.free},
+        ) from None
+    if body.label:
+        labelsmod.put(_settings(request).cache_root, info_hash, body.label)
+    return {"ok": True, "infoHash": info_hash}
+
+
+@router.post("/api/remove", dependencies=[Depends(require_session)])
+def remove(body: RemoveBody, request: Request) -> dict:
+    """Unpin, stop the torrent, delete its files, forget its label."""
+    if not _INFOHASH_RE.match(body.infoHash or ""):
+        raise HTTPException(status_code=400, detail="invalid infohash")
+    info_hash = body.infoHash.lower()
+    s = _settings(request)
+    eng = _engine_or_503(request)
+    names = {h.lower(): n for n, h in (eng.name_to_hash() or {}).items()}
+    eng.unpin(info_hash)
+    eng.remove(info_hash)  # stop libtorrent before deleting the files underneath it
+    name = names.get(info_hash)
+    # The name comes from the TORRENT, not from the operator. Require a plain direct child of
+    # cache_root and refuse PROTECTED names, so a torrent called `../../something` or `pins.json`
+    # cannot steer the delete. Same guard /cache/remove already applies for the same reason.
+    if name and os.path.basename(name) == name and name not in cachemod.PROTECTED:
+        cachemod._remove(os.path.join(s.cache_root, name))
+    labelsmod.drop(s.cache_root, info_hash)
+    return {"ok": True}

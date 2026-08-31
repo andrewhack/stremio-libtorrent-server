@@ -3,6 +3,8 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from stremiosrv import health
 from stremiosrv.api import cache as cache_api
@@ -151,6 +153,20 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     # allowlist test's "flag off -> no route" assertion is about absence, not about a 403.
     if settings.library_ui:
         app.include_router(library_api.router)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _flat_dict_detail(request, exc):
+        """A dict `detail` is already the response body the client should see.
+
+        The disk-guard 409 is `{error, needed, free}` — the shape `/{ih}/pin` has always returned
+        via JSONResponse. Letting FastAPI wrap it as `{"detail": {...}}` would give one error two
+        spellings depending on which route raised it, which is how the two drift apart. String
+        details keep the standard `{"detail": "..."}`.
+        """
+        if isinstance(exc.detail, dict):
+            return JSONResponse(exc.detail, status_code=exc.status_code)
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
     return app
 
 
