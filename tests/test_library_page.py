@@ -241,3 +241,35 @@ def test_page_is_not_cacheable(tmp_path):
                    base_url="https://testserver")
     r = c.get("/library/", headers={"X-Forwarded-Proto": "https"})
     assert "no-store" in r.headers.get("cache-control", "")
+
+
+def test_the_poll_does_not_rebuild_the_board():
+    """The 5s poll used to call renderBoard, which re-fetches every catalog and rewrites the DOM —
+    the page visibly reloaded its rows over and over. The poll now only flips the offline markers."""
+    page = _page()
+    assert "refreshOfflineMarks" in page
+    body = page[page.index("  function render(data) {"):page.index("  async function loadState()")]
+    # A CALL, not the word: the comment in there explains why renderBoard must not be called, and
+    # matching the bare name flagged that comment as the violation it was warning about.
+    code = chr(10).join(ln for ln in body.splitlines() if not ln.strip().startswith("//"))
+    assert "renderBoard(" not in code, "render() still rebuilds the whole board on every poll"
+
+
+def test_on_disk_entries_are_named_from_the_players_own_records():
+    """A title being watched right now arrives from the server with no label, and was shown under
+    'Other on disk' as a raw torrent folder name. The player already knows what it is."""
+    page = _page()
+    assert "withClientLabels" in page and "streamIndex" in page
+
+
+def test_data_loading_errors_have_somewhere_to_show():
+    """`libraryError` lost its only render site when the library shelf was replaced by the board,
+    so a failed fetch became invisible again."""
+    page = _page()
+    assert 'id="status"' in page
+    assert "$('status').textContent" in page
+
+
+def test_continue_watching_sort_tolerates_an_unparsable_timestamp():
+    """Date parsing is stricter in some browsers; NaN in a comparator makes the sort incoherent."""
+    assert "Number.isNaN(n) ? 0 : n" in _page()

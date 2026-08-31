@@ -68,6 +68,7 @@
 <header>
   <h1>Library</h1>
   <span id="budget" class="note"></span>
+  <span id="status" class="err" style="margin:0"></span>
   <span style="flex:1"></span>
   <button id="signout" class="ghost" hidden>Sign out</button>
 </header>
@@ -229,7 +230,8 @@ const LIB = (() => {
       rememberAuthKey(out.authKey);
       $('password').value = '';
       await loadStremioData();
-      await loadState();
+      const st = await loadState();
+      await renderBoard(st || lastState);
     } catch (e) {
       $('auth-err').textContent = e.status === 429
         ? 'Too many attempts. Wait a few minutes.'
@@ -273,7 +275,8 @@ const LIB = (() => {
   const EMPTY = '<p class="note">Nothing here yet.</p>';
 
   function render(data) {
-    const entries = data.entries || [];
+    lastState = data;
+    const entries = withClientLabels(data.entries);
     const downloading = entries.filter(e => e.state === 'downloading');
     const done = entries.filter(e => e.label && e.state !== 'downloading');
     const other = entries.filter(e => !e.label && e.state !== 'downloading');
@@ -295,7 +298,9 @@ const LIB = (() => {
         await loadState();
       };
     });
-    renderBoard(data).catch(() => {});
+    // Only the offline markers, never a rebuild: renderBoard re-fetches every catalog, and doing
+    // that on the 5s poll made the whole page flicker and reload its rows continuously.
+    refreshOfflineMarks(data);
   }
 
   async function loadState() {
@@ -339,7 +344,7 @@ const LIB = (() => {
     if (!p || !(p.addons || []).length) {
       try { remoteAddons = ((await stremioApi('addonCollectionGet',
               { authKey, update: true })) || {}).addons || []; }
-      catch (e) { $('add-err').textContent = 'Could not load your addons from Stremio.'; }
+      catch (e) { $('status').textContent = 'Could not load your addons from Stremio: ' + e.message; }
     }
     if (!Object.keys(localLibrary()).length) {
       try {
@@ -412,6 +417,33 @@ const LIB = (() => {
   // Which library items are already on disk. The server knows infohashes, not meta ids, so the
   // join goes through the player's own `streams` bucket -- the record of which stream played each
   // video, whose torrent source carries infoHash/fileIdx.
+  // infohash -> the video/meta it belongs to, from the player's own record of what played what.
+  // This is how a cache entry created by ordinary playback gets its title back: without it, a
+  // title you are literally in the middle of watching shows up under "Other on disk" as a raw
+  // torrent folder name.
+  function streamIndex() {
+    const byHash = {};
+    Object.values(storedStreams()).forEach(item => {
+      const ih = ((item && item.stream && item.stream.infoHash) || '').toLowerCase();
+      if (ih && item.metaId) byHash[ih] = { metaId: item.metaId, videoId: item.videoId };
+    });
+    return byHash;
+  }
+
+  // Give unlabelled disk entries the title the player already knows for them.
+  function withClientLabels(entries) {
+    const idx = streamIndex();
+    const lib = storedLibrary();
+    return (entries || []).map(e => {
+      if (e.label || !e.infoHash) return e;
+      const hit = idx[e.infoHash.toLowerCase()];
+      const item = hit && lib[hit.metaId];
+      if (!item) return e;
+      return { ...e, label: { metaId: hit.metaId, name: item.name, poster: item.poster,
+                              type: item.type } };
+    });
+  }
+
   function offlineMetaIds(data) {
     const have = new Set((data.entries || [])
       .filter(e => e.infoHash).map(e => e.infoHash.toLowerCase()));
@@ -462,7 +494,7 @@ const LIB = (() => {
   }
 
   const metaCardHtml = (meta, offline) => `
-    <div class="card">
+    <div class="card" data-metaid="${esc(meta.id)}">
       <div class="poster">
         ${posterHtml(meta.poster, meta.name)}
         ${offline ? '<span class="badge">&#10003;</span>' : ''}
@@ -492,10 +524,14 @@ const LIB = (() => {
 
   // Continue watching: the library entries that were actually played, newest first. `temp` marks an
   // item auto-added by playing something, which is exactly what belongs in this row.
+  const ts = v => { const n = Date.parse(v || 0); return Number.isNaN(n) ? 0 : n; };
+
   function renderContinue(offline) {
     const items = Object.values(storedLibrary())
       .filter(i => i && i._id && (i.temp || !i.removed))
-      .sort((a, b) => new Date(b._mtime || 0) - new Date(a._mtime || 0))
+      // Date.parse is stricter in some browsers than others; an unparsed stamp must sort last,
+      // not poison the comparator with NaN.
+      .sort((a, b) => ts(b._mtime) - ts(a._mtime))
       .slice(0, 20);
     $('sec-continue').hidden = items.length === 0;
     $('continue').innerHTML = items.map(i => metaCardHtml(
@@ -537,10 +573,32 @@ const LIB = (() => {
     }));
   }
 
+  let lastState = { entries: [] };
+
   async function renderBoard(data) {
     const offline = offlineMetaIds(data);
     renderContinue(offline);
     await renderCatalogs(offline);
+  }
+
+  // Cheap per-poll update: flip the check badge / Download button on cards already on screen. No
+  // network, no innerHTML rewrite, so nothing flickers and the row scroll position is kept.
+  function refreshOfflineMarks(data) {
+    const offline = offlineMetaIds(data);
+    document.querySelectorAll('#continue .card, #catalogs .card').forEach(card => {
+      const btn = card.querySelector('[data-get]');
+      const id = btn ? btn.dataset.get : card.dataset.metaid;
+      if (!id) return;
+      const isOffline = offline.has(id);
+      const hasBadge = !!card.querySelector('.badge');
+      if (isOffline === hasBadge) return;
+      if (isOffline) {
+        card.querySelector('.poster').insertAdjacentHTML(
+          'beforeend', '<span class="badge">&#10003;</span>');
+        if (btn) btn.replaceWith(Object.assign(document.createElement('div'),
+          { className: 'sub', textContent: 'offline' }));
+      }
+    });
   }
 
   async function boot() {
@@ -560,7 +618,11 @@ const LIB = (() => {
       // which is not what clicking Sign out means.
       await showSignInPanel('Signed out.');
     };
-    if (await signIn()) { await loadStremioData(); await loadState(); }
+    if (await signIn()) {
+      await loadStremioData();
+      const st = await loadState();
+      await renderBoard(st || lastState);   // built ONCE; the poll only refreshes markers
+    }
     setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);
   }
 
