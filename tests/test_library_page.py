@@ -273,3 +273,36 @@ def test_data_loading_errors_have_somewhere_to_show():
 def test_continue_watching_sort_tolerates_an_unparsable_timestamp():
     """Date parsing is stricter in some browsers; NaN in a comparator makes the sort incoherent."""
     assert "Number.isNaN(n) ? 0 : n" in _page()
+
+
+def test_localstorage_buckets_are_unwrapped():
+    """stremio-core persists every bucket as {uid, items}. Reading the wrapper made Object.values()
+    return [uid, itemsObject], so every infohash join silently matched nothing — which is why
+    on-disk titles stayed unrecognised and Continue watching offered Download for things already
+    downloaded."""
+    page = _page()
+    assert "bucketItems" in page
+    assert "raw.items !== undefined" in page
+
+
+def test_streams_bucket_handles_a_struct_keyed_map():
+    """Its HashMap key is a struct ({metaId, videoId}), which serialises as [key, value] pairs
+    rather than an object."""
+    assert "Array.isArray(entry)" in _page()
+
+
+def test_release_names_are_matched_against_library_titles():
+    """`streams` is never synced by stremio-core, so a browser that has not run the player has no
+    infohash->title map at all. The torrent's own name is what a torrent client matches on."""
+    page = _page()
+    assert "nameMatcher" in page
+    # Longest title first, so a short title that prefixes a longer one cannot win.
+    assert "b.words.length - a.words.length" in page
+
+
+def test_offline_detection_uses_the_client_labels():
+    """Without this it saw only labels the SERVER wrote, so a title on disk from ordinary playback
+    was never recognised and its card kept offering Download."""
+    page = _page()
+    body = page[page.index("function offlineMetaIds"):page.index("function renderContinue")]
+    assert "withClientLabels(data.entries)" in body

@@ -328,9 +328,22 @@ const LIB = (() => {
     return b ? b.result : null;
   };
 
+  // stremio-core persists each bucket as {uid, items}. Reading the wrapper made Object.values()
+  // return [uid, itemsObject], so every join silently matched nothing.
+  const bucketItems = raw => {
+    if (!raw || typeof raw !== 'object') return null;
+    return (raw.items !== undefined && raw.items !== null) ? raw.items : raw;
+  };
   const localLibrary = () => {
-    try { return JSON.parse(localStorage.getItem('library') || 'null') || {}; }
-    catch { return {}; }
+    try {
+      const items = bucketItems(JSON.parse(localStorage.getItem('library') || 'null'));
+      if (!items) return {};
+      // items is a map keyed by meta id; tolerate an array form too.
+      if (Array.isArray(items)) {
+        const o = {}; items.forEach(i => { if (i && i._id) o[i._id] = i; }); return o;
+      }
+      return items;
+    } catch { return {}; }
   };
   const storedLibrary = () => {
     const local = localLibrary();
@@ -356,9 +369,23 @@ const LIB = (() => {
       } catch (e) { $('add-err').textContent = 'Could not load your library from Stremio.'; }
     }
   }
+  // The streams bucket is a HashMap keyed by a STRUCT ({metaId, videoId}), which serialises as an
+  // array of [key, value] pairs rather than an object. Handle both, plus a plain object form.
   const storedStreams = () => {
-    try { return JSON.parse(localStorage.getItem('streams') || 'null') || {}; }
-    catch { return {}; }
+    try {
+      const items = bucketItems(JSON.parse(localStorage.getItem('streams') || 'null'));
+      if (!items) return [];
+      if (Array.isArray(items)) {
+        return items.map(entry => Array.isArray(entry)
+          ? Object.assign({}, entry[0], entry[1])   // [key, value] pair
+          : entry);
+      }
+      return Object.entries(items).map(([k, v]) => {
+        let key = {};
+        try { key = JSON.parse(k); } catch { key = { metaId: k }; }
+        return Object.assign({}, key, v);
+      });
+    } catch { return []; }
   };
 
   // Only addons that declare the `stream` resource for this type. Cinemeta, for instance, serves
@@ -423,33 +450,62 @@ const LIB = (() => {
   // torrent folder name.
   function streamIndex() {
     const byHash = {};
-    Object.values(storedStreams()).forEach(item => {
+    storedStreams().forEach(item => {
       const ih = ((item && item.stream && item.stream.infoHash) || '').toLowerCase();
       if (ih && item.metaId) byHash[ih] = { metaId: item.metaId, videoId: item.videoId };
     });
     return byHash;
   }
 
+  // Release names use dots and underscores for spaces and then pile on year, season, resolution
+  // and group tags. Flatten to lowercase words so a title can be looked for inside one.
+  const norm = t => String(t || '')
+    .replace(/[._]+/g, ' ')
+    .replace(/[^a-z0-9 ]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  // The `streams` bucket is stored ONLY on the device that played the thing -- stremio-core never
+  // syncs it -- so on a browser that has not run the player there is no infohash->title map at all.
+  // The server does know the torrent's own name, which is what a torrent client matches on. Prefer
+  // the exact infohash join; fall back to finding a library title inside the release name.
+  function nameMatcher() {
+    const byWords = Object.values(storedLibrary())
+      .filter(i => i && i._id && i.name)
+      .map(i => ({ item: i, words: norm(i.name) }))
+      .filter(x => x.words.length >= 3)
+      // Longest title first, so "Dark Matter" wins over a shorter title that is a prefix of it.
+      .sort((a, b) => b.words.length - a.words.length);
+    return name => {
+      const hay = ' ' + norm(name) + ' ';
+      const hit = byWords.find(x => hay.includes(' ' + x.words + ' '));
+      return hit ? hit.item : null;
+    };
+  }
+
   // Give unlabelled disk entries the title the player already knows for them.
   function withClientLabels(entries) {
     const idx = streamIndex();
     const lib = storedLibrary();
+    const byName = nameMatcher();
     return (entries || []).map(e => {
-      if (e.label || !e.infoHash) return e;
-      const hit = idx[e.infoHash.toLowerCase()];
-      const item = hit && lib[hit.metaId];
+      if (e.label) return e;
+      const hit = e.infoHash ? idx[e.infoHash.toLowerCase()] : null;
+      const item = (hit && lib[hit.metaId]) || byName(e.name);
       if (!item) return e;
-      return { ...e, label: { metaId: hit.metaId, name: item.name, poster: item.poster,
+      return { ...e, label: { metaId: item._id, name: item.name, poster: item.poster,
                               type: item.type } };
     });
   }
 
   function offlineMetaIds(data) {
-    const have = new Set((data.entries || [])
-      .filter(e => e.infoHash).map(e => e.infoHash.toLowerCase()));
+    // Client-side labels first: without them this only saw labels the SERVER wrote, so a title on
+    // disk from ordinary playback was never recognised and its card kept offering Download.
+    const entries = withClientLabels(data.entries);
+    const have = new Set(entries.filter(e => e.infoHash).map(e => e.infoHash.toLowerCase()));
     const ids = new Set();
-    // Downloads started from this page carry their metaId in the label -- the direct route.
-    (data.entries || []).forEach(e => { if (e.label && e.label.metaId) ids.add(e.label.metaId); });
+    entries.forEach(e => { if (e.label && e.label.metaId) ids.add(e.label.metaId); });
     // Anything played through the client is reachable via the streams bucket.
     Object.values(storedStreams()).forEach(item => {
       const ih = ((item && item.stream && item.stream.infoHash) || '').toLowerCase();
