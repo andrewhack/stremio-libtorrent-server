@@ -194,3 +194,46 @@ def test_remove_refuses_to_delete_a_protected_name(tmp_path, monkeypatch):
     c = _signed_in(root, monkeypatch, eng)
     c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
     assert (root / "pins.json").exists(), "remove deleted a PROTECTED file"
+
+
+def test_remove_reclaims_the_partfile_and_resume_record(tmp_path, monkeypatch):
+    """A torrent leaves more than its directory. libtorrent keeps a `.<infohash>.parts` holding
+    file beside the data and a fast-resume record under `.resume/`. Deleting only the directory
+    left both — and the partfile is not small: one on a real box held 30 GB after a pinned
+    download, so Remove reclaimed almost nothing and the disk stayed full."""
+    root = tmp_path / "cache"
+    (root / ".resume").mkdir(parents=True)
+    (root / "a-download").mkdir()
+    (root / "a-download" / "f.bin").write_bytes(b"x" * 64)
+    part = root / f".{IH}.parts"
+    part.write_bytes(b"y" * 4096)
+    resume = root / ".resume" / f"{IH}.fastresume"
+    resume.write_bytes(b"z" * 32)
+
+    eng = FakeEngine(names={"a-download": IH})
+    c = _signed_in(root, monkeypatch, eng)
+    assert c.post("/library/api/remove", json={"infoHash": IH},
+                  headers=HTTPS).status_code == 200
+    assert not (root / "a-download").exists(), "the data directory survived"
+    assert not part.exists(), "the .parts holding file survived — most of the data lives there"
+    assert not resume.exists(), "the fast-resume record survived"
+
+
+def test_remove_stops_the_torrent_before_deleting(tmp_path, monkeypatch):
+    """Files must not be deleted underneath a running torrent."""
+    root = tmp_path / "cache"
+    root.mkdir()
+    eng = FakeEngine()
+    c = _signed_in(root, monkeypatch, eng)
+    c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
+    assert eng.removed == [IH], "engine.remove was not called, so the torrent kept running"
+    assert eng.unpinned == [IH], "it stays pinned, so the evictor would still refuse to touch it"
+
+
+def test_remove_tolerates_a_missing_partfile(tmp_path, monkeypatch):
+    """Most torrents have no partfile at all; its absence is not an error."""
+    root = tmp_path / "cache"
+    root.mkdir()
+    c = _signed_in(root, monkeypatch, FakeEngine())
+    assert c.post("/library/api/remove", json={"infoHash": IH},
+                  headers=HTTPS).status_code == 200

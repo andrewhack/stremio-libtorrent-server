@@ -125,14 +125,16 @@ def test_partfile_size_is_folded_into_its_torrent(tmp_path):
     assert entries[0]["size"] >= 4096 + 1024
 
 
-def test_orphan_partfile_is_still_visible_but_not_removable(tmp_path):
-    """A partfile whose torrent is gone still occupies disk, so hiding it would recreate exactly the
-    invisible-disk problem this view exists to prevent. Show it — but never offer a delete that
-    would corrupt live engine state."""
+def test_orphan_partfile_is_visible_and_reclaimable(tmp_path):
+    """A partfile whose torrent is gone still occupies disk — one on a real box held 30 GB — so
+    hiding it would recreate the invisible-disk problem this view exists to prevent. It must also
+    be removable, or that space cannot be reclaimed from the UI at all: /library/api/remove stops
+    the torrent before deleting, and an orphan has no torrent in the session to corrupt."""
     _partfile(tmp_path, "bb" * 20, 2048)
     entries = state.build(str(tmp_path), None)["entries"]
     assert len(entries) == 1
-    assert entries[0]["removable"] is False
+    assert entries[0]["removable"] is True
+    assert entries[0]["infoHash"] == "bb" * 20
     assert entries[0]["size"] >= 2048
 
 

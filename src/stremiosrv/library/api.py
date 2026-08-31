@@ -265,7 +265,13 @@ def download(body: DownloadBody, request: Request) -> dict:
 
 @router.post("/api/remove", dependencies=[Depends(require_session)])
 def remove(body: RemoveBody, request: Request) -> dict:
-    """Unpin, stop the torrent, delete its files, forget its label."""
+    """Unpin, stop the torrent, delete everything it left on disk, forget its label.
+
+    A torrent leaves more than its directory behind. libtorrent keeps a `.<infohash>.parts`
+    holding file beside the data and a fast-resume record under `.resume/`; deleting only the
+    directory left both, and the partfile is not small -- one on a real box held 30 GB after a
+    pinned download, so "Remove" reclaimed almost nothing and the disk stayed full.
+    """
     if not _INFOHASH_RE.match(body.infoHash or ""):
         raise HTTPException(status_code=400, detail="invalid infohash")
     info_hash = body.infoHash.lower()
@@ -273,12 +279,16 @@ def remove(body: RemoveBody, request: Request) -> dict:
     eng = _engine_or_503(request)
     names = {h.lower(): n for n, h in (eng.name_to_hash() or {}).items()}
     eng.unpin(info_hash)
-    eng.remove(info_hash)  # stop libtorrent before deleting the files underneath it
+    eng.remove(info_hash)  # drops it from the session: downloading stops before anything is deleted
     name = names.get(info_hash)
     # The name comes from the TORRENT, not from the operator. Require a plain direct child of
     # cache_root and refuse PROTECTED names, so a torrent called `../../something` or `pins.json`
     # cannot steer the delete. Same guard /cache/remove already applies for the same reason.
     if name and os.path.basename(name) == name and name not in cachemod.PROTECTED:
         cachemod._remove(os.path.join(s.cache_root, name))
+    # Both of these are named from the infohash, which is already validated as 40 hex above, so
+    # neither can be steered anywhere.
+    cachemod._remove(os.path.join(s.cache_root, f".{info_hash}.parts"))
+    cachemod._remove(os.path.join(s.cache_root, ".resume", f"{info_hash}.fastresume"))
     labelsmod.drop(s.cache_root, info_hash)
     return {"ok": True}

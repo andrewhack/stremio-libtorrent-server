@@ -103,14 +103,16 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "removable": True,
         })
 
-    # Partfiles whose torrent is no longer on disk. They still occupy space, so hiding them would
-    # recreate the invisible-disk problem; they are shown, and never offered a delete.
+    # Partfiles whose torrent is no longer on disk. They still occupy space -- one on a real box
+    # held 30 GB -- so hiding them would recreate the invisible-disk problem. They ARE removable:
+    # /library/api/remove stops the torrent before deleting anything, and an orphan has no torrent
+    # in the session at all, so there is nothing to corrupt.
     for ih, size in part_bytes.items():
         entries.append({
             "name": f"incomplete download data ({ih[:8]})", "infoHash": ih, "size": size,
             "mtime": 0, "pinned": False, "progress": 0.0, "state": "idle", "peers": 0,
             "seeds": 0, "downloadSpeed": 0,
-            "uploaded": 0, "ratio": 0.0, "uploadSpeed": 0, "label": None, "removable": False,
+            "uploaded": 0, "ratio": 0.0, "uploadSpeed": 0, "label": None, "removable": True,
         })
 
     # cache.usage already reports the budget as `cacheSize`; adding a second key for it would give
