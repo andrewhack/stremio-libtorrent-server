@@ -204,3 +204,12 @@ def test_empty_library_distinguishes_fetched_from_filtered():
     """'Came back empty' and 'fetched plenty, showed none' are different faults with different
     fixes, and looked identical from the outside for two rounds of debugging."""
     assert "library entries but none are shown" in _page()
+
+
+def test_page_is_not_cacheable(tmp_path):
+    """A cached page makes every redeploy unverifiable: the person testing cannot tell whether they
+    are running the new build, so a fixed bug and an unfixed one look the same."""
+    c = TestClient(create_app(settings=Settings(library_ui=True, cache_root=str(tmp_path))),
+                   base_url="https://testserver")
+    r = c.get("/library/", headers={"X-Forwarded-Proto": "https"})
+    assert "no-store" in r.headers.get("cache-control", "")

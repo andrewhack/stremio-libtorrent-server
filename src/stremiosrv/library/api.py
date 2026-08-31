@@ -136,7 +136,16 @@ def _authorise(request: Request, user: dict, response: Response) -> None:
 
 @router.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(INDEX_HTML, media_type="text/html")
+    """The page, explicitly uncacheable.
+
+    Served without these, a browser holds the previous build and every redeploy becomes a question
+    of whether the person testing is even running the new code. That turned caching into an
+    uncontrolled variable across several debugging rounds, which is worse than the bugs it hid.
+    """
+    return FileResponse(
+        INDEX_HTML, media_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"},
+    )
 
 
 @router.get("/api/config")
