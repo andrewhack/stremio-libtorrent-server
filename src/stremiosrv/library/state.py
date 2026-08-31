@@ -10,11 +10,19 @@ exactly the failure the fail-loud rule exists to prevent.
 from __future__ import annotations
 
 import logging
+import re
 
 from stremiosrv import cache as cachemod
 from stremiosrv.library import labels as labelsmod
 
 log = logging.getLogger(__name__)
+
+# libtorrent writes `.<infohash>.parts` beside the data of a partially-downloaded torrent. It is
+# engine bookkeeping, not something the owner downloaded: shown as its own card it invites a delete
+# that corrupts the torrent it belongs to. Its bytes are real though, so they are attributed to the
+# entry they belong to rather than dropped -- silently under-reporting disk use is the failure this
+# whole view exists to prevent.
+_PARTFILE_RE = re.compile(r"^\.([0-9a-fA-F]{40})\.parts$")
 
 
 def _engine_view(engine) -> tuple[dict, dict]:
@@ -43,8 +51,17 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
     entries: list[dict] = []
     seen: set[str] = set()
 
-    for item in cachemod.scan_cache(cache_root):
+    items = cachemod.scan_cache(cache_root)
+    part_bytes: dict[str, int] = {}
+    for item in items:
+        m = _PARTFILE_RE.match(item["name"])
+        if m:
+            part_bytes[m.group(1).lower()] = part_bytes.get(m.group(1).lower(), 0) + item["size"]
+
+    for item in items:
         name = item["name"]
+        if _PARTFILE_RE.match(name):
+            continue  # folded into its torrent below, or surfaced as an orphan at the end
         ih = (names.get(name) or idle.get(name) or "").lower()
         pin = pins.get(ih, {})
         if ih:
@@ -52,9 +69,11 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         entries.append({
             "name": name,
             "infoHash": ih or None,
-            "size": item["size"],
+            "size": item["size"] + part_bytes.pop(ih, 0) if ih else item["size"],
             "mtime": item["mtime"],
             "pinned": bool(pin),
+            # /library/api/remove is keyed by infohash; without one the button would do nothing.
+            "removable": bool(ih),
             # Without a pin record there is no progress figure to report. The files are on disk and
             # nothing is downloading them, so treat them as complete rather than as 0% — a finished
             # entry showing "0%" reads as a stalled download.
@@ -78,6 +97,16 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "state": pin.get("state", "downloading"), "peers": pin.get("peers", 0),
             "uploaded": pin.get("uploaded", 0), "ratio": pin.get("ratio", 0.0),
             "uploadSpeed": pin.get("uploadSpeed", 0), "label": all_labels.get(ih),
+            "removable": True,
+        })
+
+    # Partfiles whose torrent is no longer on disk. They still occupy space, so hiding them would
+    # recreate the invisible-disk problem; they are shown, and never offered a delete.
+    for ih, size in part_bytes.items():
+        entries.append({
+            "name": f"incomplete download data ({ih[:8]})", "infoHash": ih, "size": size,
+            "mtime": 0, "pinned": False, "progress": 0.0, "state": "idle", "peers": 0,
+            "uploaded": 0, "ratio": 0.0, "uploadSpeed": 0, "label": None, "removable": False,
         })
 
     # cache.usage already reports the budget as `cacheSize`; adding a second key for it would give

@@ -206,6 +206,7 @@ const LIB = (() => {
       // precisely the one we could not confirm belongs to the owner.
       authKey = out.authKey;
       $('password').value = '';
+      await loadStremioData();
       await loadState();
     } catch (e) {
       $('auth-err').textContent = e.status === 429
@@ -233,12 +234,12 @@ const LIB = (() => {
     <div class="card">
       <div class="poster">
         ${posterHtml(label.poster, title)}
-        ${downloading ? '' : '<span class="badge">&#10003;</span>'}
+        ${e.pinned && !downloading ? '<span class="badge">&#10003;</span>' : ''}
         ${downloading
           ? `<div class="prog"><i style="width:${Math.round(pct(e))}%"></i></div>`
           : ''}
-        <span class="act"><button class="danger" title="Remove"
-              data-remove="${esc(e.infoHash || '')}">&times;</button></span>
+        ${e.removable === false ? '' : `<span class="act"><button class="danger" title="Remove"
+              data-remove="${esc(e.infoHash || '')}">&times;</button></span>`}
       </div>
       <div class="cap">${esc(title)}</div>
       <div class="sub">${esc(downloading
@@ -282,10 +283,51 @@ const LIB = (() => {
     return data;
   }
 
-  const storedLibrary = () => {
+  // Populated from api.strem.io when this browser has no player data of its own — a device that
+  // only ever ran the desktop or TV app has an empty `library` bucket on this origin, which is why
+  // "Your library" looked empty even though the account was signed in.
+  let remoteAddons = null;
+  let remoteLibrary = null;
+
+  const stremioApi = async (endpoint, payload) => {
+    const r = await fetch('https://api.strem.io/api/' + endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const b = await r.json();
+    // A 200 is not a success here either: the API reports failures in the body.
+    if (b && b.error) throw new Error((b.error && b.error.message) || 'stremio api error');
+    return b ? b.result : null;
+  };
+
+  const localLibrary = () => {
     try { return JSON.parse(localStorage.getItem('library') || 'null') || {}; }
     catch { return {}; }
   };
+  const storedLibrary = () => {
+    const local = localLibrary();
+    return Object.keys(local).length ? local : (remoteLibrary || {});
+  };
+
+  // Fetched once per sign-in, only for what this device is actually missing.
+  async function loadStremioData() {
+    if (!authKey) return;
+    const p = storedProfile();
+    if (!p || !(p.addons || []).length) {
+      try { remoteAddons = ((await stremioApi('addonCollectionGet',
+              { authKey, update: true })) || {}).addons || []; }
+      catch (e) { $('add-err').textContent = 'Could not load your addons from Stremio.'; }
+    }
+    if (!Object.keys(localLibrary()).length) {
+      try {
+        const items = (await stremioApi('datastoreGet',
+          { authKey, collection: 'libraryItem', all: true })) || [];
+        const byId = {};
+        (Array.isArray(items) ? items : []).forEach(i => { if (i && i._id) byId[i._id] = i; });
+        remoteLibrary = byId;
+      } catch (e) { $('add-err').textContent = 'Could not load your library from Stremio.'; }
+    }
+  }
   const storedStreams = () => {
     try { return JSON.parse(localStorage.getItem('streams') || 'null') || {}; }
     catch { return {}; }
@@ -295,7 +337,8 @@ const LIB = (() => {
   // catalog/meta and no streams -- querying it on every click would be pure latency.
   const streamAddons = type => {
     const p = storedProfile() || {};
-    return (p.addons || []).filter(a => {
+    const addons = (p.addons || []).length ? p.addons : (remoteAddons || []);
+    return addons.filter(a => {
       const m = a.manifest || {};
       const res = (m.resources || []).map(r => (typeof r === 'string' ? r : r && r.name));
       return res.includes('stream') && (m.types || []).includes(type);
@@ -406,7 +449,7 @@ const LIB = (() => {
       await api('/library/api/session', { method: 'DELETE' }).catch(() => {});
       authKey = null; showAuth('Signed out.');
     };
-    if (await signIn()) await loadState();
+    if (await signIn()) { await loadStremioData(); await loadState(); }
     setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);
   }
 

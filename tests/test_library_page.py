@@ -142,3 +142,31 @@ def test_poster_builder_escapes_both_arguments():
     body = page[page.index("const posterHtml"):page.index("const cardHtml")]
     assert "esc(url)" in body, "posterHtml does not escape the URL it is given"
     assert "esc(name)" in body, "posterHtml does not escape the name it is given"
+
+
+def test_page_falls_back_to_the_stremio_api_for_library_and_addons():
+    """A browser that has only ever run the desktop or TV app has an EMPTY `library` bucket on this
+    origin, so reading localStorage alone shows an empty library to a correctly signed-in owner.
+    The account data has to come from the API in that case."""
+    page = _page()
+    assert "datastoreGet" in page, "no library fallback: 'Your library' stays empty off-device"
+    assert "libraryItem" in page
+    assert "addonCollectionGet" in page, "no addon fallback: every Download would find no sources"
+
+
+def test_api_fallback_checks_the_error_body_not_the_status():
+    """Same trap as the server side: api.strem.io answers failures with HTTP 200 and an error body."""
+    page = _page()
+    body = page[page.index("const stremioApi"):page.index("const localLibrary")]
+    assert "b.error" in body, "browser-side API helper trusts the HTTP status"
+
+
+def test_badge_means_pinned_not_merely_present():
+    """Ordinary cached files from playback are not downloads. Marking them with the same check as a
+    kept download tells the owner they have something they do not."""
+    page = _page()
+    assert "e.pinned && !downloading" in page
+
+
+def test_no_remove_button_where_the_server_cannot_act():
+    assert "e.removable === false" in _page()

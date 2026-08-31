@@ -106,3 +106,45 @@ def test_engine_failure_does_not_break_the_listing(tmp_path):
     _seed_cache(tmp_path, "some-download")
     entries = state.build(str(tmp_path), Broken())["entries"]
     assert len(entries) == 1 and entries[0]["pinned"] is False
+
+
+def _partfile(tmp_path, infohash, size=1024):
+    (tmp_path / f".{infohash}.parts").write_bytes(b"x" * size)
+
+
+def test_partfile_size_is_folded_into_its_torrent(tmp_path):
+    """libtorrent writes `.<infohash>.parts` beside the data for a partially-downloaded torrent.
+    It is engine bookkeeping, not a thing the owner downloaded — showing it as its own card invites
+    deleting it, which corrupts the torrent it belongs to. Its bytes are real, so they are added to
+    the entry they belong to rather than dropped."""
+    _seed_cache(tmp_path, "a-download")
+    _partfile(tmp_path, "aa" * 20, 4096)
+    eng = FakeEngine(names={"a-download": "aa" * 20})
+    entries = state.build(str(tmp_path), eng)["entries"]
+    assert len(entries) == 1, f"partfile leaked as its own entry: {[e['name'] for e in entries]}"
+    assert entries[0]["size"] >= 4096 + 1024
+
+
+def test_orphan_partfile_is_still_visible_but_not_removable(tmp_path):
+    """A partfile whose torrent is gone still occupies disk, so hiding it would recreate exactly the
+    invisible-disk problem this view exists to prevent. Show it — but never offer a delete that
+    would corrupt live engine state."""
+    _partfile(tmp_path, "bb" * 20, 2048)
+    entries = state.build(str(tmp_path), None)["entries"]
+    assert len(entries) == 1
+    assert entries[0]["removable"] is False
+    assert entries[0]["size"] >= 2048
+
+
+def test_entries_without_an_infohash_are_not_removable(tmp_path):
+    """/library/api/remove is keyed by infohash. An entry we cannot name one for would render a
+    button that silently does nothing."""
+    _seed_cache(tmp_path, "orphan-folder")
+    e = state.build(str(tmp_path), None)["entries"][0]
+    assert e["infoHash"] is None and e["removable"] is False
+
+
+def test_ordinary_cache_entry_with_a_hash_is_removable(tmp_path):
+    _seed_cache(tmp_path, "a-download")
+    eng = FakeEngine(names={"a-download": "aa" * 20})
+    assert state.build(str(tmp_path), eng)["entries"][0]["removable"] is True
