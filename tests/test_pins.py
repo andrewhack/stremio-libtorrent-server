@@ -44,3 +44,24 @@ def test_pin_fits_truth_table():
     assert pins.pin_fits(5000, 3000, 1000, 1000) is False
     # candidate alone too big
     assert pins.pin_fits(2000, 0, 1500, 1000) is False
+
+
+def test_pinning_marks_every_file_wanted_not_just_every_piece():
+    """libtorrent stores pieces belonging to a file whose FILE priority is 0 in the
+    `.<infohash>.parts` holding file rather than the real file. A torrent that has been streamed
+    once has every other file at 0 (focus_file's `base`), so pinning it while only raising PIECE
+    priorities downloaded gigabytes into the partfile and left the directory empty — 30 GB of one
+    on a real box, with nothing playable on disk.
+    """
+    import inspect
+
+    from stremiosrv.torrent.engine import Engine, Handle
+    src = inspect.getsource(Engine._full_priority)
+    assert "want_all_files" in src, "_full_priority no longer raises FILE priorities"
+
+    want = inspect.getsource(Handle.want_all_files)
+    assert "prioritize_files" in want
+    assert "_focused_idx = None" in want, "focus_file would short-circuit and skip re-applying"
+    # Files must be set BEFORE pieces: prioritize_files overwrites every piece priority.
+    assert want.index("prioritize_files") < inspect.getsource(Engine._full_priority).index(
+        "prioritize_pieces") + len(want)

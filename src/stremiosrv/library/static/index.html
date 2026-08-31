@@ -285,6 +285,22 @@ const LIB = (() => {
                     {className:'fallback', textContent:this.alt}))">`
     : `<div class="fallback">${esc(name)}</div>`;
 
+  // What a finished card says under the title. `fmt(0)` renders an em dash, so an entry whose
+  // size we do not know said nothing at all -- the state is more use than a dash.
+  const subLine = e => {
+    if (e.peers === 0 && e.progress < 1) return 'no seeds';
+    if (e.size) return fmt(e.size);
+    return e.state === 'seeding' ? 'seeding' : (e.pinned ? 'kept' : 'size unknown');
+  };
+
+  // The release a card came from. Shown wherever it adds something the title does not already
+  // say: two episodes of one series, or two rips of one film, differ only here.
+  const releaseHtml = (e, title) => {
+    const rel = e.name || '';
+    if (!rel || norm(rel) === norm(title)) return '';
+    return `<div class="rel2" title="${esc(rel)}">${esc(rel)}</div>`;
+  };
+
   const cardHtml = e => {
     const label = e.label || {};
     const title = label.name || e.name;
@@ -304,10 +320,9 @@ const LIB = (() => {
       ${downloading
         ? `<div class="sub">${esc(String(Math.round(pct(e))) + '%'
              + (e.downloadSpeed ? ' - ' + fmt(e.downloadSpeed) + '/s' : '')
-             + ' - ' + String(e.seeds || 0) + ' seeders')}</div>
-           <div class="rel2" title="${esc(e.name)}">${esc(e.name)}</div>`
-        : `<div class="sub">${esc(e.peers === 0 && e.progress < 1
-             ? 'no seeds' : fmt(e.size))}</div>`}
+             + ' - ' + String(e.seeds || 0) + ' seeders')}</div>`
+        : `<div class="sub">${esc(subLine(e))}</div>`}
+      ${releaseHtml(e, title)}
     </div>`;
   };
 

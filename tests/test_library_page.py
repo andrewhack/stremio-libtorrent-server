@@ -1,4 +1,4 @@
-
+import re
 
 from fastapi.testclient import TestClient
 
@@ -80,10 +80,10 @@ def test_every_interpolated_value_is_escaped():
         # quietly become false.
         if e.startswith(("esc(", "Math.", "fmt(", "posterHtml(")):
             continue
-        # A variable whose name ends in `Html` is a fragment this file built. The convention is
-        # only honest because `test_html_builders_escape_their_data` below checks that every one
-        # of them is assembled with esc().
-        if e.endswith("Html"):
+        # A name ending in `Html` -- variable or call -- is a fragment this file built. The
+        # convention is only honest because `test_html_builders_escape_their_data` below finds
+        # every such builder and checks it is assembled with esc().
+        if e.endswith("Html") or re.match(r"^\w+Html\(", e):
             continue
         # A ternary whose branches are themselves template literals: its own `${...}` were already
         # collected separately by the scanner above, so judge them there, not here.
@@ -392,13 +392,22 @@ def test_cards_carry_their_infohash_for_in_place_updates():
 def test_html_builders_escape_their_data():
     """`${somethingHtml}` is exempt from the interpolation scan because it is a fragment this file
     assembled. That exemption holds only while each of those builders escapes what it interpolates
-    — otherwise the naming convention becomes a way to smuggle raw data into innerHTML."""
+    — otherwise the naming convention becomes a way to smuggle raw data into innerHTML.
+
+    Enumerated, not listed: a hardcoded list silently stops covering the next builder someone adds.
+    """
     page = _page()
-    for name in ("badgeHtml", "footHtml"):
+    names = sorted(set(re.findall(r"const (\w+Html)\s*=", page)))
+    assert len(names) >= 3, f"builder scan found only {names} — the convention is not being used"
+    for name in names:
         start = page.index("const " + name)
-        body = page[start:start + 700]
-        head = body[:body.index(";")] if ";" in body else body
-        assert "esc(" in head or "&#" in head, f"{name} interpolates without escaping"
+        # Bound at the next top-level declaration. Cutting at the first ";" landed inside a
+        # builder's own local variables, before any escaping had happened yet.
+        ends = [x for x in (page.find(chr(10) + "  const ", start + 8),
+                            page.find(chr(10) + "  function ", start + 8),
+                            page.find(chr(10) + "  async function ", start + 8)) if x > 0]
+        body = page[start:min(ends)] if ends else page[start:]
+        assert "esc(" in body, f"{name} builds HTML without escaping anything"
 
 
 def test_a_series_is_counted_not_ticked():

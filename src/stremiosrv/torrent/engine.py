@@ -261,6 +261,29 @@ class Handle:
             pass
         self._focused_idx = idx
 
+    def want_all_files(self) -> None:
+        """Mark every file wanted (priority 1) and forget the streaming focus.
+
+        Piece priority is NOT enough on its own. libtorrent stores pieces belonging to a file whose
+        FILE priority is 0 in the `.<infohash>.parts` holding file instead of the real file. A
+        torrent that had been streamed once has every other file at 0 (see focus_file's `base`), so
+        pinning it afterwards downloaded gigabytes into the partfile while its directory stayed
+        empty -- 30 GB of one in a real cache -- and nothing usable ever appeared on disk.
+
+        Clearing `_focused_idx` matters too: focus_file short-circuits when the index is unchanged,
+        so without this a later stream on the same file would skip re-applying priorities.
+        """
+        ti = self._h.torrent_file()
+        if ti is None:
+            return
+        try:
+            # Files first: prioritize_files overwrites every piece priority, so doing it after
+            # setting pieces would undo them.
+            self._h.prioritize_files([1] * ti.files().num_files())
+        except Exception:  # noqa: BLE001 — best-effort; the piece pass below still applies
+            pass
+        self._focused_idx = None
+
     def _set_focused_priority(self, prio: int) -> None:
         idx = self._focused_idx
         if idx is None:
@@ -695,7 +718,14 @@ class Engine:
             self._full_priority(h)
 
     def _full_priority(self, h: Handle) -> None:
-        n = h.num_pieces() if h.has_metadata() else 0
+        """Everything about this torrent is wanted: every file, then every piece.
+
+        The file pass is the one that matters for what lands on disk -- see Handle.want_all_files.
+        """
+        if not h.has_metadata():
+            return
+        h.want_all_files()
+        n = h.num_pieces()
         if n:
             h.raw().prioritize_pieces([1] * n)
 
