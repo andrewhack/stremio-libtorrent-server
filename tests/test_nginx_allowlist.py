@@ -100,3 +100,34 @@ def test_origin_only_entries_are_real_routes():
     """A stale exclusion is worse than none: it silently blesses a path that no longer exists."""
     api = {r.path for r in create_app().routes if getattr(r, "path", "").startswith("/")}
     assert set(ORIGIN_ONLY) <= api, f"ORIGIN_ONLY names routes that do not exist: {set(ORIGIN_ONLY) - api}"
+
+
+def test_unauthenticated_routes_stay_origin_only():
+    """The library UI adds an AUTHENTICATED namespace on the public origin. These routes have no
+    auth at all and must never join it — proxying them through nginx would hand the cache list and
+    pin controls to the internet."""
+    for path in ("/cache.json", "/cache/remove", "/pins.json",
+                 "/{info_hash}/pin", "/{info_hash}/unpin"):
+        assert path in ORIGIN_ONLY, f"{path} must stay origin-only"
+
+
+def test_library_routes_are_proxied_when_the_flag_is_on():
+    """The test above builds `create_app()` with DEFAULT settings, where STREMIOSRV_LIBRARY_UI is
+    off — so the /library routes are not registered and it cannot see them at all. Without this,
+    every future library route could be added and forgotten in nginx-locations.inc while the
+    allowlist test stayed green: the exact /subtitleSignature failure, reintroduced by a feature
+    flag. Build the app with the flag ON and hold that namespace to the same rule."""
+    from stremiosrv.config import Settings
+
+    app = create_app(settings=Settings(library_ui=True))
+    lib = sorted(
+        r.path for r in app.routes
+        if getattr(r, "path", "").startswith("/library") and "methods" in dir(r)
+    )
+    assert lib, "the flag is on but no /library route was registered — check the mount in app.py"
+    matchers = _proxied_matchers()
+    unreachable = [p for p in lib
+                   if not any(_matches(_concrete(p), mod, val) for mod, val in matchers)]
+    assert not unreachable, (
+        f"library routes not proxied by docker/nginx-locations.inc: {unreachable}"
+    )
