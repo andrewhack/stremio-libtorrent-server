@@ -25,6 +25,13 @@ PROTECTED = frozenset({
     "transcode",
     ".resume",
     "pins.json",
+    # Library-UI state, for the same reason pins.json is here. Both live in cache_root beside the
+    # torrent data, and both are small and rarely rewritten — so select_evictions, which sorts by
+    # mtime, would pick them FIRST once the cache went over budget. Losing library-ui.json is not a
+    # cosmetic loss: load_state falls back to a blank owner_id, so the owner pin disappears and the
+    # next Stremio account to sign in claims the server.
+    "labels.json",
+    "library-ui.json",
 })
 
 

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from stremiosrv import certcheck
 from stremiosrv.library import authmode, stremio_api
 from stremiosrv.library import session as sessionmod
+from stremiosrv.library import state as statemod
 from stremiosrv.library.ratelimit import RateLimiter
 
 log = logging.getLogger(__name__)
@@ -192,4 +193,5 @@ def destroy_session(request: Request, response: Response) -> dict:
 
 @router.get("/api/state", dependencies=[Depends(require_session)])
 def state(request: Request) -> dict:
-    return {"entries": []}  # filled in by Task 8
+    s = _settings(request)
+    return statemod.build(s.cache_root, request.app.state.engine, budget=int(s.cache_size))
