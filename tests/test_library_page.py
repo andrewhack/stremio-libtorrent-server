@@ -170,3 +170,24 @@ def test_badge_means_pinned_not_merely_present():
 
 def test_no_remove_button_where_the_server_cannot_act():
     assert "e.removable === false" in _page()
+
+
+def test_authkey_survives_a_reload():
+    """It was a closure variable, so a password sign-in's key vanished on the next page load and
+    the account data could never be fetched again — which is what kept 'Your library' empty."""
+    page = _page()
+    assert "stremiosrv_library_authkey" in page
+    assert "rememberAuthKey" in page
+
+
+def test_an_existing_session_cookie_is_honoured():
+    """Without probing the cookie first, a device with no player data was sent back to the sign-in
+    form on every single reload even though its session was still valid."""
+    page = _page()
+    body = page[page.index("async function signIn"):page.index("async function passwordLogin")]
+    assert "/library/api/state" in body
+
+
+def test_empty_library_says_why():
+    """A silently empty shelf is indistinguishable from a broken fetch. It must name which one."""
+    assert "libraryError" in _page()

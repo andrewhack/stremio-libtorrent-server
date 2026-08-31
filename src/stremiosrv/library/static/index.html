@@ -137,9 +137,19 @@ const LIB = (() => {
     try { return JSON.parse(localStorage.getItem('profile') || 'null'); }
     catch { return null; }
   };
+  // The player's own key when this origin has one. Otherwise the key a password sign-in returned,
+  // kept under our own name: it was memory-only, so it vanished on every reload and the account
+  // data could never be fetched again -- the reason "Your library" stayed empty after signing in.
+  // Same origin and same storage the player already uses for exactly this value.
+  const OWN_KEY = 'stremiosrv_library_authkey';
   const storedAuthKey = () => {
     const p = storedProfile();
-    return (p && p.auth && p.auth.key) || null;
+    if (p && p.auth && p.auth.key) return p.auth.key;
+    try { return localStorage.getItem(OWN_KEY) || null; } catch { return null; }
+  };
+  const rememberAuthKey = k => {
+    authKey = k || null;
+    try { k ? localStorage.setItem(OWN_KEY, k) : localStorage.removeItem(OWN_KEY); } catch { /* private mode */ }
   };
 
   const fmt = b => {
@@ -164,11 +174,18 @@ const LIB = (() => {
 
   async function signIn() {
     const key = storedAuthKey();
+    // A live session cookie is enough to get in. Without this the page ignored it and demanded a
+    // fresh sign-in on every reload for any device with no player data of its own.
+    if (key) authKey = key;
+    try {
+      await api('/library/api/state');
+      return true;
+    } catch { /* not signed in yet; fall through */ }
     if (key) {
       try {
         await api('/library/api/session', { method: 'POST',
           body: JSON.stringify({ authKey: key }) });
-        authKey = key;
+        rememberAuthKey(key);
         return true;
       } catch (e) {
         if (e.status === 403) {
@@ -204,7 +221,7 @@ const LIB = (() => {
         body: JSON.stringify({ email: $('email').value, password: $('password').value }) });
       // Held in memory only, for calling the owner's addons. Never persisted: this device is
       // precisely the one we could not confirm belongs to the owner.
-      authKey = out.authKey;
+      rememberAuthKey(out.authKey);
       $('password').value = '';
       await loadStremioData();
       await loadState();
@@ -288,6 +305,7 @@ const LIB = (() => {
   // "Your library" looked empty even though the account was signed in.
   let remoteAddons = null;
   let remoteLibrary = null;
+  let libraryError = '';
 
   const stremioApi = async (endpoint, payload) => {
     const r = await fetch('https://api.strem.io/api/' + endpoint, {
@@ -321,7 +339,7 @@ const LIB = (() => {
     if (!Object.keys(localLibrary()).length) {
       try {
         const items = (await stremioApi('datastoreGet',
-          { authKey, collection: 'libraryItem', all: true })) || [];
+          { authKey, collection: 'libraryItem', ids: [], all: true })) || [];
         const byId = {};
         (Array.isArray(items) ? items : []).forEach(i => { if (i && i._id) byId[i._id] = i; });
         remoteLibrary = byId;
@@ -418,7 +436,9 @@ const LIB = (() => {
           : `<button class="dl" data-get="${esc(i._id)}"
                      data-type="${esc(i.type)}">Download</button>`}
       </div>`).join('')
-      || '<p class="note">Your Stremio library is empty on this device.</p>';
+      || `<p class="note">${esc(libraryError
+           || (authKey ? 'Your Stremio library came back empty.'
+                       : 'No Stremio key on this device, so the library could not be loaded.'))}</p>`;
     document.querySelectorAll('[data-get]').forEach(btn => {
       btn.onclick = async () => {
         btn.disabled = true; btn.textContent = 'Finding...';
@@ -447,7 +467,8 @@ const LIB = (() => {
     };
     $('signout').onclick = async () => {
       await api('/library/api/session', { method: 'DELETE' }).catch(() => {});
-      authKey = null; showAuth('Signed out.');
+      rememberAuthKey(null); remoteLibrary = null; remoteAddons = null;
+      showAuth('Signed out.');
     };
     if (await signIn()) { await loadStremioData(); await loadState(); }
     setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);
