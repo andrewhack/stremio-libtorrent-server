@@ -653,3 +653,14 @@ def test_committed_bytes_also_count_against_the_budget():
     src = _fits_src()
     b = "{diskFree: 200e9, cacheUsed: 2e9, committed: 15e9, cacheSize: 19327352832}"
     assert _run_js(src, f"sizeVerdict(4e9, {b})") == "overbudget"
+
+
+def test_a_refused_or_warned_button_explains_itself_on_hover():
+    """A disabled or red button is a decision made on the owner's behalf. The reason was only in a
+    line beneath the release, so hovering the button -- the thing that looked broken -- said
+    nothing. Same sentence, both places."""
+    page = _page()
+    assert "const reason =" in page
+    assert 'title="${esc(reason)}"' in page
+    # and the line underneath is built from that same sentence, so the two cannot drift
+    assert "${esc(reason)}</div>`;" in page

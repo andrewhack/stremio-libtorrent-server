@@ -1027,20 +1027,27 @@ const LIB = (() => {
         const heldHtml = mine ? `<div class="meta2">${esc(busy
              ? 'Already downloading on this server'
              : 'Already on this server' + (mine.pinned ? ', kept' : ', cached'))}</div>` : '';
-        const whyHtml = verdict === 'ok' ? '' : `<div class="meta2">${esc(
-            verdict === 'overbudget'
+        // One sentence, two places: under the release and on the button itself. A disabled or
+        // red button is a decision made on the owner's behalf, and it should be able to explain
+        // itself wherever the pointer happens to be.
+        const reason =
+            busy ? 'This release is already downloading on this server'
+          : verb === 'On server' ? 'This release is already here and kept'
+          : verdict === 'overbudget'
               ? 'Over the ' + fmt(budget.cacheSize) + ' cache budget - it will download, but the '
                 + 'evictor may reclaim it before you watch it. Keep it to protect it.'
-            : size
-              ? 'Needs ' + fmt(size) + ' plus headroom; ' + fmt(budget.diskFree || 0)
-                + ' free' + (budget.committed
-                    ? ', ' + fmt(budget.committed) + ' of it already promised' : '')
-              : 'Not enough free disk for any download; ' + fmt(budget.diskFree || 0) + ' free'
-          )}</div>`;
+          : verdict === 'nodisk'
+              ? (size
+                  ? 'Needs ' + fmt(size) + ' plus headroom; ' + fmt(budget.diskFree || 0)
+                    + ' free' + (budget.committed
+                        ? ', ' + fmt(budget.committed) + ' of it already promised' : '')
+                  : 'Not enough free disk for any download; ' + fmt(budget.diskFree || 0) + ' free')
+          : '';
+        const whyHtml = verdict === 'ok' ? '' : `<div class="meta2">${esc(reason)}</div>`;
         return `<div class="rel"><span class="who"><b>${esc(l.head)}</b>
           <div class="meta2">${esc(l.detail)}</div>${heldHtml}${whyHtml}</span>
           <button data-rel="${esc(String(i))}" class="${
-            verdict === 'overbudget' ? 'warn' : ''}"${
+            verdict === 'overbudget' ? 'warn' : ''}" title="${esc(reason)}"${
             verdict !== 'nodisk' && !busy && verb !== 'On server' ? '' : ' disabled'}>${
             esc(verb)}</button></div>`;
       }).join('')
