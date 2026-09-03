@@ -1,8 +1,8 @@
 # Stremio Streaming-Server Protocol Map
 
 Authoritative route surface that an unmodified Stremio client (TV apps, web player) calls on its
-"streaming server". **Extracted directly from the reference bundle** `server.js` **v4.20.16**
-(`docs/server-url.txt` → `https://dl.strem.io/server/v4.20.16/desktop/server.js`) via the route
+"streaming server". **Extracted directly from the reference bundle** `server.js` **v4.21.1**
+(`docs/server-url.txt` → `https://dl.strem.io/server/v4.21.1/desktop/server.js`) via the route
 registrations (`.get/.post/.use("/…")`). Line numbers are offsets in that minified bundle for
 follow-up handler reading.
 
@@ -88,7 +88,7 @@ rule out an embedded subtitle track, and stores the answer on `videoParams.embed
 
 Unlike every other row above, there is nothing to match against:
 
-- `server.reference.js` (v4.20.16, 6.6 MB) — **0 occurrences**; the same is true of the copy published
+- `server.reference.js` (v4.21.1, 6.7 MB) — **0 occurrences**; the same is true of the copy published
   at `dl.strem.io` and of the one inside `tsaridas/stremio-docker:latest`, which answers **404**;
 - nothing consumes the value — neither `stremio-core` nor `stremio-web` mentions it, and within
   `stremio-video` it is only ever produced.
@@ -121,6 +121,34 @@ torrents. Low priority; many torrents aren't archived. Defer unless fixtures sho
 `/transcode:ext?` (83821). Not needed for torrent streaming to TVs; defer/skip.
 
 ---
+
+## 8. Downloader IPC (v4.20.18+) — deliberately not implemented
+
+Added upstream in **v4.20.18** (2026-05-05), still present in v4.21.1, and the *only* route change
+between v4.20.16 and v4.21.1. It is not part of the client↔server protocol: the namespace is mounted
+only when whatever spawned the server passes a secret in the environment —
+
+```js
+process.env.SERVER_IPC_KEY && enginefs.router.use(`/${process.env.SERVER_IPC_KEY}/downloader`, downloader)
+```
+
+— so with `SERVER_IPC_KEY` unset the routes do not exist at all, which is how `tsaridas/stremio-docker`
+runs it. A browser client cannot reach them either: it has no way to learn the key.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/{key}/downloader/getAll` | every download record, as JSON |
+| GET | `/{key}/downloader/get?id=` | one record |
+| GET | `/{key}/downloader/add?url=` | start a download from a URL |
+| GET | `/{key}/downloader/pause?id=` | pause a `running` download |
+| GET | `/{key}/downloader/resume?id=` | resume a `paused`/`error` download |
+| GET | `/{key}/downloader/remove?id=` | drop the record; unlinks the file when `finished` |
+
+It is a **plain HTTP file downloader** (`node-downloader-helper`), not a torrent manager: records
+carry `id`, `url`, `fileName`, `downloaded`, `total`, `progress` and `status`, state persists to
+`downManager.json`, and files land in `<appPath>/downloads`. It is therefore not parity debt —
+implementing it would only matter if we wanted a desktop shell's own Downloads pane to drive this
+server rather than its bundled one.
 
 ## Parity priority (what to implement, in order)
 

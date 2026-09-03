@@ -17,10 +17,10 @@ def settings(request: Request) -> dict:
     return {
         "options": [],  # UI option descriptors; not required for playback
         "values": {
-            # Report the protocol version we reimplement (captured stock server = v4.20.16). Native
+            # Report the protocol version we reimplement (captured stock server = v4.21.1). Native
             # clients (e.g. Stremio desktop v6) version-gate the configured streaming server and fall
             # back to their bundled 127.0.0.1 server if it doesn't look like a real Stremio server.
-            "serverVersion": "4.20.16",
+            "serverVersion": "4.21.1",
             "appPath": s.cache_root,
             "cacheRoot": s.cache_root,
             "cacheSize": s.cache_size,

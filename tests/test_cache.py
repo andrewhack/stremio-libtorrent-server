@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -326,3 +327,91 @@ def test_run_evictor_deletes_nothing_when_another_server_holds_the_root(tmp_path
     c.write_owner(str(tmp_path), token="production-container")
     c.run_evictor(str(tmp_path), budget=100, interval=1)
     assert d.exists(), "evictor deleted another server's cache despite a live claim"
+
+
+def test_evictor_sleeps_once_per_pass(tmp_path, monkeypatch):
+    """The loop slept at the top AND the bottom, so the real period was 2x the interval it
+    logged. Three sleeps must therefore cover two eviction passes, not one."""
+    from stremiosrv import cache as c
+    passes, sleeps = [], []
+
+    def fake_sleep(n):
+        sleeps.append(n)
+        if len(sleeps) >= 3:
+            raise SystemExit
+
+    monkeypatch.setattr(c.time, "sleep", fake_sleep)
+    monkeypatch.setattr(c, "evict_once", lambda *a, **k: passes.append(1) or {"deleted": []})
+    try:
+        c.run_evictor(str(tmp_path), budget=10**9, interval=7)
+    except SystemExit:
+        pass
+    assert sleeps == [7, 7, 7]
+    assert len(passes) == 2, f"3 sleeps covered {len(passes)} pass(es) — loop is sleeping twice"
+
+
+def _mk(root, name, size, age=10_000):
+    """A cache entry `size` bytes and `age` seconds old (old enough to clear any mtime grace)."""
+    import os as _os
+    p = root / name
+    if name.startswith(".") and name.endswith(".parts"):
+        p.write_bytes(b"x" * size)
+    else:
+        p.mkdir()
+        inner = p / "payload"
+        inner.write_bytes(b"x" * size)
+        t0 = time.time() - age
+        _os.utime(inner, (t0, t0))  # scan_cache walks the tree: the newest file dates the entry
+    t = time.time() - age
+    _os.utime(p, (t, t))
+    return p
+
+
+def _pins(root, entries):
+    (root / "pins.json").write_text(json.dumps(entries), encoding="utf-8")
+
+
+IH = "a" * 40
+
+
+def test_pinned_torrent_is_protected_without_a_live_handle(tmp_path):
+    """A pin must survive its libtorrent handle. `pinned_names()` needs a loaded torrent WITH
+    metadata, so with no engine — or before metadata lands — the pin protected nothing."""
+    from stremiosrv import cache as c
+    keep = _mk(tmp_path, "Pinned Title", 4000)
+    drop = _mk(tmp_path, "Unpinned Title", 4000)
+    _pins(tmp_path, [{"infoHash": IH, "name": "Pinned Title"}])
+    res = c.evict_once(str(tmp_path), budget=1000)
+    names = {d["name"] for d in res["deleted"]}
+    assert "Unpinned Title" in names and not drop.exists()
+    assert keep.exists() and "Pinned Title" not in names
+
+
+def test_partfile_of_a_pinned_torrent_is_protected(tmp_path):
+    """`.<infohash>.parts` is its own scan entry whose name can never match a torrent name, so it
+    was always [no-handle] and always evictable — deleting a live torrent's partial pieces."""
+    from stremiosrv import cache as c
+    part = _mk(tmp_path, f".{IH}.parts", 3000)
+    _mk(tmp_path, "Pinned Title", 4000)
+    _mk(tmp_path, "Unpinned Title", 4000)
+    _pins(tmp_path, [{"infoHash": IH, "name": "Pinned Title"}])
+    c.evict_once(str(tmp_path), budget=1000)
+    assert part.exists(), "partfile of a pinned torrent was evicted out from under it"
+
+
+def test_evicting_a_torrent_takes_its_partfile_with_it(tmp_path):
+    """The other direction: a reclaimed torrent must not leave its holding file behind."""
+    from stremiosrv import cache as c
+
+    class Eng:
+        def recent_names(self, grace): return set()
+        def pinned_names(self): return set()
+        def name_to_hash(self): return {"Doomed Title": IH}
+        def remove(self, ih): pass
+
+    _mk(tmp_path, "Doomed Title", 8000)
+    # Recent, so the mtime grace protects it from being selected on its own: only co-eviction
+    # with its torrent can remove it, which is exactly what this asserts.
+    part = _mk(tmp_path, f".{IH}.parts", 3000, age=5)
+    c.evict_once(str(tmp_path), budget=1000, engine=Eng())
+    assert not part.exists(), "orphaned partfile survived its torrent"
