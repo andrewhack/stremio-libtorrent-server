@@ -254,6 +254,13 @@ class Handle:
         # pinned: seed every file, unless the pin asked for one; otherwise only the played file.
         base = 1 if (self.pinned and self.wanted_idx is None) else 0
         prios = [base] * nfiles
+        # A pin's chosen file stays wanted even while a DIFFERENT file is being played. Without
+        # this, opening another episode of the same pack dropped the kept one to priority 0 --
+        # un-wanting the very file the owner asked to keep, and handing its further pieces to the
+        # partfile rather than the file on disk.
+        w = self.wanted_idx
+        if w is not None and 0 <= w < nfiles:
+            prios[w] = IDLE_FILE_PRIO
         if 0 <= idx < nfiles:
             # High priority only while a stream is actually open on this torrent; otherwise idle-low
             # so it keeps downloading but yields to whatever is being watched now.
@@ -887,7 +894,12 @@ class Engine:
                 # What is actually being fetched, when that is narrower than the torrent.
                 "wantedFile": h.wanted_path(),
                 "progress": round(st.progress, 4),
-                "state": "seeding" if st.is_seeding else "downloading",
+                # is_finished, NOT is_seeding — the same distinction should_stop_seeding
+                # documents. A pin narrowed to one file leaves the other files at priority 0, so
+                # the torrent is NEVER a full seed: keyed off is_seeding, a download that had
+                # completed its one wanted episode reported "downloading" for ever, sat in the
+                # Downloading shelf, and could never read as complete.
+                "state": "seeding" if h.is_finished() else "downloading",
                 "downloaded": down,
                 "uploaded": up,
                 "ratio": round(up / down, 3) if down else 0.0,

@@ -187,3 +187,61 @@ def test_the_choice_is_not_driven_by_an_alert_that_never_arrives():
     assert "_META_ALERT" not in src, "back to an alert the default mask filters out"
     assert 'getattr(lt, "metadata_received_alert"' not in src
     assert "len(self._wanted_applied) < len(self._wanted)" in src, "nothing drives the apply"
+
+
+def test_a_narrowed_pin_reports_complete_when_its_one_file_is_done():
+    """A pin narrowed to one file leaves the rest at priority 0, so the torrent is never a full
+    seed. Keyed off is_seeding, such a download reported "downloading" for ever — progress 1.0,
+    state downloading, stuck in the Downloading shelf and never readable as complete. It is the
+    same is_finished-vs-is_seeding trap should_stop_seeding already documents.
+    """
+    import pathlib
+
+    from stremiosrv.torrent import engine as eng
+    src = pathlib.Path(eng.__file__).read_text(encoding="utf-8")
+    body = src[src.index("def pinned_status"):src.index("def add(", src.index("def pinned_status"))]
+    assert '"state": "seeding" if h.is_finished() else "downloading"' in body
+    assert "st.is_seeding" not in body, "back to whole-torrent seeding; a narrowed pin never is one"
+
+
+def test_playing_another_file_does_not_un_want_the_kept_one():
+    """focus_file rebuilds every file's priority from a base, and for a narrowed pin that base is
+    0 -- so opening a different episode of the same pack set the KEPT episode to priority 0. That
+    un-wants the file the owner asked to keep, and libtorrent puts any further pieces of a
+    priority-0 file into the partfile instead of the file itself.
+    """
+    from stremiosrv.torrent.engine import IDLE_FILE_PRIO, Handle
+
+    class RawHandle:
+        def __init__(self):
+            self.prios = None
+
+        def torrent_file(self):
+            class FS:
+                def num_files(self):
+                    return 5
+            class TI:
+                def files(self):
+                    return FS()
+            return TI()
+
+        def prioritize_files(self, prios):
+            self.prios = list(prios)
+
+        def set_sequential_download(self, on):
+            pass
+
+    raw = RawHandle()
+    h = Handle.__new__(Handle)
+    h._h = raw
+    h.pinned = True
+    h.wanted_idx = 3          # the kept episode
+    h._focused_idx = None
+    h._read_pos = h._read_total = 0
+    h._prefetched = set()
+    h._active = 0
+
+    h.focus_file(1)           # play a DIFFERENT episode
+    assert raw.prios[3] == IDLE_FILE_PRIO, "playing another file un-wanted the kept one"
+    assert raw.prios[1] == IDLE_FILE_PRIO
+    assert raw.prios[0] == 0 and raw.prios[4] == 0
