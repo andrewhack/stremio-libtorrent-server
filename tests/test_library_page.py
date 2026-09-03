@@ -614,3 +614,13 @@ def test_keeping_is_a_deliberate_control_on_the_card():
     assert "data-keep=" in page
     # Unpin is not Remove: the bytes stay, they merely become evictable again.
     assert "/library/api/remove" in page
+
+
+def test_a_pack_shows_the_files_it_holds():
+    """A season pack fills up from several places -- one episode downloaded here, another streamed
+    by the player, possibly by different people. One card said nothing about that while the disk
+    grew, so the card now lists each file it holds with that file's own size."""
+    page = _page()
+    assert "const childrenHtml = e =>" in page
+    assert "e.children" in page
+    assert 'class="kid' in page

@@ -182,3 +182,64 @@ def test_engine_pinned_status_reports_the_fields_the_ui_needs():
     for key in ('"downloadSpeed"', '"seeds"', '"peers"', '"uploadSpeed"'):
         assert key in src, f"the tracked-torrent status no longer reports {key}"
     assert "st.download_rate" in src and "st.num_seeds" in src
+
+
+def test_a_pack_holding_several_episodes_lists_them(tmp_path):
+    """One entry per torrent could not account for a pack: download one episode through the
+    library, let the player stream another, and the second one is invisible while its bytes sit on
+    the disk. The parent entry stays -- removal is still per-torrent, because these share one
+    handle and one directory -- but it now carries what it actually holds.
+    """
+    from stremiosrv.library import state as st
+
+    class Eng:
+        def name_to_hash(self):
+            return {"Some.Pack": "a" * 40}
+
+        def tracked_status(self):
+            return [{
+                "infoHash": "a" * 40, "pinned": False, "progress": 0.4, "state": "downloading",
+                "name": "Some.Pack",
+                "files": [
+                    {"index": 4, "name": "Show.S01E05.mkv", "size": 4_000_000_000,
+                     "downloaded": 2_400_000_000, "progress": 0.6, "wanted": True},
+                    {"index": 5, "name": "Show.S01E06.mkv", "size": 4_000_000_000,
+                     "downloaded": 747_000_000, "progress": 0.19, "wanted": True},
+                    {"index": 7, "name": "Show.S01E08.mkv", "size": 4_000_000_000,
+                     "downloaded": 0, "progress": 0.0, "wanted": False},
+                ],
+            }]
+
+    d = tmp_path / "Some.Pack"
+    d.mkdir()
+    (d / "payload").write_bytes(b"x" * 32)
+    out = st.build(str(tmp_path), Eng(), budget=1)
+    entry = next(e for e in out["entries"] if e["name"] == "Some.Pack")
+    kids = entry.get("children") or []
+    assert [k["name"] for k in kids] == ["Show.S01E05.mkv", "Show.S01E06.mkv"], \
+        "a file with bytes on disk was left unaccounted for"
+    assert [k["size"] for k in kids] == [2_400_000_000, 747_000_000], "sizes must be per file"
+    assert all(k["removable"] is False for k in kids), \
+        "removing one file would have to stop the torrent the others are read from"
+
+
+def test_a_single_file_torrent_is_not_split(tmp_path):
+    """Most torrents are one file. Splitting those would double every card for nothing."""
+    from stremiosrv.library import state as st
+
+    class Eng:
+        def name_to_hash(self):
+            return {"One.Film": "b" * 40}
+
+        def tracked_status(self):
+            return [{"infoHash": "b" * 40, "pinned": True, "progress": 1.0, "state": "seeding",
+                     "name": "One.Film",
+                     "files": [{"index": 0, "name": "One.Film.mkv", "size": 5, "downloaded": 5,
+                                "progress": 1.0, "wanted": True}]}]
+
+    d = tmp_path / "One.Film"
+    d.mkdir()
+    (d / "payload").write_bytes(b"x" * 8)
+    out = st.build(str(tmp_path), Eng(), budget=1)
+    entry = next(e for e in out["entries"] if e["name"] == "One.Film")
+    assert "children" not in entry

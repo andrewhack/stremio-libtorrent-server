@@ -93,6 +93,25 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "uploadSpeed": pin.get("uploadSpeed", 0),
             "label": all_labels.get(ih) if ih else None,
         })
+        # A pack holds several episodes, arriving from different places -- one downloaded here,
+        # another streamed by the player, possibly by different people. One entry per torrent
+        # could not say that, so the disk grew with nothing on the page accounting for it. Split
+        # the entry into the files it actually holds, keeping the torrent entry as their parent.
+        files = [f for f in (pin.get("files") or []) if f.get("downloaded")]
+        if len(files) > 1:
+            parent = entries[-1]
+            parent["children"] = [{
+                "name": f["name"],
+                "infoHash": ih,
+                "fileIdx": f["index"],
+                "size": f["downloaded"],
+                "progress": f["progress"],
+                "wanted": f.get("wanted", False),
+                "pinned": parent["pinned"],
+                # Removal is still per-torrent: these share one handle and one directory, so
+                # deleting one would have to stop the torrent the others are being read from.
+                "removable": False,
+            } for f in files]
 
     # A pin whose files have not landed yet has no cache directory. Without this the UI shows
     # nothing after a download is started and the click looks like it did nothing.

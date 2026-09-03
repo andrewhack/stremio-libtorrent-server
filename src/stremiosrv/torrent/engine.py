@@ -337,6 +337,37 @@ class Handle:
         paths = self.file_paths()
         return paths[idx].replace("\\", "/").rsplit("/", 1)[-1] if 0 <= idx < len(paths) else None
 
+    def file_stats(self) -> list[dict]:
+        """Per-file name, size and bytes-on-disk, for every file this torrent holds anything of.
+
+        A torrent is one cache directory, so the library could only ever show one card for a
+        season pack -- watch a second episode through the player and there was nothing on the page
+        to say where the disk had gone. libtorrent knows this per file; nobody was asking.
+        """
+        ti = self._h.torrent_file()
+        if ti is None:
+            return []
+        fs = ti.files()
+        try:
+            done = list(self._h.file_progress())
+        except Exception:  # noqa: BLE001 — binding without file_progress: fall back to sizes only
+            done = []
+        out = []
+        for i in range(fs.num_files()):
+            size = fs.file_size(i)
+            got = done[i] if i < len(done) else 0
+            if not got and i not in self.wanted:
+                continue  # nothing of it here and nobody asked for it
+            out.append({
+                "index": i,
+                "name": fs.file_path(i).replace("\\", "/").rsplit("/", 1)[-1],
+                "size": size,
+                "downloaded": got,
+                "progress": round(got / size, 4) if size else 0.0,
+                "wanted": i in self.wanted,
+            })
+        return out
+
     def wanted_count(self) -> int:
         """How many files of this torrent are wanted (0 = the whole thing)."""
         return len(self.wanted)
@@ -981,6 +1012,9 @@ class Engine:
                 "pinned": ih in self._pinned,
                 # What is actually being fetched, when that is narrower than the torrent.
                 "wantedFile": h.wanted_path(),
+                # Every file this torrent holds something of. One card per torrent could not
+                # account for a pack whose episodes arrived from different places.
+                "files": h.file_stats(),
                 "progress": round(st.progress, 4),
                 # is_finished, NOT is_seeding — the same distinction should_stop_seeding
                 # documents. A pin narrowed to one file leaves the other files at priority 0, so
