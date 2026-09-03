@@ -332,8 +332,14 @@ const LIB = (() => {
     lastState = data;
     const entries = withClientLabels(data.entries);
     const downloading = entries.filter(e => e.state === 'downloading');
-    const done = entries.filter(e => e.label && e.state !== 'downloading');
-    const other = entries.filter(e => !e.label && e.state !== 'downloading');
+    // Pinned is what makes an entry ours: the pin is written when the download starts and lives
+    // in pins.json. A label is a nicety on top, and labels.json is a separate file that can be
+    // lost -- it was, and every finished download silently dropped out of this section into
+    // "other on disk" while its folder sat on the disk untouched. cardHtml already falls back to
+    // the torrent name for the caption, so an unlabelled pin renders fine.
+    const ours = e => Boolean(e.label || e.pinned);
+    const done = entries.filter(e => ours(e) && e.state !== 'downloading');
+    const other = entries.filter(e => !ours(e) && e.state !== 'downloading');
     $('sec-downloading').hidden = downloading.length === 0;
     $('downloading').innerHTML = downloading.map(cardHtml).join('');
     $('titles').innerHTML = done.map(cardHtml).join('') || EMPTY;
@@ -667,12 +673,27 @@ const LIB = (() => {
   // item auto-added by playing something, which is exactly what belongs in this row.
   const ts = v => { const n = Date.parse(v || 0); return Number.isNaN(n) ? 0 : n; };
 
+  // What Stremio actually shows in this row is the PARTIALLY WATCHED set, ordered by when each
+  // was last watched. Selecting the whole library and sorting on `_mtime` is a different row that
+  // merely resembles it: `_mtime` moves on ANY mutation -- adding a title, a background sync,
+  // marking something watched -- so films nobody had started came first while half-finished
+  // series fell off the end, and no card carried progress because none of them was in progress.
+  const wstate = i => (i && i.state) || {};
+  const inProgress = i => {
+    const st = wstate(i);
+    if (st.flaggedWatched) return false;           // finished: the opposite of "continue"
+    return Number(st.timeOffset) > 0;
+  };
+  // Fall back to `_mtime`, never blend with it: taking the max would let a recent sync on a
+  // title watched months ago outrank one watched last night, which is the ordering being fixed.
+  const watchedAt = i => ts(wstate(i).lastWatched) || ts(i._mtime);
+
   function renderContinue(counts) {
     const items = Object.values(storedLibrary())
-      .filter(i => i && i._id && (i.temp || !i.removed))
+      .filter(i => i && i._id && (i.temp || !i.removed) && inProgress(i))
       // Date.parse is stricter in some browsers than others; an unparsed stamp must sort last,
       // not poison the comparator with NaN.
-      .sort((a, b) => ts(b._mtime) - ts(a._mtime))
+      .sort((a, b) => watchedAt(b) - watchedAt(a))
       .slice(0, 20);
     $('sec-continue').hidden = items.length === 0;
     $('continue').innerHTML = items.map(i => metaCardHtml(
@@ -897,6 +918,19 @@ const LIB = (() => {
       await renderBoard(st || lastState);   // built ONCE; the poll only refreshes markers
     }
     setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);
+    // The 5s poll above is local disk state and must stay that way -- it must never become an
+    // api.strem.io poll. The library itself was fetched once per sign-in, so this row showed
+    // whatever was true when the tab was opened. Refresh it slowly, and whenever the tab comes
+    // back to the foreground, which is when a stale row is actually noticed. Only the continue
+    // row is re-rendered: renderCatalogs re-fetches every addon catalogue and is not cheap.
+    const refreshLibrary = async () => {
+      await loadStremioData();
+      renderContinue(onDiskCounts(lastState));
+    };
+    setInterval(() => { if (!$('app').hidden) refreshLibrary().catch(() => {}); }, 300000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && !$('app').hidden) refreshLibrary().catch(() => {});
+    });
   }
 
   // A blank page is the worst possible failure: it says nothing about what broke. Anything that

@@ -424,3 +424,79 @@ def test_a_series_keeps_its_download_button():
     page = _page()
     body = page[page.index("const metaCardHtml"):page.index("function wireDownloadButtons")]
     assert "n > 0 && !series" in body, "the button is removed for series as well as films"
+
+
+# --- Continue watching: exercise the shipped predicates, not a copy of them -------------------
+# The row showed films nobody had started and dropped half-finished series, because it selected
+# the whole library and sorted on `_mtime`. A string assertion cannot catch a wrong predicate, so
+# this pulls the real source out of the page and runs it.
+
+# Whole lines, not "up to the first semicolon": `ts` has a semicolon inside its own body.
+_CONTINUE_SRC = re.compile(
+    r"(const ts = [^\n]*)[\s\S]*?(const wstate = [\s\S]*?const watchedAt = [^\n]*)")
+
+
+def _run_continue(items):
+    """Filter+sort `items` with the page's own continue-watching predicates, via node."""
+    import json
+    import shutil
+    import subprocess
+
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available; continue-watching predicates not exercised")
+    m = _CONTINUE_SRC.search(_page())
+    assert m, "continue-watching predicates not found in the page — did they move?"
+    harness = f"""
+{m.group(1)}
+{m.group(2)}
+const items = {json.dumps(items)};
+const out = items
+  .filter(i => i && i._id && (i.temp || !i.removed) && inProgress(i))
+  .sort((a, b) => watchedAt(b) - watchedAt(a))
+  .map(i => i._id);
+console.log(JSON.stringify(out));
+"""
+    r = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def test_continue_row_excludes_titles_never_started():
+    """A library entry with no watch progress is not "continue watching" — it is just a title
+    someone added, and it used to outrank real progress purely on `_mtime`."""
+    got = _run_continue([
+        {"_id": "started", "_mtime": "2020-01-01T00:00:00Z",
+         "state": {"timeOffset": 900, "lastWatched": "2020-01-01T00:00:00Z"}},
+        {"_id": "never-played", "_mtime": "2030-01-01T00:00:00Z", "state": {"timeOffset": 0}},
+        {"_id": "no-state-at-all", "_mtime": "2031-01-01T00:00:00Z"},
+    ])
+    assert got == ["started"]
+
+
+def test_continue_row_excludes_titles_flagged_watched():
+    got = _run_continue([
+        {"_id": "finished", "_mtime": "2030-01-01T00:00:00Z",
+         "state": {"timeOffset": 5000, "flaggedWatched": 1}},
+        {"_id": "midway", "_mtime": "2020-01-01T00:00:00Z", "state": {"timeOffset": 60}},
+    ])
+    assert got == ["midway"]
+
+
+def test_continue_row_orders_by_last_watched_not_last_modified():
+    """`_mtime` moves on any mutation — a sync, an add, a watched flag. Ordering on it put things
+    at the top that had not been watched in months."""
+    got = _run_continue([
+        {"_id": "touched-recently-watched-long-ago", "_mtime": "2031-01-01T00:00:00Z",
+         "state": {"timeOffset": 60, "lastWatched": "2020-01-01T00:00:00Z"}},
+        {"_id": "watched-last-night", "_mtime": "2020-06-01T00:00:00Z",
+         "state": {"timeOffset": 60, "lastWatched": "2030-01-01T00:00:00Z"}},
+    ])
+    assert got == ["watched-last-night", "touched-recently-watched-long-ago"]
+
+
+def test_downloaded_section_does_not_depend_on_labels_json():
+    """labels.json is a separate file in the cache root and it HAS been deleted in the field.
+    A pin is what says the library downloaded something; the label is decoration on top."""
+    assert "const ours = e => Boolean(e.label || e.pinned);" in _page()
