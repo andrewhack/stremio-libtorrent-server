@@ -667,12 +667,23 @@ const LIB = (() => {
   // How many entries each title has on disk. A film is either there or not; a series is not --
   // one episode on disk does not make the series "offline", and saying so is wrong in the way
   // that matters most, because it hides that the rest is missing.
+  // How many EPISODES of each title are here -- not how many torrents. One torrent can hold a
+  // whole season, so counting entries said "1 on disk" for a pack holding three watchable
+  // episodes, and would have said exactly the same for nine. It was neither a file count nor a
+  // season count; it counted a thing the owner has no reason to think about.
+  //
+  // Only complete files count, which is the same rule the episode ticks use -- a part-fetched
+  // episode is not something anyone has, and the two must not disagree about that.
   function onDiskCounts(data) {
-    const entries = withClientLabels(data.entries);
     const counts = {};
-    entries.forEach(e => {
+    withClientLabels((data && data.entries) || []).forEach(e => {
       const id = e.label && e.label.metaId;
-      if (id) counts[id] = (counts[id] || 0) + 1;
+      if (!id) return;
+      const kids = e.children || [];
+      const n = kids.length
+        ? kids.filter(k => (k.progress || 0) >= 1).length
+        : ((e.progress || 0) >= 1 ? 1 : 0);
+      if (n) counts[id] = (counts[id] || 0) + n;
     });
     return counts;
   }

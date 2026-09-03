@@ -664,3 +664,14 @@ def test_a_refused_or_warned_button_explains_itself_on_hover():
     assert 'title="${esc(reason)}"' in page
     # and the line underneath is built from that same sentence, so the two cannot drift
     assert "${esc(reason)}</div>`;" in page
+
+
+def test_the_on_disk_badge_counts_episodes_not_torrents():
+    """A pack is one torrent holding many episodes, so counting entries said "1 on disk" whether
+    three episodes were here or nine -- neither a file count nor a season count, but a count of
+    something the owner has no reason to think about. It must use the same complete-files rule the
+    episode ticks use, or the badge and the picker contradict each other."""
+    page = _page()
+    body = page[page.index("function onDiskCounts"):page.index("function onDiskEpisodes")]
+    assert "e.children" in body, "still counting one per torrent"
+    assert "progress" in body, "a part-fetched episode is not one the owner has"
