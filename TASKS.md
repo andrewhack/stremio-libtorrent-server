@@ -47,9 +47,17 @@ what "done" looks like, so it can be picked up without context.
   was labelled with. Watch a second episode from that pack through the player and there is nothing
   in the library to show for it: no card, no size, no way to remove just that episode. The card's
   size is the whole directory too, which is why a 4.2 GB episode can report 8.6 GB.
+  The cache does not care where a request came from, and that is correct: the library UI is
+  owner-gated, but the streaming server is not, so any client pointed at this box adds to the same
+  cache. One person pinning an episode through the library and another streaming a different
+  episode of the same pack through the player land in one torrent, sharing one directory — which
+  the owner then sees as a single card whose size climbs with nothing on the page attributing it.
+  So this is not a rendering nicety: it is what makes a SHARED cache legible.
   *Done =* a multi-file torrent renders one card per file that has data, driven by libtorrent's
-  per-file progress, with the torrent as their shared parent for removal; and the card's size
-  reports the file, not the directory it happens to share.
+  per-file progress and independent of which surface started it, with the torrent as their shared
+  parent for removal; the card's size reports the file, not the directory it happens to share; and
+  each says kept or cached, which is the distinction that decides whether it survives eviction and
+  is orthogonal to who asked for it.
 
 - [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
   `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins
