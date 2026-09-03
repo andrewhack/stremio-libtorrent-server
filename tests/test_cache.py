@@ -268,3 +268,61 @@ def test_transcode_is_still_never_evictable(tmp_path):
     seg.mkdir(parents=True)
     (seg / "seg0.m4s").write_bytes(b"y" * 8192)
     assert [i["name"] for i in scan_cache(str(tmp_path))] == []
+
+
+# --- cache-root ownership -----------------------------------------------------------------
+# On 2026-09-03 a second container was started against production's cache directory with a
+# smaller budget. Sixty seconds later its evictor took the shared cache to almost nothing:
+# every entry read [no-handle]/unserved, because a freshly started server holds no libtorrent
+# handles for files it did not download, and pins.json was empty. Nothing in the code made that
+# mistake survivable, so the guard belongs here rather than in a runbook.
+
+def test_evictor_may_run_on_a_free_root(tmp_path):
+    from stremiosrv import cache as c
+    may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
+    assert may is True and other is None
+
+
+def test_evictor_refuses_a_root_another_server_is_holding(tmp_path):
+    from stremiosrv import cache as c
+    c.write_owner(str(tmp_path), token="the-other-container")
+    may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
+    assert may is False
+    assert other and other["token"] == "the-other-container"
+
+
+def test_evictor_takes_over_a_root_whose_owner_stopped(tmp_path):
+    """A stale claim must never wedge eviction forever — a container that died holds no lock."""
+    from stremiosrv import cache as c
+    c.write_owner(str(tmp_path), token="a-container-that-is-gone", now=time.time() - 4000)
+    may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
+    assert may is True and other is None
+
+
+def test_evictor_may_run_when_the_claim_is_its_own(tmp_path):
+    """Re-entering with our own token (a heartbeat, not a rival) is not a conflict."""
+    from stremiosrv import cache as c
+    c.write_owner(str(tmp_path))
+    may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
+    assert may is True and other is None
+
+
+def test_owner_file_is_protected_from_eviction():
+    from stremiosrv import cache as c
+    assert c.OWNER_FILE in c.PROTECTED
+
+
+def test_run_evictor_deletes_nothing_when_another_server_holds_the_root(tmp_path):
+    """The incident, in miniature: a big cache, a small budget, and a rival already in charge.
+
+    Without the guard this call empties the directory — that is exactly what took a live cache
+    to almost nothing. run_evictor returns before its loop when the claim is refused, so this
+    does not hang.
+    """
+    from stremiosrv import cache as c
+    d = tmp_path / "a-title-this-server-never-downloaded"
+    d.mkdir()
+    (d / "payload").write_bytes(b"x" * 5000)
+    c.write_owner(str(tmp_path), token="production-container")
+    c.run_evictor(str(tmp_path), budget=100, interval=1)
+    assert d.exists(), "evictor deleted another server's cache despite a live claim"
