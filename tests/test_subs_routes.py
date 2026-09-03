@@ -43,7 +43,7 @@ def test_casting_returns_empty_list():
 
 # --- /subtitleSignature: stremio-video >= 0.0.93 calls this at every load whose probe does not rule
 # out an embedded subtitle track. We answer the envelope with a null signature on purpose — the
-# reference server.js v4.20.16 has no such route (404) and nothing upstream consumes the value, so
+# reference server.js v4.21.1 has no such route (404) and nothing upstream consumes the value, so
 # there is no algorithm to implement and a made-up string would be *used* the day a consumer ships.
 
 

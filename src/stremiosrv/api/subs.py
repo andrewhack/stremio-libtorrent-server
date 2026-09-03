@@ -204,8 +204,8 @@ def subtitle_signature(videoUrl: str | None = None, container: str | None = None
     **The signature is always null, and that is a decision, not a stub left behind.** There is
     nothing yet to compute against:
 
-    * the reference implementation does not have this route. The published server.js v4.20.16
-      (6.45 MB from dl.strem.io) contains zero occurrences of `subtitleSignature` and answers 404;
+    * the reference implementation does not have this route. The published server.js v4.21.1
+      (6.7 MB from dl.strem.io) contains zero occurrences of `subtitleSignature` and answers 404;
     * nothing consumes the value. Neither stremio-core nor stremio-web mentions it, and inside
       stremio-video it is only ever produced.
 
