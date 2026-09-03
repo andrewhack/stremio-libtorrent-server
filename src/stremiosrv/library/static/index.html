@@ -333,7 +333,11 @@ const LIB = (() => {
   const childrenHtml = e => {
     const kids = e.children || [];
     if (!kids.length) return '';
-    return `<div class="kids">${kids.map(k => `<div class="kid${
+    const scrapsHtml = e.scraps && e.scraps.count
+      ? `<div class="kid dim">${esc('+' + e.scraps.count + ' partial file'
+          + (e.scraps.count === 1 ? '' : 's') + ' \u00b7 ' + fmt(e.scraps.size))}</div>`
+      : '';
+    return `<div class="kids">${scrapsHtml}${kids.map(k => `<div class="kid${
         k.wanted ? '' : ' dim'}" title="${esc(k.name)}">${esc(shortFile(k.name))} ${esc(fmt(k.size))
       }${k.progress < 1 ? esc(' \u00b7 ' + Math.round(k.progress * 100) + '%') : ''}</div>`
     ).join('')}</div>`;
@@ -673,13 +677,43 @@ const LIB = (() => {
 
   // Which episodes are already here, by Stremio video id. The picker offered every episode
   // identically, so the one you already had looked exactly like the eight you did not.
-  function onDiskVideoIds(data) {
-    const ids = new Set();
+  // Which episodes are here, as "season:episode".
+  //
+  // NOT by videoId. A season pack is ONE infohash, and the player's stream record maps an infohash
+  // to a single video -- so however many episodes of that pack were on disk, at most one could
+  // ever be ticked. The file names are the only thing that knows which episodes a torrent
+  // actually holds, and now that a card carries its files, they are available here.
+  //
+  // Only complete files count. A half-fetched episode is not "already on this server", and saying
+  // so would send someone away from a download they still need.
+  const EPISODE_RE = /S(\d{1,2})[ ._-]?E(\d{1,3})/i;
+
+  function onDiskEpisodes(data) {
+    const out = new Set();
+    const add = (sn, ep) => {
+      if (sn !== undefined && sn !== null && ep !== undefined && ep !== null) {
+        out.add(Number(sn) + ':' + Number(ep));
+      }
+    };
     withClientLabels((data && data.entries) || []).forEach(e => {
-      const vid = e.label && e.label.videoId;
-      if (vid) ids.add(vid);
+      const kids = e.children || [];
+      if (kids.length) {
+        kids.forEach(k => {
+          if ((k.progress || 0) < 1) return;
+          const m = EPISODE_RE.exec(k.name || '');
+          if (m) add(m[1], m[2]);
+        });
+        return;
+      }
+      // A single-file torrent has no children; its label carries the episode it was fetched for.
+      if ((e.progress || 0) >= 1) {
+        const lab = e.label || {};
+        add(lab.season, lab.episode);
+        const m = EPISODE_RE.exec(e.wantedFile || e.name || '');
+        if (m) add(m[1], m[2]);
+      }
     });
-    return ids;
+    return out;
   }
 
   function offlineMetaIds(data) {
@@ -1021,16 +1055,17 @@ const LIB = (() => {
     const host = $('detail-body');
     const paint = season => {
       const eps = vids.filter(v => v.season === season);
-      const have = onDiskVideoIds(lastState);
+      const have = onDiskEpisodes(lastState);
+      const held = v => have.has(Number(v.season) + ':' + Number(v.episode));
       host.innerHTML =
         `<div class="chips">${seasons.map(sn =>
           `<button class="chip${sn === season ? ' on' : ''}" data-season="${esc(String(sn))}">${
             esc('Season ' + sn)}</button>`).join('')}</div>`
         + `<div class="chips">${eps.map((v, i) =>
-          `<button class="chip${have.has(v.id) ? ' have' : ''}" data-ep="${esc(String(i))}"${
-            have.has(v.id) ? ' title="Already on this server"' : ''}>${
+          `<button class="chip${held(v) ? ' have' : ''}" data-ep="${esc(String(i))}"${
+            held(v) ? ' title="Already on this server"' : ''}>${
             esc((v.episode !== undefined ? 'E' + v.episode : '') + (v.name ? ' ' + v.name : '')
-                + (have.has(v.id) ? ' ✓' : ''))
+                + (held(v) ? ' ✓' : ''))
           }</button>`).join('')}</div>`
         + `<div class="note">${esc(have.size
              ? 'Pick an episode. A tick means it is already on this server.'

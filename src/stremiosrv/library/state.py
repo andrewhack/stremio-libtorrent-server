@@ -24,6 +24,12 @@ log = logging.getLogger(__name__)
 # whole view exists to prevent.
 _PARTFILE_RE = re.compile(r"^\.([0-9a-fA-F]{40})\.parts$")
 
+# Below both of these, what is on disk for a file is boundary spill from its neighbours rather
+# than something worth naming. A file the owner actually asked for is always listed, however
+# little of it has arrived -- a download that has just started is not a scrap.
+FRAGMENT_BYTES = 64 * 1024 * 1024
+FRAGMENT_FRACTION = 0.02
+
 
 def _engine_view(engine) -> tuple[dict, dict]:
     """(name -> infohash, infohash -> pin status). Never raises: the engine is allowed to be absent
@@ -97,9 +103,21 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         # another streamed by the player, possibly by different people. One entry per torrent
         # could not say that, so the disk grew with nothing on the page accounting for it. Split
         # the entry into the files it actually holds, keeping the torrent entry as their parent.
-        files = [f for f in (pin.get("files") or []) if f.get("downloaded")]
-        if len(files) > 1:
+        # A piece straddles the boundary between two files, so fetching one leaves kilobytes --
+        # occasionally a few megabytes -- of its neighbours behind. Those are not episodes anyone
+        # has, and listing them as though they were is the same lie as hiding the real ones, told
+        # the other way round. Show what someone could actually watch; account for the rest in one
+        # line rather than dropping it, because unattributed disk is what this view exists to stop.
+        held = [f for f in (pin.get("files") or []) if f.get("downloaded")]
+        files = [f for f in held
+                 if f.get("wanted") or f["downloaded"] >= FRAGMENT_BYTES
+                 or f.get("progress", 0) >= FRAGMENT_FRACTION]
+        scraps = [f for f in held if f not in files]
+        if len(files) > 1 or (files and scraps):
             parent = entries[-1]
+            if scraps:
+                parent["scraps"] = {"count": len(scraps),
+                                    "size": sum(f["downloaded"] for f in scraps)}
             parent["children"] = [{
                 "name": f["name"],
                 "infoHash": ih,

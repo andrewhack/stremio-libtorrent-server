@@ -624,3 +624,13 @@ def test_a_pack_shows_the_files_it_holds():
     assert "const childrenHtml = e =>" in page
     assert "e.children" in page
     assert 'class="kid' in page
+
+
+def test_every_episode_a_pack_holds_is_ticked_not_just_one():
+    """A season pack is ONE infohash, and the player's stream record maps an infohash to a single
+    video -- so ticking by videoId marked at most one episode however many were on disk. The file
+    names are what know which episodes a torrent actually holds."""
+    page = _page()
+    assert "function onDiskEpisodes(" in page
+    assert "have.has(v.id)" not in page, "an episode tick still keys off videoId"
+    assert "EPISODE_RE" in page

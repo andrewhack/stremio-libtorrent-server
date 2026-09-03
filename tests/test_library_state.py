@@ -243,3 +243,68 @@ def test_a_single_file_torrent_is_not_split(tmp_path):
     out = st.build(str(tmp_path), Eng(), budget=1)
     entry = next(e for e in out["entries"] if e["name"] == "One.Film")
     assert "children" not in entry
+
+
+def test_boundary_spill_is_summarised_not_listed_as_episodes(tmp_path):
+    """A piece straddles the boundary between two files, so fetching one leaves kilobytes of its
+    neighbours behind. Listing those as episodes tells the owner they have six when they have two
+    -- the same lie as hiding the real ones, told the other way round. They are still counted,
+    because unattributed disk is the thing this view exists to stop.
+    """
+    from stremiosrv.library import state as st
+
+    def f(idx, name, got, size=4_000_000_000, wanted=False):
+        return {"index": idx, "name": name, "size": size, "downloaded": got,
+                "progress": round(got / size, 4), "wanted": wanted}
+
+    class Eng:
+        def name_to_hash(self):
+            return {"Pack": "a" * 40}
+
+        def tracked_status(self):
+            return [{"infoHash": "a" * 40, "pinned": False, "progress": 1.0, "state": "seeding",
+                     "name": "Pack", "files": [
+                         f(0, "Show.S01E01.mkv", 16_384),          # boundary spill
+                         f(3, "Show.S01E04.mkv", 4_100_000),       # boundary spill
+                         f(4, "Show.S01E05.mkv", 4_000_000_000, wanted=True),
+                         f(5, "Show.S01E06.mkv", 4_000_000_000),
+                         f(6, "Show.S01E07.mkv", 256_500_000),     # a real partial: prefetch
+                         f(7, "Show.S01E08.mkv", 192_000),         # boundary spill
+                     ]}]
+
+    d = tmp_path / "Pack"
+    d.mkdir()
+    (d / "payload").write_bytes(b"x" * 8)
+    out = st.build(str(tmp_path), Eng(), budget=1)
+    entry = next(e for e in out["entries"] if e["name"] == "Pack")
+    assert [k["name"] for k in entry["children"]] == [
+        "Show.S01E05.mkv", "Show.S01E06.mkv", "Show.S01E07.mkv"]
+    assert entry["scraps"] == {"count": 3, "size": 16_384 + 4_100_000 + 192_000}
+
+
+def test_a_download_just_started_is_never_called_a_scrap(tmp_path):
+    """It is wanted, so it is listed however little has arrived -- otherwise clicking Download
+    makes something appear only minutes later, which is how this looked before any of it existed.
+    """
+    from stremiosrv.library import state as st
+
+    class Eng:
+        def name_to_hash(self):
+            return {"Pack": "b" * 40}
+
+        def tracked_status(self):
+            return [{"infoHash": "b" * 40, "pinned": False, "progress": 0.0, "state": "downloading",
+                     "name": "Pack", "files": [
+                         {"index": 0, "name": "a.mkv", "size": 4_000_000_000,
+                          "downloaded": 4_000_000_000, "progress": 1.0, "wanted": False},
+                         {"index": 1, "name": "b.mkv", "size": 4_000_000_000,
+                          "downloaded": 900_000, "progress": 0.0002, "wanted": True},
+                     ]}]
+
+    d = tmp_path / "Pack"
+    d.mkdir()
+    (d / "payload").write_bytes(b"x" * 8)
+    out = st.build(str(tmp_path), Eng(), budget=1)
+    entry = next(e for e in out["entries"] if e["name"] == "Pack")
+    assert [k["name"] for k in entry["children"]] == ["a.mkv", "b.mkv"]
+    assert "scraps" not in entry
