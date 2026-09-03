@@ -69,8 +69,19 @@ what "done" looks like, so it can be picked up without context.
   floor, or a fraction of the disk -- not the cache budget), and "would push the cache over budget"
   stays what it already is: the amber/red warning, not a refusal. The pin guard keeps its own rule
   unchanged, because a pin really does have to reserve the budget.
-  *Also check while there:* the header rendered `-- of 48.0 GB` on a cache holding ~200 MB, so
-  `cacheUsed` was either zero at that moment or is not reaching the page.
+
+- [!] **A release inside a torrent already downloading cannot be asked for.** The release list
+  decides its button from `held[infoHash]`, so every release sharing a torrent takes that torrent's
+  state: with one episode of a pack downloading, every OTHER episode of the same pack shows
+  "Downloading" and is disabled. Nothing has asked for those files -- the torrent is busy, the
+  episode is not.
+  This is the same mistake as the episode ticks and the on-disk badge before it: a pack is ONE
+  infohash, so anything keyed on torrent identity can only ever describe one episode. The server
+  side is already correct -- `Engine.want` appends a selector to an existing torrent, which is
+  exactly the two-files-one-torrent case the wanted SET exists for.
+  *Done =* the button reflects the FILE being offered, matched by the release's `fileIdx` or by the
+  episode's number against the torrent's child files: complete -> On server / Keep, wanted but
+  incomplete -> Downloading, otherwise -> Download, even when the torrent is already busy.
 
 - [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
   `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins
