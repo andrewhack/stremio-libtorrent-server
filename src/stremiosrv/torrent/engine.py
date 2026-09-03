@@ -33,6 +33,7 @@ from stremiosrv.torrent.trackers import merge_trackers
 # (on add + on pause) — the server manages priorities/deadlines/pause explicitly. None when lt / the
 # binding lacks the flag (test envs), in which case the clear is a safe no-op.
 _TORRENT_FLAGS = getattr(lt, "torrent_flags", None) if lt is not None else None
+_META_ALERT = getattr(lt, "metadata_received_alert", None)
 _AUTO_MANAGED = getattr(_TORRENT_FLAGS, "auto_managed", None) if _TORRENT_FLAGS is not None else None
 # libtorrent's DEFAULT add flags are `auto_managed | paused` — the idiom is "add paused, let the
 # auto-manager start it". Once we drop auto_managed we must ALSO drop paused, or the torrent is
@@ -118,6 +119,9 @@ class Handle:
     def __init__(self, h: lt.torrent_handle) -> None:
         self._h = h
         self.pinned = False
+        # Which single file this pin wants, or None for "all of them". A pin used to mean every
+        # file, so choosing one episode fetched the whole season pack.
+        self.wanted_idx: int | None = None
         # Playhead pieces rushed to priority 7 (see boost_piece). Mutated from the streaming thread
         # (boost_piece) and read/cleared from request threads (refocus), so guard with a lock —
         # iterating it live crashed refocus with "Set changed size during iteration".
@@ -248,7 +252,8 @@ class Handle:
         if ti is None:
             return
         nfiles = ti.files().num_files()
-        base = 1 if self.pinned else 0  # pinned: seed all files; else only this one
+        # pinned: seed every file, unless the pin asked for one; otherwise only the played file.
+        base = 1 if (self.pinned and self.wanted_idx is None) else 0
         prios = [base] * nfiles
         if 0 <= idx < nfiles:
             # High priority only while a stream is actually open on this torrent; otherwise idle-low
@@ -283,6 +288,36 @@ class Handle:
         except Exception:  # noqa: BLE001 — best-effort; the piece pass below still applies
             pass
         self._focused_idx = None
+
+    def want_only_file(self, idx: int) -> None:
+        """Mark exactly one file wanted; every other file priority 0.
+
+        The mirror of want_all_files, and it carries the same caveat: pieces of a 0-priority file
+        land in the `.<infohash>.parts` holding file rather than on disk, which is correct here --
+        those are boundary pieces shared with the file we do want.
+        """
+        ti = self._h.torrent_file()
+        if ti is None:
+            return
+        n = ti.files().num_files()
+        if not 0 <= idx < n:
+            return
+        prios = [0] * n
+        prios[idx] = 1
+        try:
+            self._h.prioritize_files(prios)
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+        self.wanted_idx = idx
+        self._focused_idx = None
+
+    def file_paths(self) -> list[str]:
+        """Every file path in the torrent, or [] before metadata arrives."""
+        ti = self._h.torrent_file()
+        if ti is None:
+            return []
+        fs = ti.files()
+        return [fs.file_path(i) for i in range(fs.num_files())]
 
     def _set_focused_priority(self, prio: int) -> None:
         idx = self._focused_idx
@@ -554,6 +589,11 @@ class Engine:
         self._resume_dir = os.path.join(cache_root, ".resume")
         os.makedirs(self._resume_dir, exist_ok=True)
         self._pinned: set[str] = set()  # lowercased infohashes; populated by caller/pin()
+        # infohash -> what that pin wants ({"fileIdx": n} or {"season": s, "episode": e}), and
+        # which of those have been applied. A magnet has no file list at pin time, so the choice
+        # cannot be acted on until metadata arrives -- deferring it is the whole point.
+        self._wanted: dict[str, dict | None] = {}
+        self._wanted_applied: set[str] = set()
         self._cache_size = cache_size
         # Latest UPnP/NAT-PMP port-map result (best-effort; populated by the alerts loop if the
         # router auto-forwards). {"mapped": bool, "transport": str|None, "externalPort": int|None}
@@ -629,6 +669,13 @@ class Engine:
                             index[name] = ih
                             cachemod.save_name_index(self._cache_root, index)
                     except Exception:  # noqa: BLE001 — index is best-effort
+                        pass
+                elif _META_ALERT is not None and isinstance(a, _META_ALERT):
+                    # The file list exists only now, which is when a pin's choice of file can
+                    # finally be acted on.
+                    try:
+                        self._apply_pending_wanted()
+                    except Exception:  # noqa: BLE001 — never let the alerts thread die
                         pass
                 elif isinstance(a, lt.portmap_alert):
                     # router auto-forwarded our BT port (UPnP / NAT-PMP)
@@ -715,7 +762,8 @@ class Engine:
                 continue
             h = self.add(ih, trackers=e.get("trackers"))
             h.pinned = True
-            self._full_priority(h)
+            self._wanted[ih] = e.get("want")
+        self._apply_pending_wanted()
 
     def _full_priority(self, h: Handle) -> None:
         """Everything about this torrent is wanted: every file, then every piece.
@@ -729,6 +777,34 @@ class Engine:
         if n:
             h.raw().prioritize_pieces([1] * n)
 
+    def _apply_wanted(self, h: Handle, want: dict | None) -> None:
+        """Fetch only the file this pin asked for, or every file when it asked for none."""
+        idx = pinsmod.select_wanted_file(h.file_paths(), want)
+        if idx is None:
+            self._full_priority(h)
+            return
+        # No prioritize_pieces pass here: setting every piece to 1 is what _full_priority does and
+        # it would undo the file selection, which is exactly the bug this fixes.
+        h.want_only_file(idx)
+
+    def _apply_pending_wanted(self) -> None:
+        """Apply every pin's file choice that metadata has now made resolvable.
+
+        Driven by the metadata alert rather than keyed off it: alert shapes differ across
+        libtorrent versions, and a sweep over the pins is both cheap and version-proof.
+        """
+        for ih, want in list(self._wanted.items()):
+            if ih in self._wanted_applied:
+                continue
+            h = self._torrents.get(ih)
+            if h is None or not h.has_metadata():
+                continue
+            try:
+                self._apply_wanted(h, want)
+            except Exception as e:  # noqa: BLE001 — never let one bad pin stop the others
+                logger.warning("could not apply file selection for %s: %s: %s", ih, type(e).__name__, e)
+            self._wanted_applied.add(ih)
+
     def _remaining_bytes(self, h: Handle) -> int:
         st = h.status()
         return max(0, st.total_wanted - st.total_done)
@@ -740,7 +816,9 @@ class Engine:
         return {h.name() for ih, h in self._torrents.items()
                 if ih in self._pinned and h.has_metadata()}
 
-    def pin(self, info_hash: str) -> dict:
+    def pin(self, info_hash: str, want: dict | None = None) -> dict:
+        """Keep this torrent. `want` narrows it to one file -- {"fileIdx": n}, or
+        {"season": s, "episode": e} to be matched against the file list once metadata lands."""
         ih = info_hash.lower()
         h = self.get(info_hash) or self.add(info_hash)
         # disk guard: existing incomplete pins + this candidate must still leave headroom
@@ -752,9 +830,13 @@ class Engine:
             raise PinSpaceError(pinsmod.headroom(self._cache_size), free)
         self._pinned.add(ih)
         h.pinned = True
-        self._full_priority(h)
+        self._wanted[ih] = want
+        self._wanted_applied.discard(ih)
+        self._apply_pending_wanted()  # no-op until metadata; the alert loop finishes the job
         entry = {"infoHash": ih, "name": h.name() if h.has_metadata() else "",
                  "trackers": [], "addedAt": int(time.time())}
+        if want:
+            entry["want"] = want
         existing = [e for e in pinsmod.load_pins(self._cache_root)
                     if (e.get("infoHash") or "").lower() != ih]
         existing.append(entry)
@@ -765,6 +847,8 @@ class Engine:
     def unpin(self, info_hash: str) -> None:
         ih = info_hash.lower()
         self._pinned.discard(ih)
+        self._wanted.pop(ih, None)
+        self._wanted_applied.discard(ih)
         h = self._torrents.get(ih)
         if h is not None:
             h.pinned = False

@@ -488,11 +488,15 @@ const LIB = (() => {
     return 'magnet:?xt=urn:btih:' + encodeURIComponent(st.infoHash) + tr;
   };
 
-  async function startDownload(magnet, label) {
+  // fileIdx: addons that point at one file inside a pack say so on the stream. Passing it
+  // through is what stops a chosen episode from dragging its whole season onto the disk; without
+  // it the server falls back to matching the label's season and episode against the file list.
+  async function startDownload(magnet, label, fileIdx) {
     $('add-err').textContent = '';
     try {
       await api('/library/api/download', { method: 'POST',
-        body: JSON.stringify({ magnet, label: label || null }) });
+        body: JSON.stringify({ magnet, label: label || null,
+                               fileIdx: Number.isInteger(fileIdx) ? fileIdx : null }) });
       await loadState();
     } catch (e) {
       const b = e.body || {};
@@ -838,7 +842,7 @@ const LIB = (() => {
         await startDownload(magnetFor(st), Object.assign({
           metaId: detailCtx.id, type: detailCtx.type,
           name: detailCtx.name, poster: detailCtx.poster,
-        }, (extra && extra.label) || {}));
+        }, (extra && extra.label) || {}), st && st.fileIdx);
         btn.textContent = 'Queued';
       };
     });

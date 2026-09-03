@@ -24,6 +24,7 @@ class FakeHandle:
 class FakeEngine:
     def __init__(self, pin_error=None, add_error=None, names=None):
         self.added, self.pinned, self.removed, self.unpinned = [], [], [], []
+        self.wanted = []  # what each pin asked for: a file choice, or None for all of it
         self.pin_error = pin_error
         self.add_error = add_error
         self._names = names or {}
@@ -34,10 +35,11 @@ class FakeEngine:
         self.added.append(magnet)
         return FakeHandle(IH)
 
-    def pin(self, ih):
+    def pin(self, ih, want=None):
         if self.pin_error:
             raise self.pin_error
         self.pinned.append(ih)
+        self.wanted.append(want)
         return {"infoHash": ih}
 
     def unpin(self, ih):
@@ -237,3 +239,36 @@ def test_remove_tolerates_a_missing_partfile(tmp_path, monkeypatch):
     c = _signed_in(root, monkeypatch, FakeEngine())
     assert c.post("/library/api/remove", json={"infoHash": IH},
                   headers=HTTPS).status_code == 200
+
+
+# --- what of the torrent a download actually asks for -----------------------------------------
+# Choosing one episode used to fetch the whole season pack: the endpoint never told the engine
+# which file was picked, so a pin meant every file in the torrent.
+
+def _download(c, body):
+    return c.post("/library/api/download", json=body, headers=HTTPS)
+
+
+def test_series_download_asks_for_the_chosen_episode(ctx):
+    c, eng, _ = ctx
+    r = _download(c, {"magnet": MAGNET,
+                      "label": {"name": "Show", "type": "series", "season": 1, "episode": 5}})
+    assert r.status_code == 200
+    assert eng.wanted == [{"season": 1, "episode": 5}]
+
+
+def test_an_explicit_file_index_beats_the_label(ctx):
+    """An addon that points at one file inside a pack is authoritative; the label is the fallback."""
+    c, eng, _ = ctx
+    r = _download(c, {"magnet": MAGNET, "fileIdx": 4,
+                      "label": {"name": "Show", "type": "series", "season": 1, "episode": 5}})
+    assert r.status_code == 200
+    assert eng.wanted == [{"fileIdx": 4}]
+
+
+def test_a_film_still_asks_for_the_whole_torrent(ctx):
+    """No season/episode means nothing to narrow to, and half a film is worse than all of it."""
+    c, eng, _ = ctx
+    r = _download(c, {"magnet": MAGNET, "label": {"name": "Some Film", "type": "movie"}})
+    assert r.status_code == 200
+    assert eng.wanted == [None]

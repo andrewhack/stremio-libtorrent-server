@@ -57,6 +57,10 @@ class LoginBody(BaseModel):
 class DownloadBody(BaseModel):
     magnet: str
     label: dict | None = None
+    # Which file of the torrent was actually chosen. Addons sometimes give one outright; otherwise
+    # the label's season/episode identifies it once the file list exists. Without either, a pin
+    # means the whole torrent -- which for a season pack is tens of gigabytes for one episode.
+    fileIdx: int | None = None
 
 
 class RemoveBody(BaseModel):
@@ -231,6 +235,22 @@ def _engine_or_503(request: Request):
     return eng
 
 
+def _wanted_file(body: DownloadBody) -> dict | None:
+    """What of the torrent this download actually asked for, or None for all of it.
+
+    An explicit index from the addon wins; otherwise the label already carries the season and
+    episode the owner clicked, and that is enough to pick the file out of a pack once metadata
+    arrives. A film, or a series label without both numbers, keeps the old whole-torrent meaning.
+    """
+    if body.fileIdx is not None:
+        return {"fileIdx": body.fileIdx}
+    label = body.label or {}
+    season, episode = label.get("season"), label.get("episode")
+    if season is None or episode is None:
+        return None
+    return {"season": season, "episode": episode}
+
+
 @router.post("/api/download", dependencies=[Depends(require_session)])
 def download(body: DownloadBody, request: Request) -> dict:
     """Start a full download of a magnet the PAGE resolved.
@@ -249,7 +269,7 @@ def download(body: DownloadBody, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="could not parse that magnet") from None
     info_hash = handle.info_hash().lower()
     try:
-        eng.pin(info_hash)
+        eng.pin(info_hash, want=_wanted_file(body))
     except PinSpaceError as e:
         # Leave the torrent added but unpinned: it is now an ordinary evictable cache entry, which
         # is what an unpinned torrent has always been. Removing it here would also discard a
