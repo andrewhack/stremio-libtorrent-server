@@ -59,6 +59,19 @@ what "done" looks like, so it can be picked up without context.
   each says kept or cached, which is the distinction that decides whether it survives eviction and
   is orthogonal to who asked for it.
 
+- [!] **The download gate reserves the whole cache budget, so almost nothing can be downloaded.**
+  It applies `pins.pin_fits`'s rule -- free space must exceed the release PLUS `cache_size * 1.10`.
+  That rule is right for a PIN, which can never be evicted and therefore has to leave the entire
+  budget free beside it for ordinary streaming. It is wrong for a download, which since the
+  want/pin split is ordinary evictable cache. With a 48 GiB budget the gate demands ~56.7 GB free
+  on top of the release, so on a 72 GB disk a 10 GB file is refused with 61 GB free.
+  *Done =* the download gate asks only whether it fits on the disk with a modest reserve (a small
+  floor, or a fraction of the disk -- not the cache budget), and "would push the cache over budget"
+  stays what it already is: the amber/red warning, not a refusal. The pin guard keeps its own rule
+  unchanged, because a pin really does have to reserve the budget.
+  *Also check while there:* the header rendered `-- of 48.0 GB` on a cache holding ~200 MB, so
+  `cacheUsed` was either zero at that moment or is not reaching the page.
+
 - [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
   `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins
   immediately after `add`, so the guard always measures nothing and always passes. A torrent far
