@@ -78,6 +78,8 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             # nothing is downloading them, so treat them as complete rather than as 0% — a finished
             # entry showing "0%" reads as a stalled download.
             "progress": pin.get("progress", 1.0),
+            # The one file a narrowed pin fetches, when it is narrower than the torrent.
+            "wantedFile": pin.get("wantedFile"),
             "state": pin.get("state", "idle"),
             "peers": pin.get("peers", 0),
             "seeds": pin.get("seeds", 0),
@@ -96,6 +98,7 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         entries.append({
             "name": pin.get("name", ""), "infoHash": ih, "size": 0, "mtime": 0,
             "pinned": True, "progress": pin.get("progress", 0.0),
+            "wantedFile": pin.get("wantedFile"),
             "state": pin.get("state", "downloading"), "peers": pin.get("peers", 0),
             "seeds": pin.get("seeds", 0), "downloadSpeed": pin.get("downloadSpeed", 0),
             "uploaded": pin.get("uploaded", 0), "ratio": pin.get("ratio", 0.0),

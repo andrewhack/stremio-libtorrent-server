@@ -313,14 +313,23 @@ const LIB = (() => {
   // The release a card came from. Shown wherever it adds something the title does not already
   // say: two episodes of one series, or two rips of one film, differ only here.
   const releaseHtml = (e, title) => {
-    const rel = e.name || '';
+    // The FILE when the download is narrowed to one, otherwise the torrent. A season pack fetching
+    // a single episode showed the pack's name, which reads as "the whole season is coming down".
+    const rel = e.wantedFile || e.name || '';
     if (!rel || norm(rel) === norm(title)) return '';
     return `<div class="rel2" title="${esc(rel)}">${esc(rel)}</div>`;
   };
 
   const cardHtml = e => {
     const label = e.label || {};
-    const title = label.name || e.name;
+    // Series get their episode in the caption: "Show" alone cannot distinguish the episode being
+    // fetched from the eight in the same torrent that are not.
+    const ep = (label.season !== undefined && label.season !== null
+                && label.episode !== undefined && label.episode !== null)
+      ? ' · S' + String(label.season).padStart(2, '0')
+        + 'E' + String(label.episode).padStart(2, '0')
+      : '';
+    const title = (label.name || e.name) + ep;
     const downloading = e.state === 'downloading';
     return `
     <div class="card" data-infohash="${esc(e.infoHash || '')}">

@@ -310,6 +310,18 @@ class Handle:
         self.wanted_idx = idx
         self._focused_idx = None
 
+    def wanted_path(self) -> str | None:
+        """The single file this pin is fetching, or None when it wants the whole torrent.
+
+        The card showed the TORRENT's name, which for a season pack is the pack -- so a download
+        narrowed to one episode still read as though the whole season was coming down.
+        """
+        idx = self.wanted_idx
+        if idx is None:
+            return None
+        paths = self.file_paths()
+        return paths[idx].replace("\\", "/").rsplit("/", 1)[-1] if 0 <= idx < len(paths) else None
+
     def file_paths(self) -> list[str]:
         """Every file path in the torrent, or [] before metadata arrives."""
         ti = self._h.torrent_file()
@@ -872,6 +884,8 @@ class Engine:
             out.append({
                 "infoHash": ih,
                 "name": h.name(),
+                # What is actually being fetched, when that is narrower than the torrent.
+                "wantedFile": h.wanted_path(),
                 "progress": round(st.progress, 4),
                 "state": "seeding" if st.is_seeding else "downloading",
                 "downloaded": down,
