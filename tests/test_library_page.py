@@ -500,3 +500,76 @@ def test_downloaded_section_does_not_depend_on_labels_json():
     """labels.json is a separate file in the cache root and it HAS been deleted in the field.
     A pin is what says the library downloaded something; the label is decoration on top."""
     assert "const ours = e => Boolean(e.label || e.pinned);" in _page()
+
+
+# --- complete vs kept, and whether a release can fit ------------------------------------------
+
+_COMPLETE_SRC = re.compile(r"(const isComplete = [^\n]*)")
+_FITS_SRC = re.compile(r"(const fitsOnDisk = [\s\S]*?\n  \};)")
+
+
+def _run_js(src, expr):
+    import json
+    import shutil
+    import subprocess
+
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    r = subprocess.run([node, "-e", f"{src}\nconsole.log(JSON.stringify({expr}));"],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def _complete_src():
+    m = _COMPLETE_SRC.search(_page())
+    assert m, "isComplete not found in the page"
+    return m.group(1)
+
+
+def _fits_src():
+    m = _FITS_SRC.search(_page())
+    assert m, "fitsOnDisk not found in the page"
+    return m.group(1)
+
+
+def test_a_title_on_disk_reads_as_complete_even_unpinned():
+    """A title the player streamed to the end is complete, and the card said nothing about it.
+
+    The tick is NOT the place for this -- it means "kept", and
+    test_badge_means_pinned_not_merely_present holds it to that. Completeness is stated in the
+    sub-line instead, so the two facts cannot be confused for one another.
+    """
+    src = _complete_src()
+    assert _run_js(src, "isComplete({state:'idle', progress:1, pinned:false})") is True
+    assert _run_js(src, "isComplete({state:'seeding', progress:1, pinned:true})") is True
+    assert _run_js(src, "isComplete({state:'downloading', progress:0.5})") is False
+    assert _run_js(src, "isComplete({state:'idle', progress:0.4})") is False
+
+
+def test_the_card_states_both_completeness_and_keptness():
+    page = _page()
+    assert "const stateWord = e =>" in page
+    assert "'complete'" in page and "'cached'" in page and "'kept'" in page
+    # the tick still means kept, and only kept
+    assert "e.pinned && !downloading" in page
+
+
+def test_a_release_that_cannot_fit_is_refused():
+    """Same arithmetic as the server's pin guard: free minus the release must still leave the
+    budget plus ten percent, or there is nowhere for the evictor to work."""
+    src = _fits_src()
+    b = "{diskFree: 60e9, cacheSize: 19327352832}"          # ~60 GB free, 18 GiB budget
+    assert _run_js(src, f"fitsOnDisk(4.5e9, {b})") is True   # a 4.5 GB episode fits
+    assert _run_js(src, f"fitsOnDisk(45e9, {b})") is False   # a 45 GB pack does not
+
+
+def test_an_unknown_release_size_is_not_treated_as_refusal():
+    """Plenty of addons omit videoSize. Refusing on missing data would grey out most releases;
+    the server still guards the real thing."""
+    src = _fits_src()
+    b = "{diskFree: 1e9, cacheSize: 19327352832}"
+    assert _run_js(src, f"fitsOnDisk(0, {b})") is True
+    assert _run_js(src, "fitsOnDisk(5e9, {})") is True

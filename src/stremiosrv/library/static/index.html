@@ -55,6 +55,7 @@
   button { background:var(--accent); color:#fff; border:0; border-radius:7px;
            padding:7px 12px; cursor:pointer; font:inherit; font-size:13px; }
   button.ghost { background:#2a2550; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
   button.danger { background:var(--bad); border-radius:50%; width:26px; height:26px; padding:0;
                   font-size:15px; line-height:26px; }
   input { background:#0c0a18; border:1px solid #2a2550; border-radius:7px;
@@ -287,10 +288,23 @@ const LIB = (() => {
 
   // What a finished card says under the title. `fmt(0)` renders an em dash, so an entry whose
   // size we do not know said nothing at all -- the state is more use than a dash.
+  // Two different questions, and the card used to answer only one. "Complete" is whether the
+  // bytes are all here; "kept" is whether they survive the evictor. A title streamed by the
+  // player is complete AND evictable, which is exactly the combination that lost a cache today.
+  const isComplete = e => e.state !== 'downloading' && (e.progress == null || e.progress >= 1);
+  const keptWord = e => (e.pinned ? 'kept' : 'cached');
+
+  // Spelled out rather than badged. The tick above means KEPT, and a test pins that on purpose:
+  // marking a cached file with the same tick as a kept download tells the owner they have
+  // something they do not. But "complete" is a different question and the card answered neither
+  // -- a title played to the end by the player showed only its size, so it read as unfinished.
+  const stateWord = e => (isComplete(e) ? 'complete' : 'partial') + ', ' + keptWord(e);
+
   const subLine = e => {
     if (e.peers === 0 && e.progress < 1) return 'no seeds';
-    if (e.size) return fmt(e.size);
-    return e.state === 'seeding' ? 'seeding' : (e.pinned ? 'kept' : 'size unknown');
+    if (e.size) return fmt(e.size) + ' · ' + stateWord(e);
+    return e.state === 'seeding' ? 'seeding · ' + keptWord(e)
+                                 : (e.pinned ? 'kept' : 'size unknown');
   };
 
   // The release a card came from. Shown wherever it adds something the title does not already
@@ -347,8 +361,14 @@ const LIB = (() => {
     $('sec-other').hidden = other.length === 0;
     $('other').innerHTML = other.map(cardHtml).join('');
     const b = data.budget || {};
+    // The budget alone was misleading: it says what the evictor aims for, not whether there is
+    // anywhere to put the next download. Pinned content can hold the cache far over budget with
+    // the evictor powerless, and only the free figure shows that.
     $('budget').textContent = b.cacheSize
-      ? fmt(b.cacheUsed) + ' of ' + fmt(b.cacheSize) : '';
+      ? fmt(b.cacheUsed) + ' of ' + fmt(b.cacheSize)
+        + (b.cacheUsed > b.cacheSize ? ' (over budget)' : '')
+        + (b.diskFree != null ? ' · ' + fmt(b.diskFree) + ' free on disk' : '')
+      : '';
     document.querySelectorAll('[data-remove]').forEach(btn => {
       btn.onclick = async () => {
         if (!btn.dataset.remove) return;
@@ -808,6 +828,18 @@ const LIB = (() => {
     return null;
   }
 
+  // The same arithmetic the server's pin guard uses (pins.pin_fits): a download must leave the
+  // cache budget's worth of headroom plus ten percent still free, or the evictor has nowhere to
+  // work. Mirroring it here means the button never offers something /api/download answers with a
+  // 409 -- and, more to the point, never starts a download that cannot fit.
+  const fitsOnDisk = (size, b) => {
+    b = b || {};
+    // Unknown size is not "no": plenty of addons omit it, and refusing on missing data would
+    // disable the button for most releases. The server still guards the real thing.
+    if (!size || b.diskFree == null || !b.cacheSize) return true;
+    return b.diskFree - size >= Math.ceil(b.cacheSize * 1.10);
+  };
+
   const relLabel = st => {
     const bh = st.behaviorHints || {};
     const head = st.name || st.addon || 'Release';
@@ -828,11 +860,17 @@ const LIB = (() => {
         : 'No releases found for this one.')}</p>`;
       return;
     }
+    const budget = (lastState && lastState.budget) || {};
     host.innerHTML = heading + streams.map((st, i) => {
         const l = relLabel(st);
+        const size = (st.behaviorHints || {}).videoSize || 0;
+        const fits = fitsOnDisk(size, budget);
+        // Say why it is greyed out. A disabled button with no explanation reads as a broken page.
+        const whyHtml = fits ? '' : `<div class="meta2">${esc('Needs ' + fmt(size) + ' plus headroom; '
+                                  + fmt(budget.diskFree || 0) + ' free')}</div>`;
         return `<div class="rel"><span class="who"><b>${esc(l.head)}</b>
-          <div class="meta2">${esc(l.detail)}</div></span>
-          <button data-rel="${esc(String(i))}">Download</button></div>`;
+          <div class="meta2">${esc(l.detail)}</div>${whyHtml}</span>
+          <button data-rel="${esc(String(i))}"${fits ? '' : ' disabled'}>Download</button></div>`;
       }).join('')
       + (failed.length ? `<p class="note">${esc('No answer from: ' + failed.join(', '))}</p>` : '');
     host.querySelectorAll('[data-rel]').forEach(btn => {
