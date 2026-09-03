@@ -336,10 +336,12 @@ def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: 
         if not may:
             if not blocked:
                 logger.error(
-                    "cache root %s is claimed by a server on %s (pid %s, last seen %.0fs ago) — "
-                    "holding off. Two servers sharing one cache root delete each other's data: "
-                    "give each container its own directory.",
-                    root, other.get("host"), other.get("pid"),
+                    "cache root %s is claimed by another server (%s, pid %s, last seen %.0fs "
+                    "ago) — holding off. Two servers sharing one cache root delete each other's "
+                    "data: give each container its own directory.",
+                    # A claim written before this field existed has no host, and "on None" reads
+                    # like a bug in the message rather than a fact about the claim.
+                    root, other.get("host") or "host unknown", other.get("pid"),
                     time.time() - float(other.get("heartbeat") or 0),
                 )
                 blocked = True
