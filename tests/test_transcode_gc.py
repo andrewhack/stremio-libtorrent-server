@@ -168,3 +168,18 @@ def test_job_dir_rejects_ids_that_escape_the_base(tmp_path, bad):
 def test_job_dir_accepts_a_normal_job_id(tmp_path):
     conv = Converter(str(tmp_path), None)
     assert conv.job_dir("c0b2e2ac94952992ea168ebdba147a1a").parent == conv.base
+
+
+def test_sweep_is_not_fooled_by_an_mtime_from_the_future(tmp_path):
+    """`now` is read once before the loop, so a directory stamped even microseconds later has a
+    NEGATIVE age -- and `age < max_age` then skips it at max_age=0, the startup sweep that is
+    documented as taking no grace. It showed up as an intermittent "2 == 3" in the suite; on a
+    real box it means a job directory written moments before startup survives the sweep meant to
+    reclaim exactly that.
+    """
+    conv = Converter(str(tmp_path), None)
+    d = _job(conv, "stamped-ahead")
+    ahead = time.time() + 5
+    os.utime(d, (ahead, ahead))
+    assert conv.sweep(max_age=0) == 1
+    assert not d.exists()

@@ -209,7 +209,10 @@ class Converter:
             try:
                 if not d.is_dir():
                     continue  # only job directories; never a stray file sitting beside them
-                if now - d.stat().st_mtime < max_age:
+                # Clamped at zero: `now` is read once before the loop, and a directory
+                # stamped a hair later reads as negative age -- which at max_age=0 skips the very
+                # sweep that is supposed to take no grace.
+                if max(0.0, now - d.stat().st_mtime) < max_age:
                     continue
             except OSError:
                 continue
