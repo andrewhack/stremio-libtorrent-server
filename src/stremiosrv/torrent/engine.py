@@ -307,6 +307,13 @@ class Handle:
             prios[focus] = ACTIVE_FILE_PRIO if self._active else IDLE_FILE_PRIO
         return prios
 
+    def reapply_priorities(self) -> None:
+        """Re-apply file priorities after something changed what this torrent is for."""
+        try:
+            self._h.prioritize_files(self._priorities(focus=self._focused_idx))
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
     def want_file(self, idx: int) -> None:
         """Add one file to the wanted set and re-apply priorities.
 
@@ -960,7 +967,15 @@ class Engine:
         self._pinned.add(ih)
         h.pinned = True
         if h.has_metadata():
-            self._full_priority(h)
+            # Only when nothing was selected. Pinning means "do not evict this"; it has no business
+            # changing WHAT is fetched. Expanding unconditionally turned "keep this episode" into
+            # "fetch the whole season" -- tens of gigabytes, from a click that promised the
+            # opposite. A whole-title pin (a film, or a pack nobody narrowed) still means the whole
+            # torrent, which is what the appliance's pin has always meant.
+            if not h.wanted:
+                self._full_priority(h)
+            else:
+                h.reapply_priorities()
         entry = {"infoHash": ih, "name": h.name() if h.has_metadata() else "",
                  "trackers": [], "addedAt": int(time.time())}
         existing = [e for e in pinsmod.load_pins(self._cache_root)
@@ -978,6 +993,9 @@ class Engine:
         h = self._torrents.get(ih)
         if h is not None:
             h.pinned = False
+            # A whole-title pin wanted every file through the pinned branch of _priorities; drop
+            # back to whatever was actually selected, or it keeps fetching what nobody asked for.
+            h.reapply_priorities()
         remaining = [e for e in pinsmod.load_pins(self._cache_root)
                      if (e.get("infoHash") or "").lower() != ih]
         pinsmod.save_pins(self._cache_root, remaining)

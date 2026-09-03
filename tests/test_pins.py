@@ -277,3 +277,44 @@ def test_an_old_download_pin_is_migrated_out_of_the_pin_registry(tmp_path):
     assert wantedmod.load(root) == {"a" * 40: [{"fileIdx": 4}]}
     left = {e["infoHash"] for e in _json.loads((tmp_path / "pins.json").read_text())}
     assert left == {"b" * 40}, "the download was left in the pin registry"
+
+
+def test_keeping_an_episode_does_not_start_fetching_its_whole_season():
+    """Pinning means "do not evict this". Expanding the wanted set turned a click that promised to
+    protect one episode into a fetch of the entire pack -- tens of gigabytes, and the card jumped
+    from Downloaded back to Downloading. A whole-title pin still means the whole torrent; a pin on
+    something already narrowed keeps exactly what was narrowed.
+    """
+    from stremiosrv.torrent.engine import IDLE_FILE_PRIO, Handle
+
+    class RawHandle:
+        def __init__(self):
+            self.prios = None
+
+        def torrent_file(self):
+            class FS:
+                def num_files(self):
+                    return 4
+            class TI:
+                def files(self):
+                    return FS()
+            return TI()
+
+        def prioritize_files(self, prios):
+            self.prios = list(prios)
+
+    raw = RawHandle()
+    h = Handle.__new__(Handle)
+    h._h = raw
+    h.wanted = {2}
+    h._focused_idx = None
+    h._active = 0
+
+    h.pinned = True
+    h.reapply_priorities()
+    assert raw.prios == [0, 0, IDLE_FILE_PRIO, 0], "keeping one episode wanted the whole pack"
+
+    # Nothing selected: a whole-title pin still means every file, as the appliance's pin does.
+    h.wanted = set()
+    h.reapply_priorities()
+    assert raw.prios == [1, 1, 1, 1]
