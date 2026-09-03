@@ -634,3 +634,22 @@ def test_every_episode_a_pack_holds_is_ticked_not_just_one():
     assert "function onDiskEpisodes(" in page
     assert "have.has(v.id)" not in page, "an episode tick still keys off videoId"
     assert "EPISODE_RE" in page
+
+
+def test_a_download_already_running_is_counted_against_the_next_one():
+    """Space a download has claimed but not written is in neither `df` nor the cache total. Judging
+    the next download on those alone approves things there will be no room for once everything
+    already in flight has finished -- which is exactly when the owner would find out."""
+    src = _fits_src()
+    # 30 GB free, 18 GiB budget, 25 GB already promised to a download in progress.
+    busy = "{diskFree: 30e9, cacheUsed: 2e9, committed: 25e9, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(2e9, {busy})") == "nodisk"
+    idle = "{diskFree: 30e9, cacheUsed: 2e9, committed: 0, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(2e9, {idle})") == "ok"
+
+
+def test_committed_bytes_also_count_against_the_budget():
+    """A download in flight lands in the cache, so it is already spending the budget."""
+    src = _fits_src()
+    b = "{diskFree: 200e9, cacheUsed: 2e9, committed: 15e9, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(4e9, {b})") == "overbudget"

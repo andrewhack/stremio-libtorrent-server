@@ -417,6 +417,8 @@ const LIB = (() => {
       ? fmt(b.cacheUsed) + ' of ' + fmt(b.cacheSize)
         + (b.cacheUsed > b.cacheSize ? ' (over budget)' : '')
         + (b.diskFree != null ? ' · ' + fmt(b.diskFree) + ' free on disk' : '')
+        // Space already spoken for: without it the header reads as roomier than the box is.
+        + (b.committed ? ' · ' + fmt(b.committed) + ' still to fetch' : '')
       : '';
     // Keep / stop keeping. This is the ONLY thing that pins: downloading does not, so a title is
     // kept because someone said so, and everything else is cache the evictor is free to reclaim.
@@ -954,12 +956,19 @@ const LIB = (() => {
     b = b || {};
     if (b.diskFree == null || !b.cacheSize) return 'ok';   // nothing to judge against
     const headroom = Math.ceil(b.cacheSize * 1.10);
+    // Downloads already running have claimed space they have not written yet. It is in neither
+    // `df` nor the cache total, so judging a new download on those alone approves things there
+    // will be no room for once everything in flight has finished -- which is exactly when the
+    // owner would find out. Spend it first.
+    const committed = b.committed || 0;
+    const free = Math.max(0, (b.diskFree || 0) - committed);
+    const used = (b.cacheUsed || 0) + committed;
     // Free space already under the headroom: nothing fits, whether or not an addon reported a
     // size. Checking this first is what makes the gate work for the releases nobody sized.
-    if (b.diskFree < headroom) return 'nodisk';
+    if (free < headroom) return 'nodisk';
     if (!size) return 'ok';
-    if (b.diskFree - size < headroom) return 'nodisk';
-    if ((b.cacheUsed || 0) + size > b.cacheSize) return 'overbudget';
+    if (free - size < headroom) return 'nodisk';
+    if (used + size > b.cacheSize) return 'overbudget';
     return 'ok';
   };
 
@@ -1023,7 +1032,9 @@ const LIB = (() => {
               ? 'Over the ' + fmt(budget.cacheSize) + ' cache budget - it will download, but the '
                 + 'evictor may reclaim it before you watch it. Keep it to protect it.'
             : size
-              ? 'Needs ' + fmt(size) + ' plus headroom; ' + fmt(budget.diskFree || 0) + ' free'
+              ? 'Needs ' + fmt(size) + ' plus headroom; ' + fmt(budget.diskFree || 0)
+                + ' free' + (budget.committed
+                    ? ', ' + fmt(budget.committed) + ' of it already promised' : '')
               : 'Not enough free disk for any download; ' + fmt(budget.diskFree || 0) + ' free'
           )}</div>`;
         return `<div class="rel"><span class="who"><b>${esc(l.head)}</b>

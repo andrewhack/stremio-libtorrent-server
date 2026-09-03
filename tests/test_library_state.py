@@ -308,3 +308,22 @@ def test_a_download_just_started_is_never_called_a_scrap(tmp_path):
     entry = next(e for e in out["entries"] if e["name"] == "Pack")
     assert [k["name"] for k in entry["children"]] == ["a.mkv", "b.mkv"]
     assert "scraps" not in entry
+
+
+def test_the_budget_reports_what_downloads_have_already_claimed(tmp_path):
+    """Bytes a download still owes the disk are invisible to both `df` and the cache total, so the
+    page cannot judge the next download without being told."""
+    from stremiosrv.library import state as st
+
+    class Eng:
+        def name_to_hash(self):
+            return {}
+
+        def tracked_status(self):
+            return [{"infoHash": "a" * 40, "pinned": False, "progress": 0.4,
+                     "state": "downloading", "name": "One", "remaining": 2_500_000_000},
+                    {"infoHash": "b" * 40, "pinned": True, "progress": 1.0,
+                     "state": "seeding", "name": "Two", "remaining": 0}]
+
+    out = st.build(str(tmp_path), Eng(), budget=1)
+    assert out["budget"]["committed"] == 2_500_000_000

@@ -1015,6 +1015,9 @@ class Engine:
                 # Every file this torrent holds something of. One card per torrent could not
                 # account for a pack whose episodes arrived from different places.
                 "files": h.file_stats(),
+                # Bytes still to arrive for what is wanted. Space that is spoken for but not yet
+                # written, which is invisible in a `df` and in the cache total alike.
+                "remaining": self._remaining_bytes(h),
                 "progress": round(st.progress, 4),
                 # is_finished, NOT is_seeding — the same distinction should_stop_seeding
                 # documents. A pin narrowed to one file leaves the other files at priority 0, so
