@@ -6,7 +6,7 @@ yet, and why each item is still open.
 Convention: `- [ ]` open · `- [x]` done · `- [~]` in progress · `- [!]` blocked. Every entry states
 what "done" looks like, so it can be picked up without context.
 
-**Last updated:** 2026-08-13
+**Last updated:** 2026-09-03
 
 ---
 
@@ -27,6 +27,29 @@ what "done" looks like, so it can be picked up without context.
   *Done =* upstream defines the signature and the server computes the same value. Until then,
   `playback.subtitleSignatureAsks` in `/stats.json` counts how often real clients ask, which is the
   evidence for whether this is worth reverse-engineering.
+
+## Library UI
+
+- [ ] **A title the player streamed can be removed but not kept.** The library UI pins whatever it
+  downloads, so those survive eviction. Anything the client streamed is an ordinary cache entry, and
+  the page offers only Remove — there is no way to say "keep this one" short of downloading it again
+  through the library, which re-fetches bytes already on disk. The card now states the difference
+  ("complete, kept" vs "complete, cached"), so the gap is visible rather than silent, but naming a
+  problem is not fixing it: a complete title the owner wants is reclaimed by the next eviction pass
+  the moment the cache goes over budget.
+  *Done =* a Keep action on any complete entry that has an infohash, pinning through the existing
+  `POST /{infoHash}/pin` route, with the disk guard's refusal surfaced the way the download path
+  already surfaces it; and Unkeep on a pinned entry, which is `unpin` without deleting anything —
+  distinct from Remove, which stops the torrent and reclaims the disk.
+
+- [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
+  `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins
+  immediately after `add`, so the guard always measures nothing and always passes. A torrent far
+  larger than the cache budget is admitted without complaint, then cannot be evicted because it is
+  pinned.
+  *Done =* the guard re-runs from `_apply_pending_wanted` once metadata gives a real size, with a
+  loud, actionable outcome when what arrived does not fit — the pin is the owner's instruction, so
+  silently dropping it is not the answer either.
 
 ## Tooling & docs
 
