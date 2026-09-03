@@ -145,7 +145,7 @@ def test_a_deferred_choice_is_applied_once_metadata_arrives():
         def file_paths(self):
             return ["Show.S01E01.mkv", "Show.S01E02.mkv", "Show.S01E03.mkv"]
 
-        def want_only_file(self, idx):
+        def want_file(self, idx):
             self.only = idx
 
     class FakeEngine:
@@ -153,7 +153,7 @@ def test_a_deferred_choice_is_applied_once_metadata_arrives():
         _apply_pending_wanted = Engine._apply_pending_wanted
 
         def __init__(self, h):
-            self._wanted = {"aa": {"fileIdx": 1}}
+            self._wanted = {"aa": [{"fileIdx": 1}]}
             self._wanted_applied = set()
             self._torrents = {"aa": h}
 
@@ -205,10 +205,10 @@ def test_a_narrowed_pin_reports_complete_when_its_one_file_is_done():
 
 
 def test_playing_another_file_does_not_un_want_the_kept_one():
-    """focus_file rebuilds every file's priority from a base, and for a narrowed pin that base is
-    0 -- so opening a different episode of the same pack set the KEPT episode to priority 0. That
-    un-wants the file the owner asked to keep, and libtorrent puts any further pieces of a
-    priority-0 file into the partfile instead of the file itself.
+    """Two files of one torrent are wanted at once: someone downloading an episode while someone
+    else streams another. A single wanted index could only resolve that by un-wanting one of them,
+    which sets it to priority 0 -- and libtorrent puts a priority-0 file's data in the partfile
+    rather than the file, so un-wanting does not merely stop a download, it throws it away.
     """
     from stremiosrv.torrent.engine import IDLE_FILE_PRIO, Handle
 
@@ -234,14 +234,46 @@ def test_playing_another_file_does_not_un_want_the_kept_one():
     raw = RawHandle()
     h = Handle.__new__(Handle)
     h._h = raw
-    h.pinned = True
-    h.wanted_idx = 3          # the kept episode
+    h.pinned = False          # a download is NOT a pin any more
+    h.wanted = {3}            # the episode someone is downloading
     h._focused_idx = None
     h._read_pos = h._read_total = 0
     h._prefetched = set()
     h._active = 0
 
-    h.focus_file(1)           # play a DIFFERENT episode
-    assert raw.prios[3] == IDLE_FILE_PRIO, "playing another file un-wanted the kept one"
+    h.focus_file(1)           # somebody else plays a DIFFERENT episode of the same torrent
+    assert raw.prios[3] == IDLE_FILE_PRIO, "playing another file un-wanted the one being fetched"
     assert raw.prios[1] == IDLE_FILE_PRIO
     assert raw.prios[0] == 0 and raw.prios[4] == 0
+    assert h.wanted == {1, 3}, "playing a file must make it wanted too, exactly as downloading does"
+
+
+def test_an_old_download_pin_is_migrated_out_of_the_pin_registry(tmp_path):
+    """Downloads used to pin. Those records carry a `want`, and loading one as a pin would mean the
+    WHOLE torrent -- re-fetching every file of a pack that had been narrowed to one episode, and
+    handing it an eviction exemption the owner never asked for. Move them to the wanted registry.
+    """
+    import json as _json
+
+    from stremiosrv import pins as pinsmod
+    from stremiosrv import wanted as wantedmod
+    from stremiosrv.torrent.engine import Engine
+
+    root = str(tmp_path)
+    pinsmod.save_pins(root, [
+        {"infoHash": "a" * 40, "name": "", "trackers": [], "want": {"fileIdx": 4}},
+        {"infoHash": "b" * 40, "name": "kept-on-purpose", "trackers": []},
+    ])
+
+    eng = Engine.__new__(Engine)
+    eng._cache_root = root
+    eng._torrents = {}
+    eng._wanted, eng._wanted_applied = {}, set()
+    eng.add = lambda ih, trackers=None: type("H", (), {"pinned": False})()
+    eng._apply_pending_wanted = lambda: None
+    Engine.load_pins_into_session(eng)
+
+    assert eng._pinned == {"b" * 40}, "a download stayed pinned across the upgrade"
+    assert wantedmod.load(root) == {"a" * 40: [{"fileIdx": 4}]}
+    left = {e["infoHash"] for e in _json.loads((tmp_path / "pins.json").read_text())}
+    assert left == {"b" * 40}, "the download was left in the pin registry"

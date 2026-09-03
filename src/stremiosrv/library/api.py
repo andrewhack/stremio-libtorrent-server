@@ -268,19 +268,53 @@ def download(body: DownloadBody, request: Request) -> dict:
         log.warning("library: add failed: %s: %s", type(e).__name__, e)
         raise HTTPException(status_code=400, detail="could not parse that magnet") from None
     info_hash = handle.info_hash().lower()
+    # Wanted, not pinned. A download is the same operation as playback -- "this file is wanted" --
+    # and pinning it would hand it an eviction exemption nobody asked for, which is how a season
+    # pack came to sit far above the cache budget with the evictor unable to touch it. Keeping a
+    # title is a separate, manual act, and there is no disk guard here for the same reason there is
+    # none on playback: the evictor is what manages space.
+    eng.want(info_hash, _wanted_file(body))
+    if body.label:
+        labelsmod.put(_settings(request).cache_root, info_hash, body.label)
+    return {"ok": True, "infoHash": info_hash}
+
+
+@router.post("/api/pin", dependencies=[Depends(require_session)])
+def pin(body: RemoveBody, request: Request) -> dict:
+    """Keep this title: exempt it from eviction, whole, and seed it.
+
+    Deliberately the same act as the appliance's own pin control, calling the same engine method --
+    a title is kept or it is not, and two surfaces that mean different things by "pinned" would be
+    worse than either. This is the ONLY way anything becomes pinned: downloading does not do it on
+    your behalf, so a download stays ordinary cache the evictor may reclaim, which is what makes
+    the budget mean anything.
+
+    The disk guard belongs here rather than on the download, because this is the promise that can
+    overrun a disk: a pin the evictor may not touch.
+    """
+    if not _INFOHASH_RE.match(body.infoHash or ""):
+        raise HTTPException(status_code=400, detail="invalid infohash")
+    eng = _engine_or_503(request)
     try:
-        eng.pin(info_hash, want=_wanted_file(body))
+        eng.pin(body.infoHash.lower())
     except PinSpaceError as e:
-        # Leave the torrent added but unpinned: it is now an ordinary evictable cache entry, which
-        # is what an unpinned torrent has always been. Removing it here would also discard a
-        # partially-downloaded copy the owner may already have been streaming.
+        # Flat body, matching /{ih}/pin: two spellings of one error is how they drift apart.
         raise HTTPException(
             status_code=409,
             detail={"error": "insufficient_space", "needed": e.needed, "free": e.free},
         ) from None
-    if body.label:
-        labelsmod.put(_settings(request).cache_root, info_hash, body.label)
-    return {"ok": True, "infoHash": info_hash}
+    return {"ok": True}
+
+
+@router.post("/api/unpin", dependencies=[Depends(require_session)])
+def unpin(body: RemoveBody, request: Request) -> dict:
+    """Stop keeping this title. It stays on disk and stays playable -- it simply becomes ordinary
+    cache again, which the evictor may reclaim. Distinct from Remove, which deletes it now."""
+    if not _INFOHASH_RE.match(body.infoHash or ""):
+        raise HTTPException(status_code=400, detail="invalid infohash")
+    eng = _engine_or_503(request)
+    eng.unpin(body.infoHash.lower())
+    return {"ok": True}
 
 
 @router.post("/api/remove", dependencies=[Depends(require_session)])
@@ -299,6 +333,7 @@ def remove(body: RemoveBody, request: Request) -> dict:
     eng = _engine_or_503(request)
     names = {h.lower(): n for n, h in (eng.name_to_hash() or {}).items()}
     eng.unpin(info_hash)
+    eng.unwant(info_hash)  # forget the selectors too, or a restart resumes what was just removed
     eng.remove(info_hash)  # drops it from the session: downloading stops before anything is deleted
     name = names.get(info_hash)
     # The name comes from the TORRENT, not from the operator. Require a plain direct child of

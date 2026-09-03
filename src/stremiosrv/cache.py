@@ -46,6 +46,9 @@ PROTECTED = frozenset({
     # cosmetic loss: load_state falls back to a blank owner_id, so the owner pin disappears and the
     # next Stremio account to sign in claims the server.
     "labels.json",
+    # Which files each torrent is being fetched for. Losing it abandons every download in
+    # flight at the next restart, silently and mid-file.
+    "wanted.json",
     "library-ui.json",
     # Which server is allowed to evict from this root — see evictor_may_run.
     ".evictor-owner",

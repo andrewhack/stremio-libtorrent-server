@@ -505,7 +505,7 @@ def test_downloaded_section_does_not_depend_on_labels_json():
 # --- complete vs kept, and whether a release can fit ------------------------------------------
 
 _COMPLETE_SRC = re.compile(r"(const isComplete = [^\n]*)")
-_FITS_SRC = re.compile(r"(const fitsOnDisk = [\s\S]*?\n  \};)")
+_FITS_SRC = re.compile(r"(const sizeVerdict = [\s\S]*?\n  \};)")
 
 
 def _run_js(src, expr):
@@ -531,7 +531,7 @@ def _complete_src():
 
 def _fits_src():
     m = _FITS_SRC.search(_page())
-    assert m, "fitsOnDisk not found in the page"
+    assert m, "sizeVerdict not found in the page"
     return m.group(1)
 
 
@@ -558,28 +558,39 @@ def test_the_card_states_both_completeness_and_keptness():
 
 
 def test_a_release_that_cannot_fit_is_refused():
-    """Same arithmetic as the server's pin guard: free minus the release must still leave the
-    budget plus ten percent, or there is nowhere for the evictor to work."""
+    """No room on the disk is the only case that disables the button."""
     src = _fits_src()
-    b = "{diskFree: 60e9, cacheSize: 19327352832}"          # ~60 GB free, 18 GiB budget
-    assert _run_js(src, f"fitsOnDisk(4.5e9, {b})") is True   # a 4.5 GB episode fits
-    assert _run_js(src, f"fitsOnDisk(45e9, {b})") is False   # a 45 GB pack does not
+    b = "{diskFree: 60e9, cacheUsed: 0, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(4.5e9, {b})") == "ok"
+    assert _run_js(src, f"sizeVerdict(45e9, {b})") == "nodisk"
+
+
+def test_a_release_that_overruns_the_budget_is_offered_with_a_warning():
+    """It fits on the disk, so refusing it would be wrong -- a download is ordinary cache and the
+    owner may well want it anyway. But it will push the cache past its budget, so the evictor may
+    reclaim it before they watch it, and they should see that before clicking rather than after.
+    """
+    src = _fits_src()
+    b = "{diskFree: 60e9, cacheUsed: 17e9, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(6e9, {b})") == "overbudget"
+    assert _run_js(src, f"sizeVerdict(1e9, {b})") == "ok"
+
 
 
 def test_an_unknown_release_size_is_not_treated_as_refusal():
     """An unknown size is not a refusal on its own -- but it is not a free pass either.
 
     Refusing every release whose size no addon reported would grey out most of them. Yet when free
-    space is already under the headroom, NOTHING fits: the server's guard reduces to
-    `free >= headroom` for a candidate it cannot size, so offering the button would promise a 409.
-    That gap is why a release far larger than the free space was still clickable.
+    space is already under the headroom, NOTHING fits. That gap is why a release far larger than
+    the free space was still clickable.
     """
     src = _fits_src()
-    roomy = "{diskFree: 60e9, cacheSize: 19327352832}"
-    assert _run_js(src, f"fitsOnDisk(0, {roomy})") is True
-    assert _run_js(src, "fitsOnDisk(5e9, {})") is True          # nothing to judge against
-    cramped = "{diskFree: 1e9, cacheSize: 19327352832}"
-    assert _run_js(src, f"fitsOnDisk(0, {cramped})") is False   # nothing fits, size known or not
+    roomy = "{diskFree: 60e9, cacheUsed: 0, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(0, {roomy})") == "ok"
+    assert _run_js(src, "sizeVerdict(5e9, {})") == "ok"          # nothing to judge against
+    cramped = "{diskFree: 1e9, cacheUsed: 0, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(0, {cramped})") == "nodisk"
+
 
 
 def test_a_release_size_is_read_from_the_text_when_the_addon_omits_the_field():
@@ -593,3 +604,13 @@ def test_a_release_size_is_read_from_the_text_when_the_addon_omits_the_field():
     assert _run_js(src, "releaseSize({description:'Some.Release.mkv 356 4.21 GB'})") == round(4.21 * gb)
     assert _run_js(src, "releaseSize({title:'x 225.43 MB y'})") == round(225.43 * 1024 ** 2)
     assert _run_js(src, "releaseSize({description:'no size here'})") == 0
+
+
+def test_keeping_is_a_deliberate_control_on_the_card():
+    """Downloading no longer pins, so there has to be something that does -- and it must be the
+    same act as the appliance's pin, not a second meaning of "kept"."""
+    page = _page()
+    assert "/library/api/pin" in page and "/library/api/unpin" in page
+    assert "data-keep=" in page
+    # Unpin is not Remove: the bytes stay, they merely become evictable again.
+    assert "/library/api/remove" in page

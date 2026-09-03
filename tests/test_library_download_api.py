@@ -24,7 +24,8 @@ class FakeHandle:
 class FakeEngine:
     def __init__(self, pin_error=None, add_error=None, names=None):
         self.added, self.pinned, self.removed, self.unpinned = [], [], [], []
-        self.wanted = []  # what each pin asked for: a file choice, or None for all of it
+        self.unwanted = []
+        self.wanted = []  # the selectors each download asked for -- NOT pins
         self.pin_error = pin_error
         self.add_error = add_error
         self._names = names or {}
@@ -35,11 +36,16 @@ class FakeEngine:
         self.added.append(magnet)
         return FakeHandle(IH)
 
-    def pin(self, ih, want=None):
+    def want(self, ih, spec=None):
+        self.wanted.append(spec)
+
+    def unwant(self, ih):
+        self.unwanted.append(ih)
+
+    def pin(self, ih):
         if self.pin_error:
             raise self.pin_error
         self.pinned.append(ih)
-        self.wanted.append(want)
         return {"infoHash": ih}
 
     def unpin(self, ih):
@@ -51,7 +57,7 @@ class FakeEngine:
     def name_to_hash(self):
         return self._names
 
-    def pinned_status(self):
+    def tracked_status(self):
         return []
 
 
@@ -78,12 +84,16 @@ def test_download_requires_a_session(tmp_path, monkeypatch):
                   headers=HTTPS).status_code == 401
 
 
-def test_download_adds_then_pins(ctx):
+def test_download_adds_and_wants_but_does_not_pin(ctx):
+    """A download is the same operation as playback: the file is wanted, nothing more. Pinning it
+    handed it an eviction exemption nobody asked for, which is how a season pack came to sit far
+    above the cache budget with the evictor unable to reclaim it. Keeping is a manual act."""
     c, eng, _ = ctx
     r = c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
     assert r.status_code == 200
     assert eng.added == [MAGNET]
-    assert eng.pinned == [IH]
+    assert eng.wanted == [None]
+    assert eng.pinned == [], "a download must not pin"
 
 
 def test_download_records_the_label(ctx):
@@ -120,23 +130,15 @@ def test_download_maps_a_malformed_magnet_to_400(tmp_path, monkeypatch):
     assert eng.pinned == []
 
 
-def test_disk_guard_maps_to_409(tmp_path, monkeypatch):
+def test_a_download_is_not_subject_to_the_pin_disk_guard(tmp_path, monkeypatch):
+    """The guard belongs to pinning, which promises never to evict; a download promises nothing of
+    the sort. Streaming has never been gated on free space either, and a download is the same
+    operation -- so an engine that would refuse a PIN must not refuse a download."""
     eng = FakeEngine(pin_error=PinSpaceError(needed=1100, free=500))
     c = _signed_in(tmp_path, monkeypatch, eng)
     r = c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
-    assert r.status_code == 409
-    body = r.json()
-    assert body["error"] == "insufficient_space"
-    assert body["needed"] == 1100 and body["free"] == 500
-
-
-def test_disk_guard_shape_matches_the_existing_pin_route(tmp_path, monkeypatch):
-    """/{ih}/pin has always answered the flat {error, needed, free}. Two spellings of one error is
-    how they drift apart, so the new route must not answer {"detail": {...}}."""
-    eng = FakeEngine(pin_error=PinSpaceError(needed=1100, free=500))
-    c = _signed_in(tmp_path, monkeypatch, eng)
-    assert "detail" not in c.post("/library/api/download",
-                                  json={"magnet": MAGNET}, headers=HTTPS).json()
+    assert r.status_code == 200
+    assert eng.wanted == [None] and eng.pinned == []
 
 
 def test_download_without_an_engine_is_503(tmp_path, monkeypatch):
@@ -272,3 +274,39 @@ def test_a_film_still_asks_for_the_whole_torrent(ctx):
     r = _download(c, {"magnet": MAGNET, "label": {"name": "Some Film", "type": "movie"}})
     assert r.status_code == 200
     assert eng.wanted == [None]
+
+
+# --- pinning is manual, and the only way anything becomes kept ---------------------------------
+
+def test_pin_is_a_separate_deliberate_act(ctx):
+    c, eng, _ = ctx
+    r = c.post("/library/api/pin", json={"infoHash": IH}, headers=HTTPS)
+    assert r.status_code == 200
+    assert eng.pinned == [IH]
+
+
+def test_pin_still_answers_the_disk_guard_flatly(tmp_path, monkeypatch):
+    """The guard belongs to pinning, because a pin is the promise that can overrun a disk: the
+    evictor may not reclaim it. Same flat body as /{ih}/pin, so the two cannot drift."""
+    eng = FakeEngine(pin_error=PinSpaceError(needed=1100, free=500))
+    c = _signed_in(tmp_path, monkeypatch, eng)
+    r = c.post("/library/api/pin", json={"infoHash": IH}, headers=HTTPS)
+    assert r.status_code == 409
+    body = r.json()
+    assert body["error"] == "insufficient_space" and "detail" not in body
+
+
+def test_unpin_keeps_the_files(ctx):
+    """Unpin is not Remove. It stops keeping the title; the bytes stay and stay playable, and the
+    evictor may now reclaim them like any other cache."""
+    c, eng, _ = ctx
+    r = c.post("/library/api/unpin", json={"infoHash": IH}, headers=HTTPS)
+    assert r.status_code == 200
+    assert eng.unpinned == [IH] and eng.removed == []
+
+
+def test_pin_requires_a_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(lib.certcheck, "cert_san", lambda p: "DNS:stremio.example.com")
+    s = Settings(library_ui=True, cache_root=str(tmp_path))
+    c = TestClient(create_app(settings=s, engine=FakeEngine()), base_url="https://testserver")
+    assert c.post("/library/api/pin", json={"infoHash": IH}, headers=HTTPS).status_code == 401

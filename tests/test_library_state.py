@@ -10,7 +10,7 @@ class FakeEngine:
     def name_to_hash(self):
         return self._names
 
-    def pinned_status(self):
+    def tracked_status(self):
         return self._pinned
 
 
@@ -47,7 +47,7 @@ def test_pin_fields_are_merged(tmp_path):
     _seed_cache(tmp_path, "some-download")
     eng = FakeEngine(
         names={"some-download": "aabb"},
-        pinned=[{"infoHash": "aabb", "name": "some-download", "progress": 0.5,
+        pinned=[{"infoHash": "aabb", "pinned": True, "name": "some-download", "progress": 0.5,
                  "state": "downloading", "downloaded": 5, "uploaded": 1, "ratio": 0.2,
                  "uploadSpeed": 10, "peers": 3}],
     )
@@ -58,7 +58,7 @@ def test_pin_fields_are_merged(tmp_path):
 def test_pinned_torrent_with_no_files_yet_still_appears(tmp_path):
     """A download just started has a pin but nothing on disk. Omitting it makes the UI look like the
     click did nothing."""
-    eng = FakeEngine(pinned=[{"infoHash": "ccdd", "name": "starting", "progress": 0.0,
+    eng = FakeEngine(pinned=[{"infoHash": "ccdd", "pinned": True, "name": "starting", "progress": 0.0,
                               "state": "downloading", "downloaded": 0, "uploaded": 0,
                               "ratio": 0.0, "uploadSpeed": 0, "peers": 0}])
     entries = state.build(str(tmp_path), eng)["entries"]
@@ -101,7 +101,7 @@ def test_usage_is_reported(tmp_path):
 
 def test_engine_failure_does_not_break_the_listing(tmp_path):
     class Broken(FakeEngine):
-        def pinned_status(self):
+        def tracked_status(self):
             raise RuntimeError("libtorrent went away")
     _seed_cache(tmp_path, "some-download")
     entries = state.build(str(tmp_path), Broken())["entries"]
@@ -156,7 +156,7 @@ def test_download_speed_and_seeds_are_reported(tmp_path):
     """Progress alone does not say whether a download is moving. `seeds` counts peers that have the
     whole thing — the figure that predicts whether it will finish — while `peers` counts every
     connection, leechers included."""
-    eng = FakeEngine(pinned=[{"infoHash": "aabb", "name": "x", "progress": 0.5,
+    eng = FakeEngine(pinned=[{"infoHash": "aabb", "pinned": True, "name": "x", "progress": 0.5,
                               "state": "downloading", "downloaded": 5, "uploaded": 1,
                               "ratio": 0.2, "uploadSpeed": 10, "peers": 9,
                               "seeds": 4, "downloadSpeed": 2_500_000}])
@@ -166,7 +166,7 @@ def test_download_speed_and_seeds_are_reported(tmp_path):
 
 def test_missing_speed_fields_default_to_zero(tmp_path):
     """An older engine, or a torrent with no status yet, must not make the row render 'undefined'."""
-    eng = FakeEngine(pinned=[{"infoHash": "ccdd", "name": "y", "progress": 0.0,
+    eng = FakeEngine(pinned=[{"infoHash": "ccdd", "pinned": True, "name": "y", "progress": 0.0,
                               "state": "downloading"}])
     e = state.build(str(tmp_path), eng)["entries"][0]
     assert e["seeds"] == 0 and e["downloadSpeed"] == 0
@@ -178,7 +178,7 @@ def test_engine_pinned_status_reports_the_fields_the_ui_needs():
     import inspect
 
     from stremiosrv.torrent.engine import Engine
-    src = inspect.getsource(Engine.pinned_status)
+    src = inspect.getsource(Engine._status_for)
     for key in ('"downloadSpeed"', '"seeds"', '"peers"', '"uploadSpeed"'):
-        assert key in src, f"pinned_status no longer reports {key}"
+        assert key in src, f"the tracked-torrent status no longer reports {key}"
     assert "st.download_rate" in src and "st.num_seeds" in src

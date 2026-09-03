@@ -22,6 +22,7 @@ except ImportError:  # libtorrent not installed (e.g. test environments without 
 from stremiosrv import cache as cachemod
 from stremiosrv import metrics
 from stremiosrv import pins as pinsmod
+from stremiosrv import wanted as wantedmod
 from stremiosrv.torrent import dht_state, prefetch
 from stremiosrv.torrent.picker import pieces_for_range
 from stremiosrv.torrent.trackers import merge_trackers
@@ -118,9 +119,11 @@ class Handle:
     def __init__(self, h: lt.torrent_handle) -> None:
         self._h = h
         self.pinned = False
-        # Which single file this pin wants, or None for "all of them". A pin used to mean every
-        # file, so choosing one episode fetched the whole season pack.
-        self.wanted_idx: int | None = None
+        # Which files of this torrent are wanted. A SET, not one index: two files of one torrent
+        # are wanted at the same time whenever someone downloads an episode while someone else
+        # streams a different one -- the case a single index cannot express, and could only
+        # resolve by un-wanting one of them, which releases its data.
+        self.wanted: set[int] = set()
         # Playhead pieces rushed to priority 7 (see boost_piece). Mutated from the streaming thread
         # (boost_piece) and read/cleared from request threads (refocus), so guard with a lock —
         # iterating it live crashed refocus with "Set changed size during iteration".
@@ -250,23 +253,11 @@ class Handle:
         ti = self._h.torrent_file()
         if ti is None:
             return
-        nfiles = ti.files().num_files()
-        # pinned: seed every file, unless the pin asked for one; otherwise only the played file.
-        base = 1 if (self.pinned and self.wanted_idx is None) else 0
-        prios = [base] * nfiles
-        # A pin's chosen file stays wanted even while a DIFFERENT file is being played. Without
-        # this, opening another episode of the same pack dropped the kept one to priority 0 --
-        # un-wanting the very file the owner asked to keep, and handing its further pieces to the
-        # partfile rather than the file on disk.
-        w = self.wanted_idx
-        if w is not None and 0 <= w < nfiles:
-            prios[w] = IDLE_FILE_PRIO
-        if 0 <= idx < nfiles:
-            # High priority only while a stream is actually open on this torrent; otherwise idle-low
-            # so it keeps downloading but yields to whatever is being watched now.
-            prios[idx] = ACTIVE_FILE_PRIO if self._active else IDLE_FILE_PRIO
+        # Playing a file makes it wanted, exactly as downloading it does.
+        if idx >= 0:
+            self.wanted.add(idx)
         try:
-            self._h.prioritize_files(prios)
+            self._h.prioritize_files(self._priorities(focus=idx))
             self._h.set_sequential_download(True)  # fill the wanted file contiguously, front->end
         except Exception:  # noqa: BLE001 — best-effort; deadlines still drive the playhead
             pass
@@ -295,39 +286,60 @@ class Handle:
             pass
         self._focused_idx = None
 
-    def want_only_file(self, idx: int) -> None:
-        """Mark exactly one file wanted; every other file priority 0.
+    def _priorities(self, focus: int | None = None) -> list[int]:
+        """Per-file priorities: wanted files at idle, the file being streamed at active, the rest 0.
 
-        The mirror of want_all_files, and it carries the same caveat: pieces of a 0-priority file
-        land in the `.<infohash>.parts` holding file rather than on disk, which is correct here --
-        those are boundary pieces shared with the file we do want.
+        A pin with no explicit selection still means the whole torrent -- that is what pinning a
+        title has always meant, and the appliance's own pin control means the same thing.
         """
         ti = self._h.torrent_file()
-        if ti is None:
+        n = ti.files().num_files() if ti is not None else 0
+        if self.pinned and not self.wanted:
+            prios = [1] * n
+        else:
+            prios = [0] * n
+            for i in self.wanted:
+                if 0 <= i < n:
+                    prios[i] = IDLE_FILE_PRIO
+        if focus is not None and 0 <= focus < n:
+            # Active only while a stream is actually open on this torrent; otherwise idle-low, so
+            # it keeps filling but yields to whatever is being watched now.
+            prios[focus] = ACTIVE_FILE_PRIO if self._active else IDLE_FILE_PRIO
+        return prios
+
+    def want_file(self, idx: int) -> None:
+        """Add one file to the wanted set and re-apply priorities.
+
+        Additive on purpose: wanting a second file must not un-want the first. Pieces of a
+        0-priority file land in the `.<infohash>.parts` holding file rather than on disk, so
+        dropping a file we already fetched does not merely stop it -- it throws it away.
+        """
+        ti = self._h.torrent_file()
+        if ti is None or not 0 <= idx < ti.files().num_files():
             return
-        n = ti.files().num_files()
-        if not 0 <= idx < n:
-            return
-        prios = [0] * n
-        prios[idx] = 1
+        self.wanted.add(idx)
         try:
-            self._h.prioritize_files(prios)
+            self._h.prioritize_files(self._priorities(focus=self._focused_idx))
         except Exception:  # noqa: BLE001 — best-effort
             pass
-        self.wanted_idx = idx
-        self._focused_idx = None
 
     def wanted_path(self) -> str | None:
-        """The single file this pin is fetching, or None when it wants the whole torrent.
+        """The one file being fetched, or None when that is not a single file.
 
         The card showed the TORRENT's name, which for a season pack is the pack -- so a download
-        narrowed to one episode still read as though the whole season was coming down.
+        narrowed to one episode read as though the whole season was coming down. With more than
+        one file wanted the torrent's name is the honest label again, so say nothing here and let
+        the caller fall back to it.
         """
-        idx = self.wanted_idx
-        if idx is None:
+        if len(self.wanted) != 1:
             return None
+        idx = next(iter(self.wanted))
         paths = self.file_paths()
         return paths[idx].replace("\\", "/").rsplit("/", 1)[-1] if 0 <= idx < len(paths) else None
+
+    def wanted_count(self) -> int:
+        """How many files of this torrent are wanted (0 = the whole thing)."""
+        return len(self.wanted)
 
     def file_paths(self) -> list[str]:
         """Every file path in the torrent, or [] before metadata arrives."""
@@ -607,10 +619,11 @@ class Engine:
         self._resume_dir = os.path.join(cache_root, ".resume")
         os.makedirs(self._resume_dir, exist_ok=True)
         self._pinned: set[str] = set()  # lowercased infohashes; populated by caller/pin()
-        # infohash -> what that pin wants ({"fileIdx": n} or {"season": s, "episode": e}), and
-        # which of those have been applied. A magnet has no file list at pin time, so the choice
-        # cannot be acted on until metadata arrives -- deferring it is the whole point.
-        self._wanted: dict[str, dict | None] = {}
+        # infohash -> the selectors someone asked for ({"fileIdx": n} or {"season", "episode"}),
+        # and which torrents have had them applied. A magnet has no file list when the request
+        # arrives, so the choice cannot be acted on until metadata lands -- deferring it is the
+        # whole point. A LIST per torrent: wanting a second episode must not un-want the first.
+        self._wanted: dict[str, list[dict]] = {}
         self._wanted_applied: set[str] = set()
         self._cache_size = cache_size
         # Latest UPnP/NAT-PMP port-map result (best-effort; populated by the alerts loop if the
@@ -777,15 +790,40 @@ class Engine:
         return {h.name(): ih for ih, h in self._torrents.items() if h.has_metadata()}
 
     def load_pins_into_session(self) -> None:
-        """At startup: re-add every pinned torrent from resume data and resume seeding."""
-        self._pinned = pinsmod.pinned_hashes(self._cache_root)
-        for e in pinsmod.load_pins(self._cache_root):
+        """At startup: re-add everything this box was told to hold on to.
+
+        Two independent registries, which is the whole point of separating them. Pins are titles
+        someone chose to KEEP: they come back whole and seeded, and the evictor may not touch them.
+        Wanted selectors are downloads in flight: they come back as ordinary cache, evictable like
+        anything else. Without restoring the second, a restart silently abandoned a download
+        half-way through a file with nothing to say it had.
+        """
+        # Migration: a pin carrying a `want` was written by the version where downloading pinned
+        # on your behalf. It is a download, not a decision to keep -- so move it to the wanted
+        # registry and drop the pin, or it would come back as a WHOLE-torrent pin and re-fetch
+        # every file of a pack that had been narrowed to one episode.
+        records = pinsmod.load_pins(self._cache_root)
+        migrated = [e for e in records if e.get("want")]
+        if migrated:
+            for e in migrated:
+                ih = (e.get("infoHash") or "").lower()
+                if ih:
+                    wantedmod.add(self._cache_root, ih, e.get("want"))
+            records = [e for e in records if not e.get("want")]
+            pinsmod.save_pins(self._cache_root, records)
+            logger.info("moved %d download(s) out of the pin registry: downloading no longer pins",
+                        len(migrated))
+        self._pinned = {(e.get("infoHash") or "").lower() for e in records if e.get("infoHash")}
+        for e in records:
             ih = (e.get("infoHash") or "").lower()
             if not ih:
                 continue
             h = self.add(ih, trackers=e.get("trackers"))
             h.pinned = True
-            self._wanted[ih] = e.get("want")
+        self._wanted = wantedmod.load(self._cache_root)
+        for ih in list(self._wanted):
+            if ih not in self._torrents:
+                self.add(ih)
         self._apply_pending_wanted()
 
     def _full_priority(self, h: Handle) -> None:
@@ -800,15 +838,23 @@ class Engine:
         if n:
             h.raw().prioritize_pieces([1] * n)
 
-    def _apply_wanted(self, h: Handle, want: dict | None) -> None:
-        """Fetch only the file this pin asked for, or every file when it asked for none."""
-        idx = pinsmod.select_wanted_file(h.file_paths(), want)
-        if idx is None:
+    def _apply_wanted(self, h: Handle, specs: list[dict]) -> None:
+        """Want every file these selectors resolve to; the whole torrent if any does not narrow.
+
+        A selector that resolves to nothing -- a film, or a pack numbering its episodes some way we
+        do not recognise -- means the whole torrent, because half a film on disk is worse than all
+        of it.
+        """
+        paths = h.file_paths()
+        resolved = [pinsmod.select_wanted_file(paths, spec) for spec in specs]
+        narrowed = [i for i in resolved if i is not None]
+        if not specs or len(narrowed) != len(resolved):
             self._full_priority(h)
             return
-        # No prioritize_pieces pass here: setting every piece to 1 is what _full_priority does and
-        # it would undo the file selection, which is exactly the bug this fixes.
-        h.want_only_file(idx)
+        for idx in narrowed:
+            # No prioritize_pieces pass: setting every piece to 1 is what _full_priority does and
+            # it would undo the file selection.
+            h.want_file(idx)
 
     def _apply_pending_wanted(self) -> None:
         """Apply every pin's file choice that metadata has now made resolvable.
@@ -816,14 +862,14 @@ class Engine:
         Driven by the metadata alert rather than keyed off it: alert shapes differ across
         libtorrent versions, and a sweep over the pins is both cheap and version-proof.
         """
-        for ih, want in list(self._wanted.items()):
+        for ih, specs in list(self._wanted.items()):
             if ih in self._wanted_applied:
                 continue
             h = self._torrents.get(ih)
             if h is None or not h.has_metadata():
                 continue
             try:
-                self._apply_wanted(h, want)
+                self._apply_wanted(h, specs)
             except Exception as e:  # noqa: BLE001 — never let one bad pin stop the others
                 logger.warning("could not apply file selection for %s: %s: %s", ih, type(e).__name__, e)
             self._wanted_applied.add(ih)
@@ -839,9 +885,38 @@ class Engine:
         return {h.name() for ih, h in self._torrents.items()
                 if ih in self._pinned and h.has_metadata()}
 
-    def pin(self, info_hash: str, want: dict | None = None) -> dict:
-        """Keep this torrent. `want` narrows it to one file -- {"fileIdx": n}, or
-        {"season": s, "episode": e} to be matched against the file list once metadata lands."""
+    def want(self, info_hash: str, spec: dict | None = None) -> None:
+        """Fetch `spec` of this torrent. NOT a pin.
+
+        Downloading and streaming are the same operation -- "this file is wanted" -- differing only
+        in urgency, which is the active-vs-idle file priority. Making a download pin gave it an
+        eviction exemption and a disk guard nobody asked for, and let a pack sit far above the cache
+        budget with the evictor powerless to touch it. A download is ordinary cache; the evictor
+        handles it like everything else. Keeping something is a separate, manual act.
+        """
+        ih = info_hash.lower()
+        self._wanted.setdefault(ih, [])
+        entry = spec or {}
+        if entry not in self._wanted[ih]:
+            self._wanted[ih].append(entry)
+        wantedmod.add(self._cache_root, ih, spec)
+        self._wanted_applied.discard(ih)  # a new selector must be applied even if others were
+        self._apply_pending_wanted()  # no-op until metadata; the alerts loop finishes the job
+
+    def unwant(self, info_hash: str) -> None:
+        """Forget every selector for this torrent -- it is being removed."""
+        ih = info_hash.lower()
+        self._wanted.pop(ih, None)
+        self._wanted_applied.discard(ih)
+        wantedmod.drop(self._cache_root, ih)
+
+    def pin(self, info_hash: str) -> dict:
+        """Keep this torrent: exempt from eviction, every file, seeded. Manual only.
+
+        Deliberately whole-title, and deliberately not something a download does on your behalf --
+        the appliance's own pin control means exactly this, and consistency between the two is
+        worth more than a cleverer per-file rule.
+        """
         ih = info_hash.lower()
         h = self.get(info_hash) or self.add(info_hash)
         # disk guard: existing incomplete pins + this candidate must still leave headroom
@@ -853,13 +928,10 @@ class Engine:
             raise PinSpaceError(pinsmod.headroom(self._cache_size), free)
         self._pinned.add(ih)
         h.pinned = True
-        self._wanted[ih] = want
-        self._wanted_applied.discard(ih)
-        self._apply_pending_wanted()  # no-op until metadata; the alert loop finishes the job
+        if h.has_metadata():
+            self._full_priority(h)
         entry = {"infoHash": ih, "name": h.name() if h.has_metadata() else "",
                  "trackers": [], "addedAt": int(time.time())}
-        if want:
-            entry["want"] = want
         existing = [e for e in pinsmod.load_pins(self._cache_root)
                     if (e.get("infoHash") or "").lower() != ih]
         existing.append(entry)
@@ -879,9 +951,22 @@ class Engine:
                      if (e.get("infoHash") or "").lower() != ih]
         pinsmod.save_pins(self._cache_root, remaining)
 
+    def tracked_status(self) -> list[dict]:
+        """Status for every torrent this box is deliberately holding: pinned OR wanted.
+
+        The library view used to read pinned_status, so with downloads no longer pinning, an
+        in-flight download would have been invisible until its bytes reached the disk -- the click
+        would have looked like it did nothing.
+        """
+        return self._status_for(set(self._pinned) | set(self._wanted))
+
     def pinned_status(self) -> list[dict]:
+        """Only the kept titles -- what /pins.json has always meant."""
+        return self._status_for(set(self._pinned))
+
+    def _status_for(self, hashes: set[str]) -> list[dict]:
         out = []
-        for ih in self._pinned:
+        for ih in hashes:
             h = self._torrents.get(ih)
             if h is None or not h.has_metadata():
                 continue
@@ -891,6 +976,9 @@ class Engine:
             out.append({
                 "infoHash": ih,
                 "name": h.name(),
+                # Kept, or merely being fetched. These are different facts now: a download is
+                # ordinary cache the evictor may reclaim, a pin is not.
+                "pinned": ih in self._pinned,
                 # What is actually being fetched, when that is narrower than the torrent.
                 "wantedFile": h.wanted_path(),
                 "progress": round(st.progress, 4),

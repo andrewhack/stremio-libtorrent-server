@@ -36,7 +36,9 @@ def _engine_view(engine) -> tuple[dict, dict]:
         log.warning("library: name_to_hash failed: %s: %s", type(e).__name__, e)
         names = {}
     try:
-        pins = {p["infoHash"].lower(): p for p in (engine.pinned_status() or [])
+        # tracked, not pinned: a download in flight is not pinned any more, and reading only the
+        # pins would leave it invisible until its bytes reached the disk.
+        pins = {p["infoHash"].lower(): p for p in (engine.tracked_status() or [])
                 if p.get("infoHash")}
     except Exception as e:  # noqa: BLE001 — degrade to a disk-only listing
         log.warning("library: pinned_status failed: %s: %s", type(e).__name__, e)
@@ -71,7 +73,9 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "infoHash": ih or None,
             "size": item["size"] + part_bytes.pop(ih, 0) if ih else item["size"],
             "mtime": item["mtime"],
-            "pinned": bool(pin),
+            # Kept, not merely present: the record says so now, because being tracked no longer
+            # implies being pinned.
+            "pinned": bool(pin.get("pinned")),
             # /library/api/remove is keyed by infohash; without one the button would do nothing.
             "removable": bool(ih),
             # Without a pin record there is no progress figure to report. The files are on disk and
@@ -97,7 +101,7 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             continue
         entries.append({
             "name": pin.get("name", ""), "infoHash": ih, "size": 0, "mtime": 0,
-            "pinned": True, "progress": pin.get("progress", 0.0),
+            "pinned": bool(pin.get("pinned")), "progress": pin.get("progress", 0.0),
             "wantedFile": pin.get("wantedFile"),
             "state": pin.get("state", "downloading"), "peers": pin.get("peers", 0),
             "seeds": pin.get("seeds", 0), "downloadSpeed": pin.get("downloadSpeed", 0),
