@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import time
+import uuid
 
 logger = logging.getLogger("stremiosrv.cache")
 
@@ -32,7 +33,61 @@ PROTECTED = frozenset({
     # next Stremio account to sign in claims the server.
     "labels.json",
     "library-ui.json",
+    # Which server is allowed to evict from this root — see evictor_may_run.
+    ".evictor-owner",
 })
+
+# --- cache-root ownership ---------------------------------------------------------------------
+# One cache root, one evictor. Two servers pointed at the same directory do not share a view of
+# it: each protects only what ITS libtorrent session holds a handle for, and each enforces ITS
+# own budget. The smaller budget therefore deletes the larger server's cache wholesale, and the
+# entries all read [no-handle] on the way out because they were never this process's to begin
+# with. That is not a hypothetical -- it took a live cache to almost nothing in one pass.
+#
+# The claim is advisory and self-expiring: a heartbeat file, refreshed each pass, that goes stale
+# when its holder stops. Losing eviction is a recoverable, loud failure (the over-budget warning
+# below fires every pass); losing the cache is not.
+OWNER_FILE = ".evictor-owner"
+_TOKEN = uuid.uuid4().hex  # this process's identity, minted once per interpreter
+
+
+def read_owner(root: str) -> dict | None:
+    """The current claim on `root`, or None if unclaimed/unreadable."""
+    try:
+        with open(os.path.join(root, OWNER_FILE), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_owner(root: str, token: str | None = None, now: float | None = None) -> None:
+    """Claim `root`, or refresh an existing claim. Best-effort: a read-only root must not stop
+    the server, it only means the guard cannot help there."""
+    rec = {"token": token or _TOKEN, "pid": os.getpid(), "heartbeat": now or time.time()}
+    path = os.path.join(root, OWNER_FILE)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        logger.warning("could not claim cache root %s: %s", root, e)
+
+
+def evictor_may_run(root: str, stale_after: float) -> tuple[bool, dict | None]:
+    """(may this process evict from `root`, the rival claim that says otherwise).
+
+    Ours or absent or stale -> yes, and the claim is taken. A live claim by another token -> no.
+    """
+    rec = read_owner(root)
+    if rec and rec.get("token") != _TOKEN:
+        age = time.time() - float(rec.get("heartbeat") or 0)
+        if age <= stale_after:
+            return False, rec
+    write_owner(root)
+    return True, None
+
 
 
 def _real_size(st) -> int:
@@ -224,9 +279,23 @@ def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: 
         logger.addHandler(h)
         logger.setLevel(logging.INFO)
         logger.propagate = False
+    # One evictor per cache root. A rival claim means another server is already managing this
+    # directory with its own budget and its own idea of what is in use; running a second pass
+    # here deletes that server's cache, not ours.
+    stale_after = max(300.0, interval * 5)
+    may, other = evictor_may_run(root, stale_after)
+    if not may:
+        logger.error(
+            "cache root %s is already claimed by another server (pid %s, last seen %.0fs ago) — "
+            "NOT starting the evictor. Two servers sharing one cache root delete each other's "
+            "data: give each container its own directory.",
+            root, other.get("pid"), time.time() - float(other.get("heartbeat") or 0),
+        )
+        return
     logger.info("cache evictor started: budget=%.1f GiB, interval=%ss", budget / 1073741824, interval)
     while True:
         time.sleep(interval)  # sleep first: let active streams re-register after a restart
+        write_owner(root)  # heartbeat: our claim is only as good as its freshness
         try:
             res = evict_once(root, budget, engine, grace)
             if res["deleted"]:
