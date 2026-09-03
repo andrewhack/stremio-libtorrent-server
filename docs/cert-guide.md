@@ -13,6 +13,19 @@ works immediately.
   cert (options 2–3) **or** just use the HTTP/LAN path below.
 - Override the CN with `-e DOMAIN=<host-or-ip>`.
 
+### The shared cert is trusted, but its key is not private
+`IPADDRESS` fetches a Let's Encrypt cert for `*.stremio.rocks`. Browsers and TVs accept it, and it
+costs nothing — but **every installation receives the same certificate and the same private key**,
+and that key is served on request without authentication. Anyone can hold it.
+
+In practice that means somebody positioned on the network between you and your server can present a
+certificate your client will accept for your server's hostname. On a LAN that is a small risk. On
+the open internet it is not, and it is the reason the optional library UI refuses to offer its
+password sign-in form on a server using this cert (see [library-ui.md](library-ui.md)).
+
+Trusted and private are two different properties. For anything reachable from outside your LAN,
+prefer option 2 below.
+
 ## 2. Bring-your-own cert (best — works for all clients)
 Put a **full-chain + private key** PEM at `<data-dir>/certificates.pem` (the cache dir mounted at
 `/root/.stremio-server`). The container uses it as-is; no warnings, native apps accept it.

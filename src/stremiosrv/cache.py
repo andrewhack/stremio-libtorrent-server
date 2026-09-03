@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import time
 import uuid
 
@@ -39,6 +40,16 @@ PROTECTED = frozenset({
     "transcode",
     ".resume",
     "pins.json",
+    # Library-UI state, for the same reason pins.json is here. Both live in cache_root beside the
+    # torrent data, and both are small and rarely rewritten — so select_evictions, which sorts by
+    # mtime, would pick them FIRST once the cache went over budget. Losing library-ui.json is not a
+    # cosmetic loss: load_state falls back to a blank owner_id, so the owner pin disappears and the
+    # next Stremio account to sign in claims the server.
+    "labels.json",
+    # Which files each torrent is being fetched for. Losing it abandons every download in
+    # flight at the next restart, silently and mid-file.
+    "wanted.json",
+    "library-ui.json",
     # Which server is allowed to evict from this root — see evictor_may_run.
     ".evictor-owner",
 })
@@ -55,6 +66,9 @@ PROTECTED = frozenset({
 # below fires every pass); losing the cache is not.
 OWNER_FILE = ".evictor-owner"
 _TOKEN = uuid.uuid4().hex  # this process's identity, minted once per interpreter
+# A restart mints a new token but keeps the hostname, and a container's own dead process is not a
+# rival -- without this the survivor of a restart locks itself out of its own cache root.
+_HOST = socket.gethostname()
 
 
 def read_owner(root: str) -> dict | None:
@@ -70,7 +84,8 @@ def read_owner(root: str) -> dict | None:
 def write_owner(root: str, token: str | None = None, now: float | None = None) -> None:
     """Claim `root`, or refresh an existing claim. Best-effort: a read-only root must not stop
     the server, it only means the guard cannot help there."""
-    rec = {"token": token or _TOKEN, "pid": os.getpid(), "heartbeat": now or time.time()}
+    rec = {"token": token or _TOKEN, "host": _HOST, "pid": os.getpid(),
+           "heartbeat": now or time.time()}
     path = os.path.join(root, OWNER_FILE)
     try:
         tmp = path + ".tmp"
@@ -87,7 +102,7 @@ def evictor_may_run(root: str, stale_after: float) -> tuple[bool, dict | None]:
     Ours or absent or stale -> yes, and the claim is taken. A live claim by another token -> no.
     """
     rec = read_owner(root)
-    if rec and rec.get("token") != _TOKEN:
+    if rec and rec.get("token") != _TOKEN and rec.get("host") != _HOST:
         age = time.time() - float(rec.get("heartbeat") or 0)
         if age <= stale_after:
             return False, rec
@@ -252,6 +267,13 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
     pin_entries = pinsmod.load_pins(root)
     keep_hashes = {(e.get("infoHash") or "").lower() for e in pin_entries if e.get("infoHash")}
     in_use |= {e["name"] for e in pin_entries if e.get("name")}
+    # ...but `pin()` records the torrent name only when metadata had already arrived, and nothing
+    # ever backfills it -- a magnet pinned the moment it is added carries "" for the life of the
+    # pin, which is the normal case, not the corner one. The name index, written whenever resume
+    # data is saved, knows the name; without this the durable protection above is inert for
+    # exactly the pins that need it.
+    by_hash = {str(h).lower(): n for n, h in load_name_index(root).items() if h}
+    in_use |= {by_hash[ih] for ih in keep_hashes if ih in by_hash}
     # Give every partfile the protection its torrent has. Deleting one on its own throws away the
     # partial pieces of a torrent we just decided to keep, and it always looked evictable because
     # its name matches no torrent.
@@ -305,19 +327,31 @@ def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: 
     # directory with its own budget and its own idea of what is in use; running a second pass
     # here deletes that server's cache, not ours.
     stale_after = max(300.0, interval * 5)
-    may, other = evictor_may_run(root, stale_after)
-    if not may:
-        logger.error(
-            "cache root %s is already claimed by another server (pid %s, last seen %.0fs ago) — "
-            "NOT starting the evictor. Two servers sharing one cache root delete each other's "
-            "data: give each container its own directory.",
-            root, other.get("pid"), time.time() - float(other.get("heartbeat") or 0),
-        )
-        return
     logger.info("cache evictor started: budget=%.1f GiB, interval=%ss", budget / 1073741824, interval)
+    blocked = False
     while True:
         time.sleep(interval)  # sleep first: let active streams re-register after a restart
-        write_owner(root)  # heartbeat: our claim is only as good as its freshness
+        # Re-checked every cycle rather than once at startup, and it doubles as the heartbeat on
+        # our own claim. Giving up permanently turned an overlap of a few minutes into an evictor
+        # that never ran again for the life of the process -- and a cache stuck over budget with
+        # nothing in the log to say why.
+        may, other = evictor_may_run(root, stale_after)
+        if not may:
+            if not blocked:
+                logger.error(
+                    "cache root %s is claimed by another server (%s, pid %s, last seen %.0fs "
+                    "ago) — holding off. Two servers sharing one cache root delete each other's "
+                    "data: give each container its own directory.",
+                    # A claim written before this field existed has no host, and "on None" reads
+                    # like a bug in the message rather than a fact about the claim.
+                    root, other.get("host") or "host unknown", other.get("pid"),
+                    time.time() - float(other.get("heartbeat") or 0),
+                )
+                blocked = True
+            continue
+        if blocked:
+            logger.info("cache root %s is free again — resuming eviction", root)
+            blocked = False
         try:
             res = evict_once(root, budget, engine, grace)
             if res["deleted"]:

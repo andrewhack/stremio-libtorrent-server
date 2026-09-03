@@ -101,3 +101,15 @@ class Settings(BaseSettings):
     prefetch_next_fraction: float = 0.05        # head size as a fraction of the next file
     prefetch_next_max_bytes: ByteSize = 134_217_728  # 128 MiB ceiling (a 4K episode won't pull 200 MB)
     prefetch_trigger_fraction: float = 0.90     # fire once the read cursor passes this point
+    # Library download UI (opt-in). Off by default: this mounts an AUTHENTICATED page on the same
+    # origin as the web player, and a stranger pulling a new tag must not silently gain a new public
+    # surface. See docs/library-ui.md.
+    library_ui: bool = False
+    # Pin the Stremio account allowed in, as either the account `_id` or its email. Empty =
+    # trust-on-first-use: the first successful sign-in records the id. What is persisted and
+    # compared is always `_id` — an email can be changed on the account, the id cannot.
+    library_owner: str = ""
+    # Permit the UI without TLS. The session cookie then loses `Secure`, so only set this behind a
+    # VPN or on a trusted LAN. Default refuses, because the fallback sign-in puts a password on the
+    # wire.
+    library_allow_http: bool = False

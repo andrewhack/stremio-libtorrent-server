@@ -278,6 +278,18 @@ def test_transcode_is_still_never_evictable(tmp_path):
 # handles for files it did not download, and pins.json was empty. Nothing in the code made that
 # mistake survivable, so the guard belongs here rather than in a runbook.
 
+def _foreign_claim(tmp_path, token="the-other-container", host="some-other-box"):
+    """A claim that genuinely belongs to another machine. write_owner stamps this host, and a
+    same-host claim is now taken over as our own previous process, so tests that mean "a rival"
+    have to say so explicitly."""
+    from stremiosrv import cache as c
+    c.write_owner(str(tmp_path), token=token)
+    p = tmp_path / c.OWNER_FILE
+    rec = json.loads(p.read_text())
+    rec["host"] = host
+    p.write_text(json.dumps(rec))
+
+
 def test_evictor_may_run_on_a_free_root(tmp_path):
     from stremiosrv import cache as c
     may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
@@ -286,7 +298,7 @@ def test_evictor_may_run_on_a_free_root(tmp_path):
 
 def test_evictor_refuses_a_root_another_server_is_holding(tmp_path):
     from stremiosrv import cache as c
-    c.write_owner(str(tmp_path), token="the-other-container")
+    _foreign_claim(tmp_path)
     may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
     assert may is False
     assert other and other["token"] == "the-other-container"
@@ -295,7 +307,10 @@ def test_evictor_refuses_a_root_another_server_is_holding(tmp_path):
 def test_evictor_takes_over_a_root_whose_owner_stopped(tmp_path):
     """A stale claim must never wedge eviction forever — a container that died holds no lock."""
     from stremiosrv import cache as c
-    c.write_owner(str(tmp_path), token="a-container-that-is-gone", now=time.time() - 4000)
+    _foreign_claim(tmp_path, token="a-container-that-is-gone")
+    rec = json.loads((tmp_path / c.OWNER_FILE).read_text())
+    rec["heartbeat"] = time.time() - 4000
+    (tmp_path / c.OWNER_FILE).write_text(json.dumps(rec))
     may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
     assert may is True and other is None
 
@@ -313,7 +328,7 @@ def test_owner_file_is_protected_from_eviction():
     assert c.OWNER_FILE in c.PROTECTED
 
 
-def test_run_evictor_deletes_nothing_when_another_server_holds_the_root(tmp_path):
+def test_run_evictor_deletes_nothing_when_another_server_holds_the_root(tmp_path, monkeypatch):
     """The incident, in miniature: a big cache, a small budget, and a rival already in charge.
 
     Without the guard this call empties the directory — that is exactly what took a live cache
@@ -324,8 +339,19 @@ def test_run_evictor_deletes_nothing_when_another_server_holds_the_root(tmp_path
     d = tmp_path / "a-title-this-server-never-downloaded"
     d.mkdir()
     (d / "payload").write_bytes(b"x" * 5000)
-    c.write_owner(str(tmp_path), token="production-container")
-    c.run_evictor(str(tmp_path), budget=100, interval=1)
+    _foreign_claim(tmp_path, token="production-container")
+    sleeps = []
+
+    def fake_sleep(_n):
+        sleeps.append(1)
+        if len(sleeps) >= 2:
+            raise SystemExit  # two cycles is enough; the loop no longer exits on its own
+
+    monkeypatch.setattr(c.time, "sleep", fake_sleep)
+    try:
+        c.run_evictor(str(tmp_path), budget=100, interval=1)
+    except SystemExit:
+        pass
     assert d.exists(), "evictor deleted another server's cache despite a live claim"
 
 
@@ -415,3 +441,70 @@ def test_evicting_a_torrent_takes_its_partfile_with_it(tmp_path):
     part = _mk(tmp_path, f".{IH}.parts", 3000, age=5)
     c.evict_once(str(tmp_path), budget=1000, engine=Eng())
     assert not part.exists(), "orphaned partfile survived its torrent"
+
+
+def test_pin_recorded_with_no_name_is_still_protected(tmp_path):
+    """`pin()` stores `h.name() if h.has_metadata() else ""`, and nothing ever backfills it — so a
+    magnet pinned the moment it was added carries an empty name for the life of the pin. Observed
+    live: the first successful library download recorded `"name": ""`. Without resolving it, the
+    durable protection is inert for precisely the pins made from a fresh magnet, which is all of
+    them. The name index, written whenever resume data is saved, knows the answer.
+    """
+    from stremiosrv import cache as c
+    keep = _mk(tmp_path, "Pinned But Unnamed", 4000)
+    drop = _mk(tmp_path, "Unpinned Title", 4000)
+    _pins(tmp_path, [{"infoHash": IH, "name": ""}])
+    c.save_name_index(str(tmp_path), {"Pinned But Unnamed": IH})
+    res = c.evict_once(str(tmp_path), budget=1000)
+    names = {d["name"] for d in res["deleted"]}
+    assert "Unpinned Title" in names and not drop.exists()
+    assert keep.exists() and "Pinned But Unnamed" not in names
+
+
+def test_partfile_of_a_nameless_pin_is_protected_too(tmp_path):
+    from stremiosrv import cache as c
+    part = _mk(tmp_path, f".{IH}.parts", 3000)
+    _mk(tmp_path, "Pinned But Unnamed", 4000)
+    _mk(tmp_path, "Unpinned Title", 4000)
+    _pins(tmp_path, [{"infoHash": IH, "name": ""}])
+    c.save_name_index(str(tmp_path), {"Pinned But Unnamed": IH})
+    c.evict_once(str(tmp_path), budget=1000)
+    assert part.exists()
+
+
+def test_evictor_takes_over_its_own_previous_process(tmp_path):
+    """A restart mints a new token, so the container's own dead claim looked like a rival and
+    locked the survivor out. Observed live: "already claimed by another server (pid 12)" logged by
+    the only server there was. Same host means the claim is ours to take, whatever the token."""
+    from stremiosrv import cache as c
+    c.write_owner(str(tmp_path), token="our-previous-process")
+    may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
+    assert may is True and other is None
+
+
+def test_a_claim_from_elsewhere_is_still_respected(tmp_path):
+    """The takeover above must not swallow the case the guard exists for."""
+    from stremiosrv import cache as c
+    _foreign_claim(tmp_path)
+    may, other = c.evictor_may_run(str(tmp_path), stale_after=300)
+    assert may is False and other["host"] == "some-other-box"
+
+
+def test_a_refused_evictor_keeps_trying(tmp_path, monkeypatch):
+    """Refusing was a one-shot `return`, so a claim that went stale a minute later never got
+    picked up -- eviction stayed off for the life of the process. It must re-check each cycle."""
+    from stremiosrv import cache as c
+    _foreign_claim(tmp_path)
+    sleeps = []
+
+    def fake_sleep(n):
+        sleeps.append(n)
+        if len(sleeps) >= 3:
+            raise SystemExit
+
+    monkeypatch.setattr(c.time, "sleep", fake_sleep)
+    try:
+        c.run_evictor(str(tmp_path), budget=10**9, interval=5)
+    except SystemExit:
+        pass
+    assert len(sleeps) == 3, "gave up instead of re-checking the claim"

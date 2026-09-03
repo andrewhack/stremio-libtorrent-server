@@ -44,3 +44,38 @@ def cert_days_left(path: str) -> int | None:
         days = None
     _cache[path] = (mtime, days)
     return days
+
+
+_san_cache: dict[str, tuple[float, str | None]] = {}  # path -> (mtime, san|None)
+
+
+def cert_san(path: str) -> str | None:
+    """The cert's subjectAltName line, or None if missing/unreadable. Cached by mtime, exactly like
+    cert_days_left — the auth path reads this on every sign-in and must not spawn openssl each time.
+
+    Used to tell a bring-your-own cert from the shared `*.stremio.rocks` wildcard, whose private key
+    anyone can fetch unauthenticated over plain HTTP (see library/authmode.py).
+    """
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    hit = _san_cache.get(path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    san: str | None = None
+    try:
+        out = subprocess.run(
+            ["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", path],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            # openssl prints a header line then the indented value; take the value.
+            for line in out.stdout.splitlines():
+                if "DNS:" in line or "IP Address:" in line:
+                    san = line.strip()
+                    break
+    except (OSError, subprocess.SubprocessError):
+        san = None
+    _san_cache[path] = (mtime, san)
+    return san

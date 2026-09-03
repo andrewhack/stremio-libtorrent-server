@@ -6,7 +6,7 @@ yet, and why each item is still open.
 Convention: `- [ ]` open · `- [x]` done · `- [~]` in progress · `- [!]` blocked. Every entry states
 what "done" looks like, so it can be picked up without context.
 
-**Last updated:** 2026-08-13
+**Last updated:** 2026-09-03
 
 ---
 
@@ -27,6 +27,46 @@ what "done" looks like, so it can be picked up without context.
   *Done =* upstream defines the signature and the server computes the same value. Until then,
   `playback.subtitleSignatureAsks` in `/stats.json` counts how often real clients ask, which is the
   evidence for whether this is worth reverse-engineering.
+
+## Library UI
+
+- [ ] **A title the player streamed can be removed but not kept.** The library UI pins whatever it
+  downloads, so those survive eviction. Anything the client streamed is an ordinary cache entry, and
+  the page offers only Remove — there is no way to say "keep this one" short of downloading it again
+  through the library, which re-fetches bytes already on disk. The card now states the difference
+  ("complete, kept" vs "complete, cached"), so the gap is visible rather than silent, but naming a
+  problem is not fixing it: a complete title the owner wants is reclaimed by the next eviction pass
+  the moment the cache goes over budget.
+  *Done =* a Keep action on any complete entry that has an infohash, pinning through the existing
+  `POST /{infoHash}/pin` route, with the disk guard's refusal surfaced the way the download path
+  already surfaces it; and Unkeep on a pinned entry, which is `unpin` without deleting anything —
+  distinct from Remove, which stops the torrent and reclaims the disk.
+
+- [ ] **The library lists torrents, but a pack holds many episodes.** An entry is one cache
+  directory, so every episode inside a season pack is folded into a single card — the one the pin
+  was labelled with. Watch a second episode from that pack through the player and there is nothing
+  in the library to show for it: no card, no size, no way to remove just that episode. The card's
+  size is the whole directory too, which is why a 4.2 GB episode can report 8.6 GB.
+  The cache does not care where a request came from, and that is correct: the library UI is
+  owner-gated, but the streaming server is not, so any client pointed at this box adds to the same
+  cache. One person pinning an episode through the library and another streaming a different
+  episode of the same pack through the player land in one torrent, sharing one directory — which
+  the owner then sees as a single card whose size climbs with nothing on the page attributing it.
+  So this is not a rendering nicety: it is what makes a SHARED cache legible.
+  *Done =* a multi-file torrent renders one card per file that has data, driven by libtorrent's
+  per-file progress and independent of which surface started it, with the torrent as their shared
+  parent for removal; the card's size reports the file, not the directory it happens to share; and
+  each says kept or cached, which is the distinction that decides whether it survives eviction and
+  is orthogonal to who asked for it.
+
+- [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
+  `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins
+  immediately after `add`, so the guard always measures nothing and always passes. A torrent far
+  larger than the cache budget is admitted without complaint, then cannot be evicted because it is
+  pinned.
+  *Done =* the guard re-runs from `_apply_pending_wanted` once metadata gives a real size, with a
+  loud, actionable outcome when what arrived does not fit — the pin is the owner's instruction, so
+  silently dropping it is not the answer either.
 
 ## Tooling & docs
 

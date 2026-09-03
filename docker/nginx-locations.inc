@@ -36,6 +36,11 @@ location ^~ /hlsv2/            { proxy_pass http://127.0.0.1:11470; }
 # (e.g. /<hash>/scripts/main.js, /<hash>/styles/main.css), which an unanchored ^/<40hex> would
 # wrongly proxy to uvicorn -> the SPA never boots (blank page). Keep these as static.
 location ~ "^/[0-9a-fA-F]{40}/([0-9]+|stats\.json|remove)" { proxy_pass http://127.0.0.1:11470; }
+# Library download UI (opt-in, off unless STREMIOSRV_LIBRARY_UI). Prefix, not exact: the page AND
+# its API both live under here, and uvicorn 404s the whole tree when the flag is off — so this
+# line is inert rather than wrong on a server that has not enabled it. It must come before the
+# `location /` fallback, or /library would be served as the web player's index.html.
+location ^~ /library           { proxy_pass http://127.0.0.1:11470; }
 
 # --- web player (static SPA; hash-routed, so / -> index.html) ---
 location / { try_files $uri $uri/ /index.html; }

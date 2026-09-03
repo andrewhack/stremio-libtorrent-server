@@ -1,0 +1,1197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library</title>
+<style>
+  :root {
+    --bg:#0f0d1c; --bg2:#151230; --card:#1c1836; --fg:#eceaf6; --dim:#9d99bd;
+    --accent:#7b5bf5; --accent2:#5b8def; --bad:#e05c5c; --ok:#7b5bf5;
+    --poster-w:150px;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:linear-gradient(180deg,var(--bg2) 0,var(--bg) 420px) no-repeat var(--bg);
+         color:var(--fg); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:14px 24px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+           background:rgba(15,13,28,.7); backdrop-filter:blur(8px); position:sticky; top:0; z-index:5; }
+  h1 { font-size:18px; margin:0; font-weight:700; letter-spacing:.01em; }
+  main { padding:8px 24px 48px; max-width:1600px; margin:0 auto; }
+  section { margin-bottom:34px; }
+  h2 { font-size:22px; font-weight:600; margin:0 0 14px; letter-spacing:.01em; }
+  .note { color:var(--dim); font-size:13px; }
+  .err { color:var(--bad); margin-top:10px; min-height:20px; }
+
+  /* Horizontal poster row, the shape the Stremio client uses. Scrolls inside itself so the page
+     body never scrolls sideways on a phone. */
+  .shelf { display:flex; gap:16px; overflow-x:auto; padding:4px 0 10px;
+           scrollbar-width:thin; scroll-snap-type:x proximity; }
+  .shelf::-webkit-scrollbar { height:8px; }
+  .shelf::-webkit-scrollbar-thumb { background:#2a2550; border-radius:4px; }
+  .card { width:var(--poster-w); flex:0 0 auto; scroll-snap-align:start; }
+  .poster { position:relative; width:100%; aspect-ratio:2/3; border-radius:10px;
+            background:#241f45; overflow:hidden; display:flex; align-items:center;
+            justify-content:center; box-shadow:0 4px 14px rgba(0,0,0,.35); }
+  .poster img { width:100%; height:100%; object-fit:cover; display:block; }
+  .poster .fallback { padding:10px; font-size:12px; color:var(--dim); text-align:center;
+                      word-break:break-word; max-height:100%; overflow:hidden; }
+  .badge { position:absolute; top:8px; left:8px; width:22px; height:22px; border-radius:50%;
+           background:var(--ok); color:#fff; font-size:13px; line-height:22px; text-align:center;
+           box-shadow:0 2px 6px rgba(0,0,0,.4); }
+  .prog { position:absolute; left:8px; right:8px; bottom:8px; height:4px; border-radius:2px;
+          background:rgba(255,255,255,.28); overflow:hidden; }
+  .prog > i { display:block; height:100%; background:#fff; }
+  .act { position:absolute; top:6px; right:6px; opacity:0; transition:opacity .12s; }
+  .card:hover .act, .card:focus-within .act { opacity:1; }
+  .cap { margin-top:8px; font-size:13px; text-align:center; line-height:1.3;
+         display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .sub { color:var(--dim); font-size:12px; text-align:center; }
+  /* The release the download actually picked. Long, so clip it and keep the full name in the
+     tooltip -- two identical-looking episodes differ only here. */
+  /* what a pack actually holds: one line per file with bytes on disk, so a season
+     that filled up from several places is accounted for instead of hidden behind a
+     single card. */
+  .kids { margin-top:5px; display:flex; flex-direction:column; gap:2px; }
+  .kid { color:#8e89b4; font-size:11px; text-align:center;
+         overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .kid.dim { color:#6f6a95; }
+  .rel2 { color:#6f6a95; font-size:11px; text-align:center; margin-top:2px;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dl { display:block; width:100%; margin-top:6px; }
+
+  button { background:var(--accent); color:#fff; border:0; border-radius:7px;
+           padding:7px 12px; cursor:pointer; font:inherit; font-size:13px; }
+  button.ghost { background:#2a2550; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  /* fits on the disk, but will push the cache over budget: the evictor may reclaim
+     it before it is watched. Offered, but not quietly. */
+  button.warn { background:var(--bad); }
+  button.keep { background:#2a2550; }
+  button.keep.on { background:var(--ok); }
+  button.danger { background:var(--bad); border-radius:50%; width:26px; height:26px; padding:0;
+                  font-size:15px; line-height:26px; }
+  input { background:#0c0a18; border:1px solid #2a2550; border-radius:7px;
+          padding:10px 12px; color:var(--fg); font:inherit; width:100%; }
+  .addbar { display:flex; gap:10px; align-items:center; max-width:720px; }
+  .panel { max-width:400px; margin:60px auto; background:var(--card);
+           padding:24px; border-radius:14px; }
+  .panel label { display:block; margin:14px 0 6px; color:var(--dim); font-size:13px; }
+  /* detail overlay: pick a season, an episode, then a release */
+  .overlay { position:fixed; inset:0; background:rgba(6,5,14,.82); z-index:20; overflow:auto;
+             padding:24px; }
+  .sheet { max-width:820px; margin:24px auto; background:var(--card); border-radius:14px;
+           padding:22px 24px 26px; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+  .sheet h3 { margin:0 0 4px; font-size:20px; }
+  .sheet h4 { margin:14px 0 8px; font-size:15px; font-weight:600; }
+  .sheethead { display:flex; align-items:flex-start; gap:14px; margin-bottom:16px; }
+  .sheethead .poster { width:92px; flex:0 0 auto; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px; }
+  .chip { background:#2a2550; border:0; border-radius:999px; padding:6px 13px; cursor:pointer;
+          color:var(--fg); font:inherit; font-size:13px; }
+  .chip.on { background:var(--accent); }
+  /* already on disk: distinct from the selected-season purple, and it must read as
+     information rather than as the current selection. */
+  .chip.have { background:#22453f; }
+  .rel { display:flex; align-items:center; gap:12px; padding:10px 12px; background:#161233;
+         border-radius:9px; margin-bottom:7px; }
+  .rel .who { flex:1; min-width:0; }
+  .rel .meta2 { color:var(--dim); font-size:12px; word-break:break-word; }
+  [hidden] { display:none !important; }
+  @media (max-width:640px) { :root { --poster-w:116px; } main { padding:8px 14px 40px; }
+                             h2 { font-size:18px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Library</h1>
+  <span id="budget" class="note"></span>
+  <span id="status" class="err" style="margin:0"></span>
+  <span style="flex:1"></span>
+  <button id="signout" class="ghost" hidden>Sign out</button>
+</header>
+
+<main>
+  <div id="auth" class="panel">
+    <div class="note" id="auth-intro">Signing in&hellip;</div>
+    <div id="pw-form" hidden>
+      <label for="email">Stremio email</label>
+      <input id="email" type="email" autocomplete="username">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password">
+      <p><button id="dologin">Sign in</button></p>
+    </div>
+    <div class="err" id="auth-err"></div>
+  </div>
+
+  <div id="app" hidden>
+    <section id="sec-add">
+      <h2>Add</h2>
+      <div class="addbar">
+        <input id="magnet" placeholder="magnet:?xt=urn:btih:&hellip;">
+        <button id="addmagnet">Download</button>
+      </div>
+      <div class="err" id="add-err"></div>
+    </section>
+    <section id="sec-downloading" hidden>
+      <h2>Downloading</h2>
+      <div class="shelf" id="downloading"></div>
+    </section>
+    <section id="sec-titles">
+      <h2>Downloaded</h2>
+      <div class="shelf" id="titles"></div>
+    </section>
+    <section id="sec-continue" hidden>
+      <h2>Continue watching</h2>
+      <div class="shelf" id="continue"></div>
+    </section>
+    <div id="catalogs"></div>
+    <section id="sec-other" hidden>
+      <h2>Other on disk</h2>
+      <p class="note">Not matched to a title &mdash; still taking up space.</p>
+      <div class="shelf" id="other"></div>
+    </section>
+  </div>
+</main>
+
+<div id="detail" class="overlay" hidden>
+  <div class="sheet">
+    <div class="sheethead">
+      <div class="poster" id="detail-poster"></div>
+      <div style="flex:1">
+        <h3 id="detail-title"></h3>
+        <div class="note" id="detail-sub"></div>
+      </div>
+      <button class="ghost" id="detail-close">Close</button>
+    </div>
+    <div id="detail-body"></div>
+  </div>
+</div>
+
+<script>
+const LIB = (() => {
+  const $ = id => document.getElementById(id);
+  let authKey = null;
+
+  const api = async (path, opts = {}) => {
+    const r = await fetch(path, {
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+    if (r.status === 401) { showAuth(); throw new Error('unauthenticated'); }
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(r.statusText), { body, status: r.status });
+    return body;
+  };
+
+  // The player stores its whole profile on THIS origin, so the authKey is already here and no
+  // password is needed. That is the entire reason the UI lives on the player's origin.
+  const storedProfile = () => {
+    try { return JSON.parse(localStorage.getItem('profile') || 'null'); }
+    catch { return null; }
+  };
+  // The player's own key when this origin has one. Otherwise the key a password sign-in returned,
+  // kept under our own name: it was memory-only, so it vanished on every reload and the account
+  // data could never be fetched again -- the reason "Your library" stayed empty after signing in.
+  // Same origin and same storage the player already uses for exactly this value.
+  const OWN_KEY = 'stremiosrv_library_authkey';
+  const storedAuthKey = () => {
+    const p = storedProfile();
+    if (p && p.auth && p.auth.key) return p.auth.key;
+    try { return localStorage.getItem(OWN_KEY) || null; } catch { return null; }
+  };
+  const rememberAuthKey = k => {
+    authKey = k || null;
+    try { k ? localStorage.setItem(OWN_KEY, k) : localStorage.removeItem(OWN_KEY); } catch { /* private mode */ }
+  };
+
+  const fmt = b => {
+    if (!b) return '—';
+    const u = ['B','KB','MB','GB','TB']; let i = 0, n = b;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+  };
+  // Torrent names and Stremio library titles are third-party text going into innerHTML. Escaping
+  // is not defensive tidiness here: this page holds a session on an internet-facing origin, so a
+  // crafted name would be stored XSS against the owner.
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function showAuth(msg) {
+    $('app').hidden = true; $('signout').hidden = true; $('auth').hidden = false;
+    if (msg) $('auth-err').textContent = msg;
+  }
+  function showApp() {
+    $('auth').hidden = true; $('app').hidden = false; $('signout').hidden = false;
+  }
+
+  // Whatever shows the sign-in panel must also decide what is IN it. Sign-out used to call
+  // showAuth() alone, which only sets the message -- leaving the intro on its initial "Signing
+  // in..." and the password form hidden, so signing out locked the owner out until a reload.
+  async function showSignInPanel(msg) {
+    const cfg = await api('/library/api/config')
+      .catch(() => ({ passwordLogin: false, certShared: false }));
+    const NO_SESSION = 'No Stremio session on this device. ';
+    $('auth-intro').textContent = cfg.passwordLogin
+      ? NO_SESSION + 'Sign in with your Stremio account.'
+      : cfg.certShared
+        ? NO_SESSION + 'This server uses the shared stremio.rocks certificate, whose private key '
+          + 'is public, so signing in with a password here is not offered. Open the Stremio web '
+          + 'player on this address and sign in there first, or install your own certificate.'
+        : NO_SESSION + 'The TLS certificate on this server could not be read, so signing in with a '
+          + 'password here is not offered. Open the Stremio web player on this address and sign '
+          + 'in there first, or check the certificate.';
+    $('pw-form').hidden = !cfg.passwordLogin;
+    showAuth(msg);
+  }
+
+  async function signIn() {
+    const key = storedAuthKey();
+    // A live session cookie is enough to get in. Without this the page ignored it and demanded a
+    // fresh sign-in on every reload for any device with no player data of its own.
+    if (key) authKey = key;
+    try {
+      await api('/library/api/state');
+      return true;
+    } catch { /* not signed in yet; fall through */ }
+    if (key) {
+      try {
+        await api('/library/api/session', { method: 'POST',
+          body: JSON.stringify({ authKey: key }) });
+        rememberAuthKey(key);
+        return true;
+      } catch (e) {
+        if (e.status === 403) {
+          showAuth('That Stremio account does not own this server.');
+          return false;
+        }
+      }
+    }
+    await showSignInPanel();
+    return false;
+  }
+
+  async function passwordLogin() {
+    $('auth-err').textContent = '';
+    try {
+      const out = await api('/library/api/login', { method: 'POST',
+        body: JSON.stringify({ email: $('email').value, password: $('password').value }) });
+      // Held in memory only, for calling the owner's addons. Never persisted: this device is
+      // precisely the one we could not confirm belongs to the owner.
+      rememberAuthKey(out.authKey);
+      $('password').value = '';
+      await loadStremioData();
+      const st = await loadState();
+      await renderBoard(st || lastState);
+    } catch (e) {
+      $('auth-err').textContent = e.status === 429
+        ? 'Too many attempts. Wait a few minutes.'
+        : 'Sign-in failed.';
+    }
+  }
+
+  const pct = e => Math.round((e.progress || 0) * 100);
+
+  // A poster if we have one, the name if we do not. Unmatched torrents and pasted magnets have no
+  // artwork at all, and they still have to be visible and removable — that is the whole point of
+  // the "Other on disk" shelf.
+  const posterHtml = (url, name) => url
+    ? `<img src="${esc(url)}" alt="${esc(name)}" loading="lazy"
+           onerror="this.replaceWith(Object.assign(document.createElement('div'),
+                    {className:'fallback', textContent:this.alt}))">`
+    : `<div class="fallback">${esc(name)}</div>`;
+
+  // What a finished card says under the title. `fmt(0)` renders an em dash, so an entry whose
+  // size we do not know said nothing at all -- the state is more use than a dash.
+  // Two different questions, and the card used to answer only one. "Complete" is whether the
+  // bytes are all here; "kept" is whether they survive the evictor. A title streamed by the
+  // player is complete AND evictable, which is exactly the combination that lost a cache today.
+  const isComplete = e => e.state !== 'downloading' && (e.progress == null || e.progress >= 1);
+  const keptWord = e => (e.pinned ? 'kept' : 'cached');
+
+  // Spelled out rather than badged. The tick above means KEPT, and a test pins that on purpose:
+  // marking a cached file with the same tick as a kept download tells the owner they have
+  // something they do not. But "complete" is a different question and the card answered neither
+  // -- a title played to the end by the player showed only its size, so it read as unfinished.
+  const stateWord = e => (isComplete(e) ? 'complete' : 'partial') + ', ' + keptWord(e);
+
+  const subLine = e => {
+    if (e.peers === 0 && e.progress < 1) return 'no seeds';
+    if (e.size) return fmt(e.size) + ' · ' + stateWord(e);
+    return e.state === 'seeding' ? 'seeding · ' + keptWord(e)
+                                 : (e.pinned ? 'kept' : 'size unknown');
+  };
+
+  // The release a card came from. Shown wherever it adds something the title does not already
+  // say: two episodes of one series, or two rips of one film, differ only here.
+  // A file name is long and mostly noise; the episode number is the part that identifies it.
+  const shortFile = name => {
+    const m = /S(\d{1,2})[ ._-]?E(\d{1,3})/i.exec(name || '');
+    return m ? 'S' + m[1].padStart(2, '0') + 'E' + m[2].padStart(2, '0') : (name || '');
+  };
+
+  const childrenHtml = e => {
+    const kids = e.children || [];
+    if (!kids.length) return '';
+    const scrapsHtml = e.scraps && e.scraps.count
+      ? `<div class="kid dim">${esc('+' + e.scraps.count + ' partial file'
+          + (e.scraps.count === 1 ? '' : 's') + ' \u00b7 ' + fmt(e.scraps.size))}</div>`
+      : '';
+    return `<div class="kids">${scrapsHtml}${kids.map(k => `<div class="kid${
+        k.wanted ? '' : ' dim'}" title="${esc(k.name)}">${esc(shortFile(k.name))} ${esc(fmt(k.size))
+      }${k.progress < 1 ? esc(' \u00b7 ' + Math.round(k.progress * 100) + '%') : ''}</div>`
+    ).join('')}</div>`;
+  };
+
+  const releaseHtml = (e, title) => {
+    // The FILE when the download is narrowed to one, otherwise the torrent. A season pack fetching
+    // a single episode showed the pack's name, which reads as "the whole season is coming down".
+    const rel = e.wantedFile || e.name || '';
+    if (!rel || norm(rel) === norm(title)) return '';
+    return `<div class="rel2" title="${esc(rel)}">${esc(rel)}</div>`;
+  };
+
+  const cardHtml = e => {
+    const label = e.label || {};
+    // Series get their episode in the caption: "Show" alone cannot distinguish the episode being
+    // fetched from the eight in the same torrent that are not.
+    const ep = (label.season !== undefined && label.season !== null
+                && label.episode !== undefined && label.episode !== null)
+      ? ' · S' + String(label.season).padStart(2, '0')
+        + 'E' + String(label.episode).padStart(2, '0')
+      : '';
+    const title = (label.name || e.name) + ep;
+    const downloading = e.state === 'downloading';
+    return `
+    <div class="card" data-infohash="${esc(e.infoHash || '')}">
+      <div class="poster">
+        ${posterHtml(label.poster, title)}
+        ${e.pinned && !downloading ? '<span class="badge">&#10003;</span>' : ''}
+        ${downloading
+          ? `<div class="prog"><i style="width:${Math.round(pct(e))}%"></i></div>`
+          : ''}
+        ${e.removable === false ? '' : `<span class="act"><button class="danger" title="Remove"
+              data-remove="${esc(e.infoHash || '')}">&times;</button></span>`}
+      </div>
+      <div class="cap">${esc(title)}</div>
+      ${e.infoHash ? `<button class="dl keep${e.pinned ? ' on' : ''}" data-keep="${
+          esc(e.infoHash)}" data-kept="${e.pinned ? '1' : ''}" title="${
+          e.pinned ? 'Kept: the evictor may not reclaim this. Click to stop keeping it.'
+                   : 'Cached: the evictor may reclaim this. Click to keep it.'
+        }">${e.pinned ? 'Kept' : 'Keep'}</button>` : ''}
+      ${downloading
+        ? `<div class="sub">${esc(String(Math.round(pct(e))) + '%'
+             + (e.downloadSpeed ? ' - ' + fmt(e.downloadSpeed) + '/s' : '')
+             + ' - ' + String(e.seeds || 0) + ' seeders')}</div>`
+        : `<div class="sub">${esc(subLine(e))}</div>`}
+      ${releaseHtml(e, title)}
+      ${childrenHtml(e)}
+    </div>`;
+  };
+
+  const EMPTY = '<p class="note">Nothing here yet.</p>';
+
+  function render(data) {
+    lastState = data;
+    const entries = withClientLabels(data.entries);
+    const downloading = entries.filter(e => e.state === 'downloading');
+    // Pinned is what makes an entry ours: the pin is written when the download starts and lives
+    // in pins.json. A label is a nicety on top, and labels.json is a separate file that can be
+    // lost -- it was, and every finished download silently dropped out of this section into
+    // "other on disk" while its folder sat on the disk untouched. cardHtml already falls back to
+    // the torrent name for the caption, so an unlabelled pin renders fine.
+    const ours = e => Boolean(e.label || e.pinned);
+    const done = entries.filter(e => ours(e) && e.state !== 'downloading');
+    const other = entries.filter(e => !ours(e) && e.state !== 'downloading');
+    $('sec-downloading').hidden = downloading.length === 0;
+    $('downloading').innerHTML = downloading.map(cardHtml).join('');
+    $('titles').innerHTML = done.map(cardHtml).join('') || EMPTY;
+    // Always shown when present. A library-only view would let the disk fill invisibly.
+    $('sec-other').hidden = other.length === 0;
+    $('other').innerHTML = other.map(cardHtml).join('');
+    const b = data.budget || {};
+    // The budget alone was misleading: it says what the evictor aims for, not whether there is
+    // anywhere to put the next download. Pinned content can hold the cache far over budget with
+    // the evictor powerless, and only the free figure shows that.
+    $('budget').textContent = b.cacheSize
+      ? fmt(b.cacheUsed) + ' of ' + fmt(b.cacheSize)
+        + (b.cacheUsed > b.cacheSize ? ' (over budget)' : '')
+        + (b.diskFree != null ? ' · ' + fmt(b.diskFree) + ' free on disk' : '')
+        // Space already spoken for: without it the header reads as roomier than the box is.
+        + (b.committed ? ' · ' + fmt(b.committed) + ' still to fetch' : '')
+      : '';
+    // Keep / stop keeping. This is the ONLY thing that pins: downloading does not, so a title is
+    // kept because someone said so, and everything else is cache the evictor is free to reclaim.
+    document.querySelectorAll('[data-keep]').forEach(btn => {
+      btn.onclick = async () => {
+        const kept = Boolean(btn.dataset.kept);
+        btn.disabled = true;
+        try {
+          await api(kept ? '/library/api/unpin' : '/library/api/pin', { method: 'POST',
+            body: JSON.stringify({ infoHash: btn.dataset.keep }) });
+        } catch (err) {
+          const b = err.body || {};
+          $('add-err').textContent = err.status === 409
+            ? 'Not enough free disk to keep this. Needs ' + fmt(b.needed) + ', '
+              + fmt(b.free) + ' free.'
+            : 'Could not change that.';
+          btn.disabled = false;
+          return;
+        }
+        await loadState();
+      };
+    });
+    document.querySelectorAll('[data-remove]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!btn.dataset.remove) return;
+        btn.disabled = true;
+        await api('/library/api/remove', { method: 'POST',
+          body: JSON.stringify({ infoHash: btn.dataset.remove }) });
+        await loadState();
+      };
+    });
+    // Only the offline markers, never a rebuild: renderBoard re-fetches every catalog, and doing
+    // that on the 5s poll made the whole page flicker and reload its rows continuously.
+    refreshOfflineMarks(data);
+  }
+
+  async function loadState() {
+    const data = await api('/library/api/state');
+    showApp();
+    render(data);
+    return data;
+  }
+
+  // Populated from api.strem.io when this browser has no player data of its own — a device that
+  // only ever ran the desktop or TV app has an empty `library` bucket on this origin, which is why
+  // "Your library" looked empty even though the account was signed in.
+  let remoteAddons = null;
+  let remoteLibrary = null;
+  let libraryError = '';
+
+  const stremioApi = async (endpoint, payload) => {
+    const r = await fetch('https://api.strem.io/api/' + endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const b = await r.json();
+    // A 200 is not a success here either: the API reports failures in the body.
+    if (b && b.error) throw new Error((b.error && b.error.message) || 'stremio api error');
+    return b ? b.result : null;
+  };
+
+  // stremio-core persists each bucket as {uid, items}. Reading the wrapper made Object.values()
+  // return [uid, itemsObject], so every join silently matched nothing.
+  const bucketItems = raw => {
+    if (!raw || typeof raw !== 'object') return null;
+    return (raw.items !== undefined && raw.items !== null) ? raw.items : raw;
+  };
+  const localLibrary = () => {
+    try {
+      const items = bucketItems(JSON.parse(localStorage.getItem('library') || 'null'));
+      if (!items) return {};
+      // items is a map keyed by meta id; tolerate an array form too.
+      if (Array.isArray(items)) {
+        const o = {}; items.forEach(i => { if (i && i._id) o[i._id] = i; }); return o;
+      }
+      return items;
+    } catch { return {}; }
+  };
+  // MERGE, never choose. The player's local bucket and the account's synced library are different
+  // sets: a browser that has run the player knows about items that were never synced, and a browser
+  // that has not knows only the synced ones. Preferring one meant the same server looked correct in
+  // one browser and empty in another, purely because they were reading different libraries.
+  // Local wins on conflict -- it is the fresher record on the device that made it.
+  const storedLibrary = () => Object.assign({}, remoteLibrary || {}, localLibrary());
+
+  // Fetched once per sign-in, only for what this device is actually missing.
+  async function loadStremioData() {
+    if (!authKey) return;
+    const p = storedProfile();
+    if (!p || !(p.addons || []).length) {
+      try { remoteAddons = ((await stremioApi('addonCollectionGet',
+              { authKey, update: true })) || {}).addons || []; }
+      catch (e) { $('status').textContent = 'Could not load your addons from Stremio: ' + e.message; }
+    }
+    {
+      try {
+        const items = (await stremioApi('datastoreGet',
+          { authKey, collection: 'libraryItem', ids: [], all: true })) || [];
+        const byId = {};
+        (Array.isArray(items) ? items : []).forEach(i => { if (i && i._id) byId[i._id] = i; });
+        remoteLibrary = byId;
+      } catch (e) { $('add-err').textContent = 'Could not load your library from Stremio.'; }
+    }
+  }
+  // The streams bucket is a HashMap keyed by a STRUCT ({metaId, videoId}), which serialises as an
+  // array of [key, value] pairs rather than an object. Handle both, plus a plain object form.
+  const storedStreams = () => {
+    try {
+      const items = bucketItems(JSON.parse(localStorage.getItem('streams') || 'null'));
+      if (!items) return [];
+      if (Array.isArray(items)) {
+        return items.map(entry => Array.isArray(entry)
+          ? Object.assign({}, entry[0], entry[1])   // [key, value] pair
+          : entry);
+      }
+      return Object.entries(items).map(([k, v]) => {
+        let key = {};
+        try { key = JSON.parse(k); } catch { key = { metaId: k }; }
+        return Object.assign({}, key, v);
+      });
+    } catch { return []; }
+  };
+
+  // Only addons that declare the `stream` resource for this type. Cinemeta, for instance, serves
+  // catalog/meta and no streams -- querying it on every click would be pure latency.
+  const streamAddons = type => {
+    const p = storedProfile() || {};
+    const addons = (p.addons || []).length ? p.addons : (remoteAddons || []);
+    return addons.filter(a => {
+      const m = a.manifest || {};
+      const res = (m.resources || []).map(r => (typeof r === 'string' ? r : r && r.name));
+      return res.includes('stream') && (m.types || []).includes(type);
+    });
+  };
+
+  const streamUrl = (addon, type, id) =>
+    addon.transportUrl.replace(/manifest\.json$/, '')
+    + 'stream/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '.json';
+
+  // Each addon is queried independently and a failure is named, not fatal. CORS is a per-addon
+  // property, and one addon that omits the header must not empty the whole list.
+  async function resolveStreams(type, id) {
+    const out = [], failed = [];
+    await Promise.all(streamAddons(type).map(async a => {
+      try {
+        const r = await fetch(streamUrl(a, type, id));
+        const body = await r.json();
+        (body.streams || []).forEach(st => {
+          if (st.infoHash) out.push({ ...st, addon: (a.manifest || {}).name });
+        });
+      } catch { failed.push((a.manifest || {}).name || a.transportUrl); }
+    }));
+    return { streams: out, failed };
+  }
+
+  const magnetFor = st => {
+    const tr = (st.sources || []).filter(x => String(x).startsWith('tracker:'))
+      .map(x => '&tr=' + encodeURIComponent(String(x).slice(8))).join('');
+    return 'magnet:?xt=urn:btih:' + encodeURIComponent(st.infoHash) + tr;
+  };
+
+  // fileIdx: addons that point at one file inside a pack say so on the stream. Passing it
+  // through is what stops a chosen episode from dragging its whole season onto the disk; without
+  // it the server falls back to matching the label's season and episode against the file list.
+  async function startDownload(magnet, label, fileIdx) {
+    $('add-err').textContent = '';
+    try {
+      await api('/library/api/download', { method: 'POST',
+        body: JSON.stringify({ magnet, label: label || null,
+                               fileIdx: Number.isInteger(fileIdx) ? fileIdx : null }) });
+      await loadState();
+    } catch (e) {
+      const b = e.body || {};
+      $('add-err').textContent = e.status === 409
+        ? 'Not enough free disk. Needs ' + fmt(b.needed) + ', ' + fmt(b.free)
+          + ' free - remove something first.'
+        : 'Could not start the download.';
+    }
+  }
+
+  // Which library items are already on disk. The server knows infohashes, not meta ids, so the
+  // join goes through the player's own `streams` bucket -- the record of which stream played each
+  // video, whose torrent source carries infoHash/fileIdx.
+  // infohash -> the video/meta it belongs to, from the player's own record of what played what.
+  // This is how a cache entry created by ordinary playback gets its title back: without it, a
+  // title you are literally in the middle of watching shows up under "Other on disk" as a raw
+  // torrent folder name.
+  function streamIndex() {
+    const byHash = {};
+    storedStreams().forEach(item => {
+      const ih = ((item && item.stream && item.stream.infoHash) || '').toLowerCase();
+      if (ih && item.metaId) byHash[ih] = { metaId: item.metaId, videoId: item.videoId };
+    });
+    return byHash;
+  }
+
+  // Release names use dots and underscores for spaces and then pile on year, season, resolution
+  // and group tags. Flatten to lowercase words so a title can be looked for inside one.
+  const norm = t => String(t || '')
+    .replace(/[._]+/g, ' ')
+    .replace(/[^a-z0-9 ]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  // The `streams` bucket is stored ONLY on the device that played the thing -- stremio-core never
+  // syncs it -- so on a browser that has not run the player there is no infohash->title map at all.
+  // The server does know the torrent's own name, which is what a torrent client matches on. Prefer
+  // the exact infohash join; fall back to finding a library title inside the release name.
+  // Every meta seen in a catalog row, so a release name can be recognised even when the title is
+  // in neither library -- e.g. it lives only in the player's local bucket on a DIFFERENT device,
+  // which no amount of merging can reach. Costs nothing: these are already fetched for the board.
+  const catalogMetas = {};
+
+  function nameMatcher() {
+    const byWords = Object.values(Object.assign({}, catalogMetas, storedLibrary()))
+      .filter(i => i && i._id && i.name)
+      .map(i => ({ item: i, words: norm(i.name) }))
+      .filter(x => x.words.length >= 3)
+      // Longest title first, so "Dark Matter" wins over a shorter title that is a prefix of it.
+      .sort((a, b) => b.words.length - a.words.length);
+    return name => {
+      const hay = ' ' + norm(name) + ' ';
+      const hit = byWords.find(x => hay.includes(' ' + x.words + ' '));
+      return hit ? hit.item : null;
+    };
+  }
+
+  // Give unlabelled disk entries the title the player already knows for them.
+  function withClientLabels(entries) {
+    const idx = streamIndex();
+    const lib = storedLibrary();
+    const byName = nameMatcher();
+    return (entries || []).map(e => {
+      if (e.label) return e;
+      const hit = e.infoHash ? idx[e.infoHash.toLowerCase()] : null;
+      const item = (hit && lib[hit.metaId]) || byName(e.name);
+      if (!item) return e;
+      // videoId comes from the streams bucket and was being dropped -- without it the episode
+      // picker cannot tell which episode of a series is already here.
+      return { ...e, label: { metaId: item._id, name: item.name, poster: item.poster,
+                              type: item.type, videoId: (hit && hit.videoId) || undefined } };
+    });
+  }
+
+  // How many entries each title has on disk. A film is either there or not; a series is not --
+  // one episode on disk does not make the series "offline", and saying so is wrong in the way
+  // that matters most, because it hides that the rest is missing.
+  // How many EPISODES of each title are here -- not how many torrents. One torrent can hold a
+  // whole season, so counting entries said "1 on disk" for a pack holding three watchable
+  // episodes, and would have said exactly the same for nine. It was neither a file count nor a
+  // season count; it counted a thing the owner has no reason to think about.
+  //
+  // Only complete files count, which is the same rule the episode ticks use -- a part-fetched
+  // episode is not something anyone has, and the two must not disagree about that.
+  function onDiskCounts(data) {
+    const counts = {};
+    withClientLabels((data && data.entries) || []).forEach(e => {
+      const id = e.label && e.label.metaId;
+      if (!id) return;
+      const kids = e.children || [];
+      const n = kids.length
+        ? kids.filter(k => (k.progress || 0) >= 1).length
+        : ((e.progress || 0) >= 1 ? 1 : 0);
+      if (n) counts[id] = (counts[id] || 0) + n;
+    });
+    return counts;
+  }
+
+  // Which episodes are already here, by Stremio video id. The picker offered every episode
+  // identically, so the one you already had looked exactly like the eight you did not.
+  // Which episodes are here, as "season:episode".
+  //
+  // NOT by videoId. A season pack is ONE infohash, and the player's stream record maps an infohash
+  // to a single video -- so however many episodes of that pack were on disk, at most one could
+  // ever be ticked. The file names are the only thing that knows which episodes a torrent
+  // actually holds, and now that a card carries its files, they are available here.
+  //
+  // Only complete files count. A half-fetched episode is not "already on this server", and saying
+  // so would send someone away from a download they still need.
+  const EPISODE_RE = /S(\d{1,2})[ ._-]?E(\d{1,3})/i;
+
+  function onDiskEpisodes(data) {
+    const out = new Set();
+    const add = (sn, ep) => {
+      if (sn !== undefined && sn !== null && ep !== undefined && ep !== null) {
+        out.add(Number(sn) + ':' + Number(ep));
+      }
+    };
+    withClientLabels((data && data.entries) || []).forEach(e => {
+      const kids = e.children || [];
+      if (kids.length) {
+        kids.forEach(k => {
+          if ((k.progress || 0) < 1) return;
+          const m = EPISODE_RE.exec(k.name || '');
+          if (m) add(m[1], m[2]);
+        });
+        return;
+      }
+      // A single-file torrent has no children; its label carries the episode it was fetched for.
+      if ((e.progress || 0) >= 1) {
+        const lab = e.label || {};
+        add(lab.season, lab.episode);
+        const m = EPISODE_RE.exec(e.wantedFile || e.name || '');
+        if (m) add(m[1], m[2]);
+      }
+    });
+    return out;
+  }
+
+  function offlineMetaIds(data) {
+    // Client-side labels first: without them this only saw labels the SERVER wrote, so a title on
+    // disk from ordinary playback was never recognised and its card kept offering Download.
+    const entries = withClientLabels(data.entries);
+    const have = new Set(entries.filter(e => e.infoHash).map(e => e.infoHash.toLowerCase()));
+    const ids = new Set();
+    entries.forEach(e => { if (e.label && e.label.metaId) ids.add(e.label.metaId); });
+    // Anything played through the client is reachable via the streams bucket.
+    Object.values(storedStreams()).forEach(item => {
+      const ih = ((item && item.stream && item.stream.infoHash) || '').toLowerCase();
+      if (ih && have.has(ih) && item.metaId) ids.add(item.metaId);
+    });
+    return ids;
+  }
+
+  // ---- the client's home board -------------------------------------------------------------
+  // Catalog rows come from the INSTALLED addons' manifests, in the order they declare them, which
+  // is what produces "Popular - Movie", "Popular - Series", "Featured - Movie" and so on. This is
+  // the browsing surface the Stremio client shows; a list of saved library items is a different
+  // thing and was the wrong shelf to build.
+  const addonList = () => {
+    const p = storedProfile() || {};
+    return (p.addons || []).length ? p.addons : (remoteAddons || []);
+  };
+
+  const CATALOG_ROW_CAP = 12;   // each row is a network call; do not fan out without bound
+
+  // A catalog needing a required `extra` (a genre, a list of ids) cannot be asked for without one,
+  // which is why the client shows Popular and Featured but not "New".
+  function catalogRows() {
+    const rows = [];
+    addonList().forEach(a => {
+      const m = a.manifest || {};
+      const res = (m.resources || []).map(r => (typeof r === 'string' ? r : r && r.name));
+      if (!res.includes('catalog')) return;
+      (m.catalogs || []).forEach(c => {
+        if (!c || !c.type || !c.id) return;
+        if ((c.extra || []).some(e => e && e.isRequired)) return;
+        rows.push({
+          key: a.transportUrl + '|' + c.type + '|' + c.id,
+          title: (c.name || c.id) + ' - ' + c.type.charAt(0).toUpperCase() + c.type.slice(1),
+          type: c.type,
+          url: a.transportUrl.replace(/manifest\.json$/, '')
+               + 'catalog/' + encodeURIComponent(c.type) + '/' + encodeURIComponent(c.id) + '.json',
+        });
+      });
+    });
+    return rows.slice(0, CATALOG_ROW_CAP);
+  }
+
+  const metaCardHtml = (meta, count) => {
+    const n = count || 0;
+    const series = meta.type === 'series';
+    // A series keeps its Download button however many episodes are held -- there is always more
+    // to fetch -- and the badge carries the count rather than a tick that overstates it.
+    const badgeHtml = n > 0
+      ? (series ? `<span class="badge">${esc(String(n))}</span>`
+                : '<span class="badge">&#10003;</span>')
+      : '';
+    const footHtml = (n > 0 && !series)
+      ? '<div class="sub">offline</div>'
+      : `${n > 0 ? `<div class="sub">${esc(n + ' on disk')}</div>` : ''}
+         <button class="dl" data-get="${esc(meta.id)}" data-type="${esc(meta.type)}"
+                 data-poster="${esc(meta.poster || '')}">Download</button>`;
+    return `
+    <div class="card" data-metaid="${esc(meta.id)}">
+      <div class="poster">
+        ${posterHtml(meta.poster, meta.name)}
+        ${badgeHtml}
+      </div>
+      <div class="cap">${esc(meta.name)}</div>
+      ${footHtml}
+    </div>`;
+  };
+
+  // Opens the chooser. Taking the first stream an addon happened to return was never right: a
+  // series needs a season and an episode picked, and even a film has releases worth choosing
+  // between -- which is exactly what the Stremio client asks you for.
+  function wireDownloadButtons(scope) {
+    scope.querySelectorAll('[data-get]').forEach(btn => {
+      const card = btn.closest('.card');
+      const cap = card && card.querySelector('.cap');
+      const open = () => openDetail(btn.dataset.get, btn.dataset.type,
+        cap ? cap.textContent.trim() : '', btn.dataset.poster || '');
+      btn.onclick = open;
+      const poster = card && card.querySelector('.poster');
+      if (poster) { poster.style.cursor = 'pointer'; poster.onclick = open; }
+    });
+  }
+
+  // Continue watching: the library entries that were actually played, newest first. `temp` marks an
+  // item auto-added by playing something, which is exactly what belongs in this row.
+  const ts = v => { const n = Date.parse(v || 0); return Number.isNaN(n) ? 0 : n; };
+
+  // What Stremio actually shows in this row is the PARTIALLY WATCHED set, ordered by when each
+  // was last watched. Selecting the whole library and sorting on `_mtime` is a different row that
+  // merely resembles it: `_mtime` moves on ANY mutation -- adding a title, a background sync,
+  // marking something watched -- so films nobody had started came first while half-finished
+  // series fell off the end, and no card carried progress because none of them was in progress.
+  const wstate = i => (i && i.state) || {};
+  const inProgress = i => {
+    const st = wstate(i);
+    if (st.flaggedWatched) return false;           // finished: the opposite of "continue"
+    return Number(st.timeOffset) > 0;
+  };
+  // Fall back to `_mtime`, never blend with it: taking the max would let a recent sync on a
+  // title watched months ago outrank one watched last night, which is the ordering being fixed.
+  const watchedAt = i => ts(wstate(i).lastWatched) || ts(i._mtime);
+
+  function renderContinue(counts) {
+    const items = Object.values(storedLibrary())
+      .filter(i => i && i._id && (i.temp || !i.removed) && inProgress(i))
+      // Date.parse is stricter in some browsers than others; an unparsed stamp must sort last,
+      // not poison the comparator with NaN.
+      .sort((a, b) => watchedAt(b) - watchedAt(a))
+      .slice(0, 20);
+    $('sec-continue').hidden = items.length === 0;
+    $('continue').innerHTML = items.map(i => metaCardHtml(
+      { id: i._id, type: i.type, name: i.name, poster: i.poster }, counts[i._id])).join('');
+    wireDownloadButtons($('continue'));
+  }
+
+  async function renderCatalogs(counts) {
+    const rows = catalogRows();
+    const host = $('catalogs');
+    if (!rows.length) {
+      host.innerHTML = '<p class="note">'
+        + esc(addonList().length
+              ? 'None of your addons offer a catalog to browse.'
+              : 'No addons loaded, so there are no catalogs to show.')
+        + '</p>';
+      return;
+    }
+    // Placeholders first so the rows appear in the addons' own order regardless of which
+    // catalog answers first.
+    host.innerHTML = rows.map(r => `
+      <section><h2>${esc(r.title)}</h2>
+        <div class="shelf" id="cat-${esc(r.key.replace(/[^a-zA-Z0-9]/g, ''))}">
+          <p class="note">Loading...</p></div></section>`).join('');
+    await Promise.all(rows.map(async r => {
+      const el = document.getElementById('cat-' + r.key.replace(/[^a-zA-Z0-9]/g, ''));
+      if (!el) return;
+      try {
+        const res = await fetch(r.url);
+        const body = await res.json();
+        const metas = (body.metas || []).filter(m => m && m.id && m.name);
+        metas.forEach(m => { catalogMetas[m.id] = { _id: m.id, name: m.name,
+                                                    poster: m.poster, type: m.type }; });
+        el.innerHTML = metas.length
+          ? metas.map(m => metaCardHtml(m, counts[m.id])).join('')
+          : '<p class="note">Nothing returned.</p>';
+        wireDownloadButtons(el);
+      } catch (e) {
+        el.innerHTML = '<p class="note">' + esc('Could not load: ' + e.message) + '</p>';
+      }
+    }));
+  }
+
+  let lastState = { entries: [] };
+
+  async function renderBoard(data) {
+    const counts = onDiskCounts(data);
+    renderContinue(counts);
+    await renderCatalogs(counts);
+  }
+
+  // Cheap per-poll update: flip the check badge / Download button on cards already on screen. No
+  // network, no innerHTML rewrite, so nothing flickers and the row scroll position is kept.
+  function refreshOfflineMarks(data) {
+    const counts = onDiskCounts(data);
+    // Speed and seed counts are the whole point of a progress row: they have to move between
+    // polls, so they are updated here rather than only when the board is rebuilt.
+    const byHash = {};
+    (data.entries || []).forEach(e => { if (e.infoHash) byHash[e.infoHash.toLowerCase()] = e; });
+    document.querySelectorAll('#titles .card, #downloading .card').forEach(card => {
+      const e = byHash[(card.dataset.infohash || '').toLowerCase()];
+      const sub = e && card.querySelector('.sub');
+      if (!e || !sub || e.state !== 'downloading') return;
+      sub.textContent = Math.round((e.progress || 0) * 100) + '%'
+        + (e.downloadSpeed ? ' - ' + fmt(e.downloadSpeed) + '/s' : '')
+        + ' - ' + (e.seeds || 0) + ' seeders';
+    });
+    document.querySelectorAll('#continue .card, #catalogs .card').forEach(card => {
+      const id = card.dataset.metaid;
+      if (!id) return;
+      const btn = card.querySelector('[data-get]');
+      const n = counts[id] || 0;
+      const series = btn ? btn.dataset.type === 'series' : false;
+      const badge = card.querySelector('.badge');
+      const want = n > 0 ? (series ? String(n) : String.fromCharCode(10003)) : '';
+      if (!want) return;
+      if (badge) { badge.textContent = want; }
+      else {
+        card.querySelector('.poster').insertAdjacentHTML(
+          'beforeend', '<span class="badge">' + want + '</span>');
+      }
+      // A film with a copy on disk has nothing left to fetch; a series always might.
+      if (!series && btn) {
+        btn.replaceWith(Object.assign(document.createElement('div'),
+          { className: 'sub', textContent: 'offline' }));
+      }
+    });
+  }
+
+  // ---- detail: choose a season, an episode, then a release ---------------------------------
+  let detailCtx = null;
+
+  const metaAddons = type => addonList().filter(a => {
+    const m = a.manifest || {};
+    const res = (m.resources || []).map(r => (typeof r === 'string' ? r : r && r.name));
+    return res.includes('meta') && (m.types || []).includes(type);
+  });
+
+  async function fetchMeta(type, id) {
+    for (const a of metaAddons(type)) {
+      try {
+        const url = a.transportUrl.replace(/manifest\.json$/, '')
+          + 'meta/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '.json';
+        const b = await (await fetch(url)).json();
+        if (b && b.meta) return b.meta;
+      } catch (e) { /* try the next meta addon */ }
+    }
+    return null;
+  }
+
+  // The same arithmetic the server's pin guard uses (pins.pin_fits): a download must leave the
+  // cache budget's worth of headroom plus ten percent still free, or the evictor has nowhere to
+  // work. Mirroring it here means the button never offers something /api/download answers with a
+  // 409 -- and, more to the point, never starts a download that cannot fit.
+  // Three answers, because there are three situations and only one of them is a refusal.
+  //   'ok'         room for it, within budget
+  //   'overbudget' it fits on the disk but pushes the cache past its budget, so the evictor may
+  //                reclaim it before it is watched -- a download is ordinary cache now, not a pin
+  //   'nodisk'     there is nowhere to put it
+  const sizeVerdict = (size, b) => {
+    b = b || {};
+    if (b.diskFree == null || !b.cacheSize) return 'ok';   // nothing to judge against
+    const headroom = Math.ceil(b.cacheSize * 1.10);
+    // Downloads already running have claimed space they have not written yet. It is in neither
+    // `df` nor the cache total, so judging a new download on those alone approves things there
+    // will be no room for once everything in flight has finished -- which is exactly when the
+    // owner would find out. Spend it first.
+    const committed = b.committed || 0;
+    const free = Math.max(0, (b.diskFree || 0) - committed);
+    const used = (b.cacheUsed || 0) + committed;
+    // Free space already under the headroom: nothing fits, whether or not an addon reported a
+    // size. Checking this first is what makes the gate work for the releases nobody sized.
+    if (free < headroom) return 'nodisk';
+    if (!size) return 'ok';
+    if (free - size < headroom) return 'nodisk';
+    if (used + size > b.cacheSize) return 'overbudget';
+    return 'ok';
+  };
+
+  // behaviorHints.videoSize is the structured answer and is usually absent. The size is almost
+  // always in the human text instead, so read it from there rather than let the gate go quiet.
+  const SIZE_RE = /(\d+(?:[.,]\d+)?)\s*(T|G|M)i?B\b/i;
+  const SIZE_UNIT = { t: 1024 ** 4, g: 1024 ** 3, m: 1024 ** 2 };
+  const releaseSize = st => {
+    const bh = (st && st.behaviorHints) || {};
+    if (bh.videoSize) return Number(bh.videoSize) || 0;
+    const text = [st && st.title, st && st.description, st && st.name].filter(Boolean).join(' ');
+    const m = SIZE_RE.exec(text);
+    return m ? Math.round(parseFloat(m[1].replace(',', '.')) * SIZE_UNIT[m[2].toLowerCase()]) : 0;
+  };
+
+  const relLabel = st => {
+    const bh = st.behaviorHints || {};
+    const head = st.name || st.addon || 'Release';
+    const detail = [st.description || st.title || bh.filename || '',
+                    bh.videoSize ? fmt(bh.videoSize) : ''].filter(Boolean).join(' - ');
+    return { head: head, detail: detail };
+  };
+
+  async function showReleases(type, videoId, extra) {
+    const host = $('detail-body');
+    const heading = (extra && extra.heading) ? `<h4>${esc(extra.heading)}</h4>` : '';
+    host.innerHTML = heading + '<p class="note">Looking for releases...</p>';
+    const found = await resolveStreams(type, videoId);
+    const streams = found.streams, failed = found.failed;
+    if (!streams.length) {
+      host.innerHTML = heading + `<p class="note">${esc(failed.length
+        ? 'No addon answered (' + failed.join(', ') + ').'
+        : 'No releases found for this one.')}</p>`;
+      return;
+    }
+    const budget = (lastState && lastState.budget) || {};
+    // Which of these releases this server already holds. Without it every release looked alike,
+    // including the one already downloading, so the same torrent could be started twice.
+    const held = {};
+    ((lastState && lastState.entries) || []).forEach(e => {
+      if (e.infoHash) held[e.infoHash.toLowerCase()] = e;
+    });
+    host.innerHTML = heading + streams.map((st, i) => {
+        const l = relLabel(st);
+        const size = releaseSize(st);
+        const mine = held[String(st.infoHash || '').toLowerCase()];
+        const busy = Boolean(mine && mine.state === 'downloading');
+        // Already here and kept: nothing to do. Already here but only cached: Download pins it,
+        // which costs no bytes because they are already on disk -- the one way to keep a streamed
+        // title until a proper Keep action exists.
+        const verb = busy ? 'Downloading' : (mine && mine.pinned) ? 'On server'
+                   : mine ? 'Keep' : 'Download';
+        const verdict = mine ? 'ok' : sizeVerdict(size, budget);
+        // Say why it is greyed out. A disabled button with no explanation reads as a broken page,
+        // and the two reasons are different: this one will not fit, versus nothing will.
+        const heldHtml = mine ? `<div class="meta2">${esc(busy
+             ? 'Already downloading on this server'
+             : 'Already on this server' + (mine.pinned ? ', kept' : ', cached'))}</div>` : '';
+        // One sentence, two places: under the release and on the button itself. A disabled or
+        // red button is a decision made on the owner's behalf, and it should be able to explain
+        // itself wherever the pointer happens to be.
+        const reason =
+            busy ? 'This release is already downloading on this server'
+          : verb === 'On server' ? 'This release is already here and kept'
+          : verdict === 'overbudget'
+              ? 'Over the ' + fmt(budget.cacheSize) + ' cache budget - it will download, but the '
+                + 'evictor may reclaim it before you watch it. Keep it to protect it.'
+          : verdict === 'nodisk'
+              ? (size
+                  ? 'Needs ' + fmt(size) + ' plus headroom; ' + fmt(budget.diskFree || 0)
+                    + ' free' + (budget.committed
+                        ? ', ' + fmt(budget.committed) + ' of it already promised' : '')
+                  : 'Not enough free disk for any download; ' + fmt(budget.diskFree || 0) + ' free')
+          : '';
+        const whyHtml = verdict === 'ok' ? '' : `<div class="meta2">${esc(reason)}</div>`;
+        return `<div class="rel"><span class="who"><b>${esc(l.head)}</b>
+          <div class="meta2">${esc(l.detail)}</div>${heldHtml}${whyHtml}</span>
+          <button data-rel="${esc(String(i))}" class="${
+            verdict === 'overbudget' ? 'warn' : ''}" title="${esc(reason)}"${
+            verdict !== 'nodisk' && !busy && verb !== 'On server' ? '' : ' disabled'}>${
+            esc(verb)}</button></div>`;
+      }).join('')
+      + (failed.length ? `<p class="note">${esc('No answer from: ' + failed.join(', '))}</p>` : '');
+    host.querySelectorAll('[data-rel]').forEach(btn => {
+      btn.onclick = async () => {
+        const st = streams[Number(btn.dataset.rel)];
+        btn.disabled = true; btn.textContent = 'Starting...';
+        await startDownload(magnetFor(st), Object.assign({
+          metaId: detailCtx.id, type: detailCtx.type,
+          name: detailCtx.name, poster: detailCtx.poster,
+        }, (extra && extra.label) || {}), st && st.fileIdx);
+        btn.textContent = 'Queued';
+      };
+    });
+  }
+
+  function renderSeries(meta) {
+    const vids = (meta.videos || []).filter(v => v && v.id);
+    if (!vids.length) { showReleases(detailCtx.type, detailCtx.id, {}); return; }
+    const seasons = [...new Set(vids.map(v => v.season))]
+      .filter(x => x !== null && x !== undefined).sort((a, b) => a - b);
+    const host = $('detail-body');
+    const paint = season => {
+      const eps = vids.filter(v => v.season === season);
+      const have = onDiskEpisodes(lastState);
+      const held = v => have.has(Number(v.season) + ':' + Number(v.episode));
+      host.innerHTML =
+        `<div class="chips">${seasons.map(sn =>
+          `<button class="chip${sn === season ? ' on' : ''}" data-season="${esc(String(sn))}">${
+            esc('Season ' + sn)}</button>`).join('')}</div>`
+        + `<div class="chips">${eps.map((v, i) =>
+          `<button class="chip${held(v) ? ' have' : ''}" data-ep="${esc(String(i))}"${
+            held(v) ? ' title="Already on this server"' : ''}>${
+            esc((v.episode !== undefined ? 'E' + v.episode : '') + (v.name ? ' ' + v.name : '')
+                + (held(v) ? ' ✓' : ''))
+          }</button>`).join('')}</div>`
+        + `<div class="note">${esc(have.size
+             ? 'Pick an episode. A tick means it is already on this server.'
+             : 'Pick an episode.')}</div>`;
+      host.querySelectorAll('[data-season]').forEach(b => {
+        b.onclick = () => paint(Number(b.dataset.season));
+      });
+      host.querySelectorAll('[data-ep]').forEach(b => {
+        b.onclick = () => {
+          const v = eps[Number(b.dataset.ep)];
+          showReleases('series', v.id, {
+            heading: 'Season ' + v.season + ' - Episode ' + v.episode,
+            label: { season: v.season, episode: v.episode, videoId: v.id },
+          });
+        };
+      });
+    };
+    paint(seasons[0]);
+  }
+
+  async function openDetail(id, type, name, poster) {
+    detailCtx = { id: id, type: type, name: name, poster: poster };
+    $('detail-title').textContent = name || id;
+    $('detail-sub').textContent = type === 'series'
+      ? 'Pick a season, an episode, then a release' : 'Pick a release';
+    $('detail-poster').innerHTML = posterHtml(poster, name || '');
+    $('detail-body').innerHTML = '<p class="note">Loading...</p>';
+    $('detail').hidden = false;
+    if (type === 'series') {
+      const meta = await fetchMeta(type, id);
+      if (meta) renderSeries(meta); else showReleases(type, id, {});
+    } else {
+      await showReleases(type, id, {});
+    }
+  }
+
+  async function boot() {
+    $('dologin').onclick = passwordLogin;
+    $('detail-close').onclick = () => { $('detail').hidden = true; };
+    $('detail').onclick = e => { if (e.target === $('detail')) $('detail').hidden = true; };
+    $('addmagnet').onclick = () => {
+      const m = $('magnet').value.trim();
+      $('add-err').textContent = '';
+      if (!m.startsWith('magnet:')) { $('add-err').textContent = 'Not a magnet link.'; return; }
+      $('magnet').value = '';
+      startDownload(m, null);
+    };
+    $('signout').onclick = async () => {
+      await api('/library/api/session', { method: 'DELETE' }).catch(() => {});
+      rememberAuthKey(null); remoteLibrary = null; remoteAddons = null; libraryError = '';
+      // Rebuild the panel rather than re-running signIn(): on an origin where the player is also
+      // signed in, retrying would read its key back out of localStorage and sign straight back in,
+      // which is not what clicking Sign out means.
+      await showSignInPanel('Signed out.');
+    };
+    if (await signIn()) {
+      await loadStremioData();
+      const st = await loadState();
+      await renderBoard(st || lastState);   // built ONCE; the poll only refreshes markers
+    }
+    setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);
+    // The 5s poll above is local disk state and must stay that way -- it must never become an
+    // api.strem.io poll. The library itself was fetched once per sign-in, so this row showed
+    // whatever was true when the tab was opened. Refresh it slowly, and whenever the tab comes
+    // back to the foreground, which is when a stale row is actually noticed. Only the continue
+    // row is re-rendered: renderCatalogs re-fetches every addon catalogue and is not cheap.
+    const refreshLibrary = async () => {
+      await loadStremioData();
+      renderContinue(onDiskCounts(lastState));
+    };
+    setInterval(() => { if (!$('app').hidden) refreshLibrary().catch(() => {}); }, 300000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && !$('app').hidden) refreshLibrary().catch(() => {});
+    });
+  }
+
+  // A blank page is the worst possible failure: it says nothing about what broke. Anything that
+  // escapes boot(), or any uncaught error at all, is put on screen instead.
+  window.addEventListener('error', e => {
+    const el = document.getElementById('auth-err');
+    if (el && !el.textContent) el.textContent = 'Page error: ' + (e.message || e.type);
+    const a = document.getElementById('auth');
+    if (a) a.hidden = false;
+  });
+  document.addEventListener('DOMContentLoaded', () => {
+    boot().catch(err => {
+      const el = document.getElementById('auth-err');
+      if (el) el.textContent = 'Could not start: ' + (err && err.message ? err.message : err);
+      const a = document.getElementById('auth');
+      if (a) a.hidden = false;
+      const app = document.getElementById('app');
+      if (app) app.hidden = true;
+    });
+  });
+  return { signIn, loadState, render, renderBoard, catalogRows, resolveStreams,
+           loadStremioData, storedLibrary, openDetail, fetchMeta, onDiskCounts, magnetFor, offlineMetaIds, getAuthKey: () => authKey };
+})();
+</script>
+</body>
+</html>
