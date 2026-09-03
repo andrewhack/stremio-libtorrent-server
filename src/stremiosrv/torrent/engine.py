@@ -33,7 +33,6 @@ from stremiosrv.torrent.trackers import merge_trackers
 # (on add + on pause) — the server manages priorities/deadlines/pause explicitly. None when lt / the
 # binding lacks the flag (test envs), in which case the clear is a safe no-op.
 _TORRENT_FLAGS = getattr(lt, "torrent_flags", None) if lt is not None else None
-_META_ALERT = getattr(lt, "metadata_received_alert", None)
 _AUTO_MANAGED = getattr(_TORRENT_FLAGS, "auto_managed", None) if _TORRENT_FLAGS is not None else None
 # libtorrent's DEFAULT add flags are `auto_managed | paused` — the idiom is "add paused, let the
 # auto-manager start it". Once we drop auto_managed we must ALSO drop paused, or the torrent is
@@ -647,6 +646,18 @@ class Engine:
         # ~sub-second latency, no borrowed-pointer hazard, and self._stop.wait() makes stop snappy.
         while not self._stop.is_set():
             alerts = self._ses.pop_alerts()
+            # A pin's choice of file can only be acted on once metadata exists, and this is where
+            # we notice. NOT driven off metadata_received_alert: that alert is in the
+            # status_notification category and the session's default alert mask is error-only
+            # (measured: mask=1, status bit=64, off), so it never arrives -- the choice was
+            # recorded and then silently never applied, and the whole torrent downloaded. This
+            # loop already runs twice a second, and the guard is two integer comparisons when
+            # there is nothing pending.
+            if len(self._wanted_applied) < len(self._wanted):
+                try:
+                    self._apply_pending_wanted()
+                except Exception:  # noqa: BLE001 — never let the alerts thread die
+                    pass
             if not alerts:
                 self._stop.wait(0.5)
                 continue
@@ -669,13 +680,6 @@ class Engine:
                             index[name] = ih
                             cachemod.save_name_index(self._cache_root, index)
                     except Exception:  # noqa: BLE001 — index is best-effort
-                        pass
-                elif _META_ALERT is not None and isinstance(a, _META_ALERT):
-                    # The file list exists only now, which is when a pin's choice of file can
-                    # finally be acted on.
-                    try:
-                        self._apply_pending_wanted()
-                    except Exception:  # noqa: BLE001 — never let the alerts thread die
                         pass
                 elif isinstance(a, lt.portmap_alert):
                     # router auto-forwarded our BT port (UPnP / NAT-PMP)

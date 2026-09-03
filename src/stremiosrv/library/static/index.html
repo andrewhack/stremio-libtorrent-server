@@ -77,6 +77,9 @@
   .chip { background:#2a2550; border:0; border-radius:999px; padding:6px 13px; cursor:pointer;
           color:var(--fg); font:inherit; font-size:13px; }
   .chip.on { background:var(--accent); }
+  /* already on disk: distinct from the selected-season purple, and it must read as
+     information rather than as the current selection. */
+  .chip.have { background:#22453f; }
   .rel { display:flex; align-items:center; gap:12px; padding:10px 12px; background:#161233;
          border-radius:9px; margin-bottom:7px; }
   .rel .who { flex:1; min-width:0; }
@@ -585,8 +588,10 @@ const LIB = (() => {
       const hit = e.infoHash ? idx[e.infoHash.toLowerCase()] : null;
       const item = (hit && lib[hit.metaId]) || byName(e.name);
       if (!item) return e;
+      // videoId comes from the streams bucket and was being dropped -- without it the episode
+      // picker cannot tell which episode of a series is already here.
       return { ...e, label: { metaId: item._id, name: item.name, poster: item.poster,
-                              type: item.type } };
+                              type: item.type, videoId: (hit && hit.videoId) || undefined } };
     });
   }
 
@@ -601,6 +606,17 @@ const LIB = (() => {
       if (id) counts[id] = (counts[id] || 0) + 1;
     });
     return counts;
+  }
+
+  // Which episodes are already here, by Stremio video id. The picker offered every episode
+  // identically, so the one you already had looked exactly like the eight you did not.
+  function onDiskVideoIds(data) {
+    const ids = new Set();
+    withClientLabels((data && data.entries) || []).forEach(e => {
+      const vid = e.label && e.label.videoId;
+      if (vid) ids.add(vid);
+    });
+    return ids;
   }
 
   function offlineMetaIds(data) {
@@ -834,10 +850,27 @@ const LIB = (() => {
   // 409 -- and, more to the point, never starts a download that cannot fit.
   const fitsOnDisk = (size, b) => {
     b = b || {};
-    // Unknown size is not "no": plenty of addons omit it, and refusing on missing data would
-    // disable the button for most releases. The server still guards the real thing.
-    if (!size || b.diskFree == null || !b.cacheSize) return true;
-    return b.diskFree - size >= Math.ceil(b.cacheSize * 1.10);
+    if (b.diskFree == null || !b.cacheSize) return true;   // nothing to judge against
+    const headroom = Math.ceil(b.cacheSize * 1.10);
+    // When free space is already under the headroom, NOTHING fits -- the server's guard reduces
+    // to `free >= headroom` for a candidate it cannot size, so every release would be refused.
+    // Checking this first is what makes the gate work at all for the releases whose size no
+    // addon told us, which is most of them.
+    if (b.diskFree < headroom) return false;
+    if (!size) return true;
+    return b.diskFree - size >= headroom;
+  };
+
+  // behaviorHints.videoSize is the structured answer and is usually absent. The size is almost
+  // always in the human text instead, so read it from there rather than let the gate go quiet.
+  const SIZE_RE = /(\d+(?:[.,]\d+)?)\s*(T|G|M)i?B\b/i;
+  const SIZE_UNIT = { t: 1024 ** 4, g: 1024 ** 3, m: 1024 ** 2 };
+  const releaseSize = st => {
+    const bh = (st && st.behaviorHints) || {};
+    if (bh.videoSize) return Number(bh.videoSize) || 0;
+    const text = [st && st.title, st && st.description, st && st.name].filter(Boolean).join(' ');
+    const m = SIZE_RE.exec(text);
+    return m ? Math.round(parseFloat(m[1].replace(',', '.')) * SIZE_UNIT[m[2].toLowerCase()]) : 0;
   };
 
   const relLabel = st => {
@@ -861,16 +894,35 @@ const LIB = (() => {
       return;
     }
     const budget = (lastState && lastState.budget) || {};
+    // Which of these releases this server already holds. Without it every release looked alike,
+    // including the one already downloading, so the same torrent could be started twice.
+    const held = {};
+    ((lastState && lastState.entries) || []).forEach(e => {
+      if (e.infoHash) held[e.infoHash.toLowerCase()] = e;
+    });
     host.innerHTML = heading + streams.map((st, i) => {
         const l = relLabel(st);
-        const size = (st.behaviorHints || {}).videoSize || 0;
-        const fits = fitsOnDisk(size, budget);
-        // Say why it is greyed out. A disabled button with no explanation reads as a broken page.
-        const whyHtml = fits ? '' : `<div class="meta2">${esc('Needs ' + fmt(size) + ' plus headroom; '
-                                  + fmt(budget.diskFree || 0) + ' free')}</div>`;
+        const size = releaseSize(st);
+        const mine = held[String(st.infoHash || '').toLowerCase()];
+        const busy = Boolean(mine && mine.state === 'downloading');
+        // Already here and kept: nothing to do. Already here but only cached: Download pins it,
+        // which costs no bytes because they are already on disk -- the one way to keep a streamed
+        // title until a proper Keep action exists.
+        const verb = busy ? 'Downloading' : (mine && mine.pinned) ? 'On server'
+                   : mine ? 'Keep' : 'Download';
+        const fits = mine ? true : fitsOnDisk(size, budget);
+        // Say why it is greyed out. A disabled button with no explanation reads as a broken page,
+        // and the two reasons are different: this one will not fit, versus nothing will.
+        const heldHtml = mine ? `<div class="meta2">${esc(busy
+             ? 'Already downloading on this server'
+             : 'Already on this server' + (mine.pinned ? ', kept' : ', cached'))}</div>` : '';
+        const whyHtml = fits ? '' : `<div class="meta2">${esc(size
+             ? 'Needs ' + fmt(size) + ' plus headroom; ' + fmt(budget.diskFree || 0) + ' free'
+             : 'Not enough free disk for any download; ' + fmt(budget.diskFree || 0) + ' free')}</div>`;
         return `<div class="rel"><span class="who"><b>${esc(l.head)}</b>
-          <div class="meta2">${esc(l.detail)}</div>${whyHtml}</span>
-          <button data-rel="${esc(String(i))}"${fits ? '' : ' disabled'}>Download</button></div>`;
+          <div class="meta2">${esc(l.detail)}</div>${heldHtml}${whyHtml}</span>
+          <button data-rel="${esc(String(i))}"${
+            fits && !busy && verb !== 'On server' ? '' : ' disabled'}>${esc(verb)}</button></div>`;
       }).join('')
       + (failed.length ? `<p class="note">${esc('No answer from: ' + failed.join(', '))}</p>` : '');
     host.querySelectorAll('[data-rel]').forEach(btn => {
@@ -894,15 +946,20 @@ const LIB = (() => {
     const host = $('detail-body');
     const paint = season => {
       const eps = vids.filter(v => v.season === season);
+      const have = onDiskVideoIds(lastState);
       host.innerHTML =
         `<div class="chips">${seasons.map(sn =>
           `<button class="chip${sn === season ? ' on' : ''}" data-season="${esc(String(sn))}">${
             esc('Season ' + sn)}</button>`).join('')}</div>`
         + `<div class="chips">${eps.map((v, i) =>
-          `<button class="chip" data-ep="${esc(String(i))}">${
-            esc((v.episode !== undefined ? 'E' + v.episode : '') + (v.name ? ' ' + v.name : ''))
+          `<button class="chip${have.has(v.id) ? ' have' : ''}" data-ep="${esc(String(i))}"${
+            have.has(v.id) ? ' title="Already on this server"' : ''}>${
+            esc((v.episode !== undefined ? 'E' + v.episode : '') + (v.name ? ' ' + v.name : '')
+                + (have.has(v.id) ? ' ✓' : ''))
           }</button>`).join('')}</div>`
-        + '<div class="note">Pick an episode.</div>';
+        + `<div class="note">${esc(have.size
+             ? 'Pick an episode. A tick means it is already on this server.'
+             : 'Pick an episode.')}</div>`;
       host.querySelectorAll('[data-season]').forEach(b => {
         b.onclick = () => paint(Number(b.dataset.season));
       });

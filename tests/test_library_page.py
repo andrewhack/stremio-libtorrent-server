@@ -567,9 +567,29 @@ def test_a_release_that_cannot_fit_is_refused():
 
 
 def test_an_unknown_release_size_is_not_treated_as_refusal():
-    """Plenty of addons omit videoSize. Refusing on missing data would grey out most releases;
-    the server still guards the real thing."""
+    """An unknown size is not a refusal on its own -- but it is not a free pass either.
+
+    Refusing every release whose size no addon reported would grey out most of them. Yet when free
+    space is already under the headroom, NOTHING fits: the server's guard reduces to
+    `free >= headroom` for a candidate it cannot size, so offering the button would promise a 409.
+    That gap is why a release far larger than the free space was still clickable.
+    """
     src = _fits_src()
-    b = "{diskFree: 1e9, cacheSize: 19327352832}"
-    assert _run_js(src, f"fitsOnDisk(0, {b})") is True
-    assert _run_js(src, "fitsOnDisk(5e9, {})") is True
+    roomy = "{diskFree: 60e9, cacheSize: 19327352832}"
+    assert _run_js(src, f"fitsOnDisk(0, {roomy})") is True
+    assert _run_js(src, "fitsOnDisk(5e9, {})") is True          # nothing to judge against
+    cramped = "{diskFree: 1e9, cacheSize: 19327352832}"
+    assert _run_js(src, f"fitsOnDisk(0, {cramped})") is False   # nothing fits, size known or not
+
+
+def test_a_release_size_is_read_from_the_text_when_the_addon_omits_the_field():
+    """behaviorHints.videoSize is usually absent; addons put the size in the description instead,
+    which is where the gate has to read it or it stays inert for almost every release."""
+    m = re.search(r"(const SIZE_RE = [\s\S]*?\n  \};)", _page())
+    assert m, "releaseSize not found in the page"
+    src = m.group(1)
+    gb = 1024 ** 3
+    assert _run_js(src, "releaseSize({behaviorHints:{videoSize: 123}})") == 123
+    assert _run_js(src, "releaseSize({description:'Some.Release.mkv 356 4.21 GB'})") == round(4.21 * gb)
+    assert _run_js(src, "releaseSize({title:'x 225.43 MB y'})") == round(225.43 * 1024 ** 2)
+    assert _run_js(src, "releaseSize({description:'no size here'})") == 0
