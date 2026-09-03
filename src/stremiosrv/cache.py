@@ -259,6 +259,13 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
     pin_entries = pinsmod.load_pins(root)
     keep_hashes = {(e.get("infoHash") or "").lower() for e in pin_entries if e.get("infoHash")}
     in_use |= {e["name"] for e in pin_entries if e.get("name")}
+    # ...but `pin()` records the torrent name only when metadata had already arrived, and nothing
+    # ever backfills it -- a magnet pinned the moment it is added carries "" for the life of the
+    # pin, which is the normal case, not the corner one. The name index, written whenever resume
+    # data is saved, knows the name; without this the durable protection above is inert for
+    # exactly the pins that need it.
+    by_hash = {str(h).lower(): n for n, h in load_name_index(root).items() if h}
+    in_use |= {by_hash[ih] for ih in keep_hashes if ih in by_hash}
     # Give every partfile the protection its torrent has. Deleting one on its own throws away the
     # partial pieces of a torrent we just decided to keep, and it always looked evictable because
     # its name matches no torrent.

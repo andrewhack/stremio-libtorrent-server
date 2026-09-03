@@ -415,3 +415,32 @@ def test_evicting_a_torrent_takes_its_partfile_with_it(tmp_path):
     part = _mk(tmp_path, f".{IH}.parts", 3000, age=5)
     c.evict_once(str(tmp_path), budget=1000, engine=Eng())
     assert not part.exists(), "orphaned partfile survived its torrent"
+
+
+def test_pin_recorded_with_no_name_is_still_protected(tmp_path):
+    """`pin()` stores `h.name() if h.has_metadata() else ""`, and nothing ever backfills it — so a
+    magnet pinned the moment it was added carries an empty name for the life of the pin. Observed
+    live: the first successful library download recorded `"name": ""`. Without resolving it, the
+    durable protection is inert for precisely the pins made from a fresh magnet, which is all of
+    them. The name index, written whenever resume data is saved, knows the answer.
+    """
+    from stremiosrv import cache as c
+    keep = _mk(tmp_path, "Pinned But Unnamed", 4000)
+    drop = _mk(tmp_path, "Unpinned Title", 4000)
+    _pins(tmp_path, [{"infoHash": IH, "name": ""}])
+    c.save_name_index(str(tmp_path), {"Pinned But Unnamed": IH})
+    res = c.evict_once(str(tmp_path), budget=1000)
+    names = {d["name"] for d in res["deleted"]}
+    assert "Unpinned Title" in names and not drop.exists()
+    assert keep.exists() and "Pinned But Unnamed" not in names
+
+
+def test_partfile_of_a_nameless_pin_is_protected_too(tmp_path):
+    from stremiosrv import cache as c
+    part = _mk(tmp_path, f".{IH}.parts", 3000)
+    _mk(tmp_path, "Pinned But Unnamed", 4000)
+    _mk(tmp_path, "Unpinned Title", 4000)
+    _pins(tmp_path, [{"infoHash": IH, "name": ""}])
+    c.save_name_index(str(tmp_path), {"Pinned But Unnamed": IH})
+    c.evict_once(str(tmp_path), budget=1000)
+    assert part.exists()
