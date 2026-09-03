@@ -10,11 +10,24 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
 
+from stremiosrv import pins as pinsmod
+
 logger = logging.getLogger("stremiosrv.cache")
+
+# libtorrent's holding file for a torrent's partial pieces, named from the infohash. It is a
+# top-level cache entry in its own right, and its name can never equal a torrent's name -- so
+# every protection built from torrent names missed it completely.
+PARTFILE_RE = re.compile(r"^\.([0-9a-f]{40})\.parts$", re.IGNORECASE)
+
+
+def partfile_hash(name: str) -> str | None:
+    m = PARTFILE_RE.match(name)
+    return m.group(1).lower() if m else None
 
 # Never evict these top-level entries.
 PROTECTED = frozenset({
@@ -232,6 +245,18 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
         name_hash = engine.name_to_hash()
         if hasattr(engine, "access_ages"):
             ages = engine.access_ages()
+    # Pins are durable state; handles are not. `engine.pinned_names()` reports only torrents that
+    # are loaded AND have metadata, so a pin stopped protecting anything the moment its torrent
+    # was not in the session -- and a finished download, which nothing writes to any more, is the
+    # oldest entry in the cache and therefore first in line. Read the registry instead.
+    pin_entries = pinsmod.load_pins(root)
+    keep_hashes = {(e.get("infoHash") or "").lower() for e in pin_entries if e.get("infoHash")}
+    in_use |= {e["name"] for e in pin_entries if e.get("name")}
+    # Give every partfile the protection its torrent has. Deleting one on its own throws away the
+    # partial pieces of a torrent we just decided to keep, and it always looked evictable because
+    # its name matches no torrent.
+    keep_hashes |= {name_hash[n] for n in list(in_use) if n in name_hash}
+    in_use |= {f".{ih}.parts" for ih in keep_hashes if ih}
     victims = select_evictions(items, budget, frozenset(in_use))
     # Over budget and nothing may be deleted. Previously this pass just did nothing and said
     # nothing, so the cache could sit above its budget indefinitely while the log looked idle —
@@ -251,6 +276,10 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
         if engine is not None and ih:
             engine.remove(ih)  # stop libtorrent before deleting its files
         _remove(v["path"])
+        # ...and the holding file that belongs to it, or the next pass finds an orphan whose
+        # torrent no longer exists and which nothing will ever claim.
+        if ih:
+            _remove(os.path.join(root, f".{ih}.parts"))
         deleted.append({"name": v["name"], "size": v["size"]})
         # Age is the diagnostic that was missing: "last served 41m ago" is a clean reclaim,
         # "last served 6m ago" means a viewer just lost their stream. `unserved` = never requested
@@ -298,4 +327,3 @@ def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: 
                 )
         except Exception:
             logger.exception("eviction pass failed")
-        time.sleep(interval)
