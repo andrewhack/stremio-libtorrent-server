@@ -42,6 +42,15 @@ what "done" looks like, so it can be picked up without context.
   already surfaces it; and Unkeep on a pinned entry, which is `unpin` without deleting anything —
   distinct from Remove, which stops the torrent and reclaims the disk.
 
+- [ ] **The library lists torrents, but a pack holds many episodes.** An entry is one cache
+  directory, so every episode inside a season pack is folded into a single card — the one the pin
+  was labelled with. Watch a second episode from that pack through the player and there is nothing
+  in the library to show for it: no card, no size, no way to remove just that episode. The card's
+  size is the whole directory too, which is why a 4.2 GB episode can report 8.6 GB.
+  *Done =* a multi-file torrent renders one card per file that has data, driven by libtorrent's
+  per-file progress, with the torrent as their shared parent for removal; and the card's size
+  reports the file, not the directory it happens to share.
+
 - [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
   `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins
   immediately after `add`, so the guard always measures nothing and always passes. A torrent far
