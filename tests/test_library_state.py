@@ -184,6 +184,53 @@ def test_engine_pinned_status_reports_the_fields_the_ui_needs():
     assert "st.download_rate" in src and "st.num_seeds" in src
 
 
+def test_an_idle_pack_lists_the_episodes_on_its_disk(tmp_path):
+    """Only PINS are re-added to the session at startup, so after any restart the rest of the cache
+    has no handle -- and per-file facts came only from a handle. A season pack then collapsed into
+    one card carrying the pack's name and the whole directory's size, saying nothing about which
+    episode is actually there. Restarting is ordinary: changing a setting on the appliance does it.
+    """
+    d = tmp_path / "Show.S01.COMPLETE.1080p"
+    d.mkdir()
+    (d / "Show.S01E05.1080p.mkv").write_bytes(b"x" * 4096)
+    (d / "Show.S01E06.1080p.mkv").write_bytes(b"y" * 2048)
+    (d / "readme.nfo").write_bytes(b"not a video")
+    cachemod.save_name_index(str(tmp_path), {"Show.S01.COMPLETE.1080p": "d" * 40})
+    e = state.build(str(tmp_path), None)["entries"][0]
+    assert e["filesFrom"] == "disk"
+    assert [f["name"] for f in e["files"]] == ["Show.S01E05.1080p.mkv", "Show.S01E06.1080p.mkv"]
+    # a card per episode, so the owner can see WHICH ones are here
+    assert [k["name"] for k in e["children"]] == ["Show.S01E05.1080p.mkv", "Show.S01E06.1080p.mkv"]
+
+
+def test_one_episode_of_a_pack_still_gets_its_own_card(tmp_path):
+    """The entry is named after the TORRENT. With a single episode on disk and no children, the
+    card showed the season pack's name and nothing saying which episode it held -- which is what
+    the owner was looking at when they reported this."""
+    d = tmp_path / "Show.S01.COMPLETE.1080p"
+    d.mkdir()
+    (d / "Show.S01E05.1080p.mkv").write_bytes(b"x" * 4096)
+    e = state.build(str(tmp_path), None)["entries"][0]
+    assert [k["name"] for k in e["children"]] == ["Show.S01E05.1080p.mkv"]
+
+
+def test_the_engines_own_list_wins_over_the_disk(tmp_path):
+    """A handle knows what is WANTED as well as what is present, so it is always the better
+    answer. Reading both and merging them would be two sources for one fact."""
+    d = tmp_path / "Show.S01.COMPLETE.1080p"
+    d.mkdir()
+    (d / "Show.S01E05.1080p.mkv").write_bytes(b"x" * 4096)
+    eng = FakeEngine(
+        names={"Show.S01.COMPLETE.1080p": "e" * 40},
+        pinned=[{"infoHash": "e" * 40, "numFiles": 9, "files": [
+            {"index": 5, "name": "Show.S01E06.1080p.mkv", "size": 10, "downloaded": 0,
+             "progress": 0.0, "wanted": True}]}],
+    )
+    e = state.build(str(tmp_path), eng)["entries"][0]
+    assert e["filesFrom"] == "engine"
+    assert [f["name"] for f in e["files"]] == ["Show.S01E06.1080p.mkv"]
+
+
 def test_an_entry_carries_the_torrents_files_and_its_file_count(tmp_path):
     """`children` is the subset worth drawing as a card -- it drops boundary spill, and it is not
     built at all for a pack with a single episode in flight. The release list needs the facts

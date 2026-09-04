@@ -1048,14 +1048,19 @@ const LIB = (() => {
   const releaseFile = (entry, st, want) => {
     const files = (entry && entry.files) || [];
     if (!files.length) return undefined;
+    // Whether this is the TORRENT's own file list or a listing of what happens to be on the disk.
+    // A disk listing has no file indices and knows only how many files LANDED, never how many the
+    // torrent has -- so neither shortcut below may be taken on it.
+    const known = entry.filesFrom !== 'disk';
     // A single-file torrent needs no matching: that file IS the release. The length of `files`
     // cannot say so on its own -- a pack with one episode selected also reports one file -- which
     // is the whole reason the torrent's own file count travels with it.
-    if ((entry.numFiles || 0) <= 1) return files[0];
+    if (known && (entry.numFiles || 0) <= 1) return files[0];
     const idx = st && st.fileIdx;
-    if (Number.isInteger(idx)) return files.find(f => f.index === idx) || null;
+    if (known && Number.isInteger(idx)) return files.find(f => f.index === idx) || null;
     const sn = want && want.season, ep = want && want.episode;
-    if (sn == null || ep == null) return undefined;
+    // Nothing to match on -- a film, say. One file is unambiguous; several are not.
+    if (sn == null || ep == null) return files.length === 1 ? files[0] : undefined;
     return files.find(f => {
       const m = EPISODE_RE.exec(f.name || '');
       return m && Number(m[1]) === Number(sn) && Number(m[2]) === Number(ep);

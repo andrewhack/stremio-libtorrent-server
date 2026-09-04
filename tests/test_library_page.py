@@ -743,6 +743,33 @@ def test_a_single_file_torrent_needs_no_matching():
     assert _run_js(src, f"releaseFile({movie}, {{}}, {{}}).index") == 0
 
 
+_DISK = ("{filesFrom: 'disk', files: ["
+         "{index: null, name: 'Show.S01E05.mkv', progress: 1, wanted: false}]}")
+
+
+def test_a_disk_listing_is_not_read_as_the_torrents_own_file_list():
+    """After a restart the files come from a directory, which knows only what LANDED -- not the
+    torrent's file order, and not how many files it has. Taking the single-file shortcut there
+    would answer "yes, that is the release" for every episode of a pack holding one."""
+    src = _release_file_src()
+    # the episode that is actually on disk
+    assert _run_js(src, f"releaseFile({_DISK}, {{}}, {{season:1, episode:5}}).name") \
+        == "Show.S01E05.mkv"
+    # a different episode of the same pack: not here, whatever the directory holds
+    assert _run_js(src, f"releaseFile({_DISK}, {{}}, {{season:1, episode:6}})") is None
+    # an addon's file index means nothing against a directory listing
+    assert _run_js(src, f"releaseFile({_DISK}, {{fileIdx: 0}}, {{season:1, episode:5}}).name") \
+        == "Show.S01E05.mkv"
+
+
+def test_a_film_on_disk_is_still_recognised():
+    """Nothing to match on and one file present: that file is the release. Answering "not held"
+    would offer a re-download of something already on the disk."""
+    src = _release_file_src()
+    film = "{filesFrom: 'disk', files: [{index: null, name: 'Film.2019.mkv', progress: 1}]}"
+    assert _run_js(src, f"releaseFile({film}, {{}}, {{}}).name") == "Film.2019.mkv"
+
+
 def test_a_torrent_with_no_per_file_record_falls_back_to_itself():
     """Nothing in the session knows this torrent's files -- after a restart, say. Answering "not
     held" would offer a re-download of something already on the disk."""
