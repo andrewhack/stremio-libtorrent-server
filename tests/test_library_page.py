@@ -630,6 +630,22 @@ def test_a_release_size_is_read_from_the_text_when_the_addon_omits_the_field():
     assert _run_js(src, "releaseSize({description:'no size here'})") == 0
 
 
+def test_the_sign_in_panel_links_to_the_player_rather_than_describing_it():
+    """On a shared-cert box the panel cannot offer a password, so it sends the owner to the player
+    to sign in there. It used to say "on this address" and leave them to construct it -- and the
+    obvious guess is wrong: the player is ALSO served on a plain-HTTP port, so a browser reaching
+    for that one over https (which it will, on a trusted hostname) fails with
+    SSL_ERROR_RX_RECORD_TOO_LONG and nothing pointing at the port. The player is at the root of
+    this very origin, so the panel links to it: same scheme, host and port.
+    """
+    page = _page()
+    assert "a.href = '/';" in page
+    assert "Open the player on this address" in page
+    # built as a node, never interpolated into markup
+    assert "document.createElement('a')" in page
+    assert "introlink" in page
+
+
 def test_keeping_is_a_deliberate_control_on_the_card():
     """Downloading no longer pins, so there has to be something that does -- and it must be the
     same act as the appliance's pin, not a second meaning of "kept"."""

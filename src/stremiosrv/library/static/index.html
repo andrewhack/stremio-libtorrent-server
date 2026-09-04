@@ -99,6 +99,9 @@
   [hidden] { display:none !important; }
   @media (max-width:640px) { :root { --poster-w:116px; } main { padding:8px 14px 40px; }
                              h2 { font-size:18px; } }
+  /* The one link in the sign-in panel: the muted intro colour would hide it. */
+  .introlink { display:inline-block; margin-top:.6rem; color:var(--accent);
+    text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -232,15 +235,30 @@ const LIB = (() => {
     const cfg = await api('/library/api/config')
       .catch(() => ({ passwordLogin: false, certShared: false }));
     const NO_SESSION = 'No Stremio session on this device. ';
-    $('auth-intro').textContent = cfg.passwordLogin
+    const intro = $('auth-intro');
+    intro.textContent = cfg.passwordLogin
       ? NO_SESSION + 'Sign in with your Stremio account.'
       : cfg.certShared
         ? NO_SESSION + 'This server uses the shared stremio.rocks certificate, whose private key '
-          + 'is public, so signing in with a password here is not offered. Open the Stremio web '
-          + 'player on this address and sign in there first, or install your own certificate.'
+          + 'is public, so signing in with a password here is not offered. Sign in to the Stremio '
+          + 'web player on this same address first, then come back, or install your own '
+          + 'certificate.'
         : NO_SESSION + 'The TLS certificate on this server could not be read, so signing in with a '
-          + 'password here is not offered. Open the Stremio web player on this address and sign '
-          + 'in there first, or check the certificate.';
+          + 'password here is not offered. Sign in to the Stremio web player on this same address '
+          + 'first, then come back, or check the certificate.';
+    // "this address" was left for the reader to construct, and the obvious guess is wrong: the
+    // player is also served on a PLAIN HTTP port, and a browser reaching for that one over https
+    // -- which it will, on a trusted hostname -- fails with SSL_ERROR_RX_RECORD_TOO_LONG and no
+    // hint that the port is the problem. The player is at the root of THIS origin, so say so by
+    // pointing at it: same scheme, same host, same port, nothing to retype.
+    if (!cfg.passwordLogin) {
+      const a = document.createElement('a');
+      a.href = '/';
+      a.textContent = 'Open the player on this address';
+      a.className = 'introlink';
+      intro.appendChild(document.createElement('br'));
+      intro.appendChild(a);
+    }
     $('pw-form').hidden = !cfg.passwordLogin;
     showAuth(msg);
   }
