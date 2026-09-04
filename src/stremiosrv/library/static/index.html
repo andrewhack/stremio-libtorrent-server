@@ -420,25 +420,11 @@ const LIB = (() => {
         // Space already spoken for: without it the header reads as roomier than the box is.
         + (b.committed ? ' · ' + fmt(b.committed) + ' still to fetch' : '')
       : '';
-    // Keep / stop keeping. This is the ONLY thing that pins: downloading does not, so a title is
-    // kept because someone said so, and everything else is cache the evictor is free to reclaim.
+    // The card's Keep control. The release list has one too, and both go through keepTitle.
     document.querySelectorAll('[data-keep]').forEach(btn => {
       btn.onclick = async () => {
-        const kept = Boolean(btn.dataset.kept);
         btn.disabled = true;
-        try {
-          await api(kept ? '/library/api/unpin' : '/library/api/pin', { method: 'POST',
-            body: JSON.stringify({ infoHash: btn.dataset.keep }) });
-        } catch (err) {
-          const b = err.body || {};
-          $('add-err').textContent = err.status === 409
-            ? 'Not enough free disk to keep this. Needs ' + fmt(b.needed) + ', '
-              + fmt(b.free) + ' free.'
-            : 'Could not change that.';
-          btn.disabled = false;
-          return;
-        }
-        await loadState();
+        if (!await keepTitle(btn.dataset.keep, Boolean(btn.dataset.kept))) btn.disabled = false;
       };
     });
     document.querySelectorAll('[data-remove]').forEach(btn => {
@@ -579,6 +565,27 @@ const LIB = (() => {
       .map(x => '&tr=' + encodeURIComponent(String(x).slice(8))).join('');
     return 'magnet:?xt=urn:btih:' + encodeURIComponent(st.infoHash) + tr;
   };
+
+  // Keep, or stop keeping. The ONLY thing that pins: downloading does not, so a title is kept
+  // because someone said so and everything else is cache the evictor is free to reclaim. Two
+  // surfaces ask for it -- the card and the release list -- and a second copy of the error
+  // handling is how those two would come to disagree about what had failed.
+  async function keepTitle(infoHash, unkeep) {
+    $('add-err').textContent = '';
+    try {
+      await api(unkeep ? '/library/api/unpin' : '/library/api/pin',
+                { method: 'POST', body: JSON.stringify({ infoHash: infoHash }) });
+    } catch (err) {
+      const b = err.body || {};
+      $('add-err').textContent = err.status === 409
+        ? 'Not enough free disk to keep this. Needs ' + fmt(b.needed) + ', '
+          + fmt(b.free) + ' free.'
+        : 'Could not change that.';
+      return false;
+    }
+    await loadState();
+    return true;
+  }
 
   // fileIdx: addons that point at one file inside a pack say so on the stream. Passing it
   // through is what stops a chosen episode from dragging its whole season onto the disk; without
@@ -954,10 +961,16 @@ const LIB = (() => {
     return null;
   }
 
-  // The same arithmetic the server's pin guard uses (pins.pin_fits): a download must leave the
-  // cache budget's worth of headroom plus ten percent still free, or the evictor has nowhere to
-  // work. Mirroring it here means the button never offers something /api/download answers with a
-  // 409 -- and, more to the point, never starts a download that cannot fit.
+  // A download is ordinary evictable cache, so the only thing that can honestly refuse it is the
+  // DISK. This used to apply the server's PIN guard (pins.pin_fits): free space must exceed the
+  // release PLUS the whole cache budget and ten percent. That rule is right for a pin -- a pin can
+  // never be evicted, so the entire budget has to stay free beside it for ordinary streaming --
+  // and wrong for a download, which the evictor manages like anything else. Applied here it
+  // refused nearly everything: a 48 GiB budget demanded ~56.7 GB free ON TOP of the release, so a
+  // 10 GB file was greyed out on a box with 61 GB free.
+  // What is left is a modest reserve, so a download cannot fill the disk out from under the logs,
+  // the resume files and the transcode segments. Overrunning the BUDGET is the warning below, not
+  // a refusal -- that is the whole point of the split between the two.
   // Three answers, because there are three situations and only one of them is a refusal.
   //   'ok'         room for it, within budget
   //   'overbudget' it fits on the disk but pushes the cache past its budget, so the evictor may
@@ -966,7 +979,9 @@ const LIB = (() => {
   const sizeVerdict = (size, b) => {
     b = b || {};
     if (b.diskFree == null || !b.cacheSize) return 'ok';   // nothing to judge against
-    const headroom = Math.ceil(b.cacheSize * 1.10);
+    // A floor for a small disk, a fraction for a large one: 2% of a 2 TB disk is worth holding
+    // back, and 2% of a 16 GB one is not.
+    const reserve = Math.max(2 * 1024 ** 3, Math.ceil((b.diskTotal || 0) * 0.02));
     // Downloads already running have claimed space they have not written yet. It is in neither
     // `df` nor the cache total, so judging a new download on those alone approves things there
     // will be no room for once everything in flight has finished -- which is exactly when the
@@ -974,11 +989,11 @@ const LIB = (() => {
     const committed = b.committed || 0;
     const free = Math.max(0, (b.diskFree || 0) - committed);
     const used = (b.cacheUsed || 0) + committed;
-    // Free space already under the headroom: nothing fits, whether or not an addon reported a
+    // Free space already inside the reserve: nothing fits, whether or not an addon reported a
     // size. Checking this first is what makes the gate work for the releases nobody sized.
-    if (free < headroom) return 'nodisk';
+    if (free < reserve) return 'nodisk';
     if (!size) return 'ok';
-    if (free - size < headroom) return 'nodisk';
+    if (free - size < reserve) return 'nodisk';
     if (used + size > b.cacheSize) return 'overbudget';
     return 'ok';
   };
@@ -1003,6 +1018,32 @@ const LIB = (() => {
     return { head: head, detail: detail };
   };
 
+  // Which FILE of a torrent a release is offering.
+  //   a file    -- this release IS that file, and its state is the file's, not the torrent's
+  //   null      -- the torrent holds nothing for this release and nothing has asked for it
+  //   undefined -- cannot tell, so the caller falls back to the torrent
+  // A pack is ONE infohash, so a button keyed on torrent identity showed whatever that torrent
+  // happened to be doing: with one episode downloading, every OTHER episode of the pack read
+  // "Downloading" and was disabled, though nothing had asked for a byte of them. The same mistake
+  // as the episode ticks and the on-disk badge before it, and it has the same fix -- match the
+  // file, by the addon's own fileIdx where there is one and by the episode number otherwise.
+  const releaseFile = (entry, st, want) => {
+    const files = (entry && entry.files) || [];
+    if (!files.length) return undefined;
+    // A single-file torrent needs no matching: that file IS the release. The length of `files`
+    // cannot say so on its own -- a pack with one episode selected also reports one file -- which
+    // is the whole reason the torrent's own file count travels with it.
+    if ((entry.numFiles || 0) <= 1) return files[0];
+    const idx = st && st.fileIdx;
+    if (Number.isInteger(idx)) return files.find(f => f.index === idx) || null;
+    const sn = want && want.season, ep = want && want.episode;
+    if (sn == null || ep == null) return undefined;
+    return files.find(f => {
+      const m = EPISODE_RE.exec(f.name || '');
+      return m && Number(m[1]) === Number(sn) && Number(m[2]) === Number(ep);
+    }) || null;
+  };
+
   async function showReleases(type, videoId, extra) {
     const host = $('detail-body');
     const heading = (extra && extra.heading) ? `<h4>${esc(extra.heading)}</h4>` : '';
@@ -1016,6 +1057,9 @@ const LIB = (() => {
       return;
     }
     const budget = (lastState && lastState.budget) || {};
+    // The episode these releases are for, when there is one: what a release has to be matched
+    // against inside a pack that holds several.
+    const want = (extra && extra.label) || {};
     // Which of these releases this server already holds. Without it every release looked alike,
     // including the one already downloading, so the same torrent could be started twice.
     const held = {};
@@ -1025,39 +1069,51 @@ const LIB = (() => {
     host.innerHTML = heading + streams.map((st, i) => {
         const l = relLabel(st);
         const size = releaseSize(st);
-        const mine = held[String(st.infoHash || '').toLowerCase()];
-        const busy = Boolean(mine && mine.state === 'downloading');
-        // Already here and kept: nothing to do. Already here but only cached: Download pins it,
-        // which costs no bytes because they are already on disk -- the one way to keep a streamed
-        // title until a proper Keep action exists.
-        const verb = busy ? 'Downloading' : (mine && mine.pinned) ? 'On server'
-                   : mine ? 'Keep' : 'Download';
-        const verdict = mine ? 'ok' : sizeVerdict(size, budget);
+        const entry = held[String(st.infoHash || '').toLowerCase()];
+        // The file this release offers, not the torrent it happens to live in.
+        const part = entry ? releaseFile(entry, st, want) : undefined;
+        // null: this torrent holds nothing for this release and nothing has asked for it. The
+        // torrent may well be busy with a different episode -- that is not this release's state.
+        const here = Boolean(entry) && part !== null;
+        const busy = here && Boolean(part ? (part.wanted && (part.progress || 0) < 1)
+                                          : entry.state === 'downloading');
+        const done = here && Boolean(part ? (part.progress || 0) >= 1 : isComplete(entry));
+        // Pinning is per torrent: one file of a pack cannot be kept while another is let go.
+        const kept = here && Boolean(entry.pinned);
+        // Already here and kept: nothing to do. Already here but only cached: Keep pins it, which
+        // costs no bytes because they are on disk already. Downloading it again would not keep it
+        // -- since the want/pin split, a download is ordinary evictable cache.
+        const verb = busy ? 'Downloading' : (done && kept) ? 'On server'
+                   : done ? 'Keep' : 'Download';
+        const verdict = (busy || done) ? 'ok' : sizeVerdict(size, budget);
         // Say why it is greyed out. A disabled button with no explanation reads as a broken page,
         // and the two reasons are different: this one will not fit, versus nothing will.
-        const heldHtml = mine ? `<div class="meta2">${esc(busy
+        const heldHtml = (busy || done) ? `<div class="meta2">${esc(busy
              ? 'Already downloading on this server'
-             : 'Already on this server' + (mine.pinned ? ', kept' : ', cached'))}</div>` : '';
+             : 'Already on this server' + (kept ? ', kept' : ', cached'))}</div>` : '';
         // One sentence, two places: under the release and on the button itself. A disabled or
         // red button is a decision made on the owner's behalf, and it should be able to explain
         // itself wherever the pointer happens to be.
         const reason =
             busy ? 'This release is already downloading on this server'
           : verb === 'On server' ? 'This release is already here and kept'
+          : verb === 'Keep' ? 'Already here, but the evictor may reclaim it. Keep it to protect it.'
           : verdict === 'overbudget'
               ? 'Over the ' + fmt(budget.cacheSize) + ' cache budget - it will download, but the '
                 + 'evictor may reclaim it before you watch it. Keep it to protect it.'
           : verdict === 'nodisk'
               ? (size
-                  ? 'Needs ' + fmt(size) + ' plus headroom; ' + fmt(budget.diskFree || 0)
-                    + ' free' + (budget.committed
+                  ? 'Needs ' + fmt(size) + '; only ' + fmt(budget.diskFree || 0)
+                    + ' free on disk' + (budget.committed
                         ? ', ' + fmt(budget.committed) + ' of it already promised' : '')
                   : 'Not enough free disk for any download; ' + fmt(budget.diskFree || 0) + ' free')
           : '';
         const whyHtml = verdict === 'ok' ? '' : `<div class="meta2">${esc(reason)}</div>`;
         return `<div class="rel"><span class="who"><b>${esc(l.head)}</b>
           <div class="meta2">${esc(l.detail)}</div>${heldHtml}${whyHtml}</span>
-          <button data-rel="${esc(String(i))}" class="${
+          <button data-rel="${esc(String(i))}"${
+            verb === 'Keep' && entry && entry.infoHash ? ` data-keep-hash="${esc(entry.infoHash)}"` : ''
+          } class="${
             verdict === 'overbudget' ? 'warn' : ''}" title="${esc(reason)}"${
             verdict !== 'nodisk' && !busy && verb !== 'On server' ? '' : ' disabled'}>${
             esc(verb)}</button></div>`;
@@ -1066,7 +1122,17 @@ const LIB = (() => {
     host.querySelectorAll('[data-rel]').forEach(btn => {
       btn.onclick = async () => {
         const st = streams[Number(btn.dataset.rel)];
-        btn.disabled = true; btn.textContent = 'Starting...';
+        btn.disabled = true;
+        // Keep is a pin, not a download. The bytes are already here; asking for them again would
+        // want the file without protecting it, which is the one thing the button promises.
+        if (btn.dataset.keepHash) {
+          btn.textContent = 'Keeping...';
+          const ok = await keepTitle(btn.dataset.keepHash, false);
+          btn.textContent = ok ? 'Kept' : 'Keep';
+          btn.disabled = ok;
+          return;
+        }
+        btn.textContent = 'Starting...';
         await startDownload(magnetFor(st), Object.assign({
           metaId: detailCtx.id, type: detailCtx.type,
           name: detailCtx.name, poster: detailCtx.poster,

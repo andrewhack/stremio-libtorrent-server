@@ -6,7 +6,7 @@ yet, and why each item is still open.
 Convention: `- [ ]` open · `- [x]` done · `- [~]` in progress · `- [!]` blocked. Every entry states
 what "done" looks like, so it can be picked up without context.
 
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-04
 
 ---
 
@@ -30,17 +30,12 @@ what "done" looks like, so it can be picked up without context.
 
 ## Library UI
 
-- [ ] **A title the player streamed can be removed but not kept.** The library UI pins whatever it
-  downloads, so those survive eviction. Anything the client streamed is an ordinary cache entry, and
-  the page offers only Remove — there is no way to say "keep this one" short of downloading it again
-  through the library, which re-fetches bytes already on disk. The card now states the difference
-  ("complete, kept" vs "complete, cached"), so the gap is visible rather than silent, but naming a
-  problem is not fixing it: a complete title the owner wants is reclaimed by the next eviction pass
-  the moment the cache goes over budget.
-  *Done =* a Keep action on any complete entry that has an infohash, pinning through the existing
-  `POST /{infoHash}/pin` route, with the disk guard's refusal surfaced the way the download path
-  already surfaces it; and Unkeep on a pinned entry, which is `unpin` without deleting anything —
-  distinct from Remove, which stops the torrent and reclaims the disk.
+- [x] **A title the player streamed can be kept, not only removed.** The library UI used to pin
+  whatever it downloaded, so a download survived eviction and anything the client streamed had no
+  way to. Both halves of that are gone. Downloading no longer pins — it is ordinary cache the
+  evictor manages — and Keep is its own control on every entry that has an infohash, calling
+  `POST /library/api/pin`, which is the same act as the appliance's own pin. Unkeep is `unpin`: the
+  bytes stay and become evictable again, which is what makes it different from Remove.
 
 - [ ] **The library lists torrents, but a pack holds many episodes.** An entry is one cache
   directory, so every episode inside a season pack is folded into a single card — the one the pin
@@ -59,29 +54,33 @@ what "done" looks like, so it can be picked up without context.
   each says kept or cached, which is the distinction that decides whether it survives eviction and
   is orthogonal to who asked for it.
 
-- [!] **The download gate reserves the whole cache budget, so almost nothing can be downloaded.**
-  It applies `pins.pin_fits`'s rule -- free space must exceed the release PLUS `cache_size * 1.10`.
-  That rule is right for a PIN, which can never be evicted and therefore has to leave the entire
-  budget free beside it for ordinary streaming. It is wrong for a download, which since the
-  want/pin split is ordinary evictable cache. With a 48 GiB budget the gate demands ~56.7 GB free
-  on top of the release, so on a 72 GB disk a 10 GB file is refused with 61 GB free.
-  *Done =* the download gate asks only whether it fits on the disk with a modest reserve (a small
-  floor, or a fraction of the disk -- not the cache budget), and "would push the cache over budget"
-  stays what it already is: the amber/red warning, not a refusal. The pin guard keeps its own rule
-  unchanged, because a pin really does have to reserve the budget.
+- [x] **The download gate no longer reserves the whole cache budget.** It applied `pins.pin_fits`
+  -- free space must exceed the release PLUS `cache_size * 1.10`. That rule is right for a PIN,
+  which can never be evicted and therefore has to leave the entire budget free beside it for
+  ordinary streaming. Applied to a download, which since the want/pin split is ordinary evictable
+  cache, a 48 GiB budget demanded ~56.7 GB free on top of the release: a 10 GB file refused on a
+  disk with 61 GB free. The gate now asks only whether the disk can spare it, holding back the
+  larger of 2 GiB and 2% of the disk so a download cannot fill it out from under the logs, the
+  resume files and the transcode segments. Overrunning the budget stays what it was -- the red
+  warning, not a refusal -- and the pin guard keeps its own rule, because a pin really does have to
+  reserve the budget.
 
-- [!] **A release inside a torrent already downloading cannot be asked for.** The release list
-  decides its button from `held[infoHash]`, so every release sharing a torrent takes that torrent's
-  state: with one episode of a pack downloading, every OTHER episode of the same pack shows
-  "Downloading" and is disabled. Nothing has asked for those files -- the torrent is busy, the
-  episode is not.
-  This is the same mistake as the episode ticks and the on-disk badge before it: a pack is ONE
-  infohash, so anything keyed on torrent identity can only ever describe one episode. The server
-  side is already correct -- `Engine.want` appends a selector to an existing torrent, which is
-  exactly the two-files-one-torrent case the wanted SET exists for.
-  *Done =* the button reflects the FILE being offered, matched by the release's `fileIdx` or by the
-  episode's number against the torrent's child files: complete -> On server / Keep, wanted but
-  incomplete -> Downloading, otherwise -> Download, even when the torrent is already busy.
+- [x] **A release inside a torrent already downloading can be asked for.** The release list decided
+  its button from `held[infoHash]`, so every release sharing a torrent took that torrent's state:
+  with one episode of a pack downloading, every OTHER episode showed "Downloading" and was
+  disabled, though nothing had asked for a byte of them. The same mistake as the episode ticks and
+  the on-disk badge before it -- a pack is ONE infohash, so anything keyed on torrent identity can
+  only ever describe one episode.
+  The button now reflects the FILE: matched by the addon's own `fileIdx` where there is one, and by
+  the episode number against the torrent's file list otherwise. Complete -> On server / Keep,
+  wanted but incomplete -> Downloading, and otherwise Download even while the torrent is busy with
+  something else. An entry carries the torrent's per-file state and its total file count, which is
+  what tells a film apart from a pack with a single episode selected; a torrent whose files nothing
+  in the session knows still falls back to its own state, as it did before.
+  Keep went with it. Since the want/pin split a download does not pin, so a release button labelled
+  Keep was calling the download route and keeping nothing -- it wanted a file that was already on
+  disk. Both surfaces now go through one `keepTitle`, which is also the only copy of the 409
+  handling.
 
 - [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
   `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins

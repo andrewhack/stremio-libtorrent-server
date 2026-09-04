@@ -90,6 +90,12 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "progress": pin.get("progress", 1.0),
             # The one file a narrowed pin fetches, when it is narrower than the torrent.
             "wantedFile": pin.get("wantedFile"),
+            # What this torrent holds or wants, per file, and how many files it has in all.
+            # Distinct from `children` below on purpose: `children` is the subset worth drawing as
+            # its own card, while these are the facts a caller matches against -- which is what
+            # tells a release for episode 6 apart from the episode 5 the torrent is busy with.
+            "files": pin.get("files") or [],
+            "numFiles": pin.get("numFiles") or 0,
             "state": pin.get("state", "idle"),
             "peers": pin.get("peers", 0),
             "seeds": pin.get("seeds", 0),
@@ -140,6 +146,7 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "name": pin.get("name", ""), "infoHash": ih, "size": 0, "mtime": 0,
             "pinned": bool(pin.get("pinned")), "progress": pin.get("progress", 0.0),
             "wantedFile": pin.get("wantedFile"),
+            "files": pin.get("files") or [], "numFiles": pin.get("numFiles") or 0,
             "state": pin.get("state", "downloading"), "peers": pin.get("peers", 0),
             "seeds": pin.get("seeds", 0), "downloadSpeed": pin.get("downloadSpeed", 0),
             "uploaded": pin.get("uploaded", 0), "ratio": pin.get("ratio", 0.0),

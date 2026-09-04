@@ -379,6 +379,17 @@ class Handle:
         """How many files of this torrent are wanted (0 = the whole thing)."""
         return len(self.wanted)
 
+    def num_files(self) -> int:
+        """How many files the torrent has, whether or not any of them is here.
+
+        `file_stats` reports only the files this torrent holds or wants, so its length cannot tell
+        a single-file torrent from a pack with one episode selected -- and that is exactly the
+        distinction a caller needs before deciding whether one of those files IS the thing being
+        asked about.
+        """
+        ti = self._h.torrent_file()
+        return ti.files().num_files() if ti is not None else 0
+
     def file_paths(self) -> list[str]:
         """Every file path in the torrent, or [] before metadata arrives."""
         ti = self._h.torrent_file()
@@ -1033,6 +1044,9 @@ class Engine:
                 # Every file this torrent holds something of. One card per torrent could not
                 # account for a pack whose episodes arrived from different places.
                 "files": h.file_stats(),
+                # How many files it has in total. Without it, one entry in `files` is ambiguous:
+                # a film, or a season pack with a single episode selected.
+                "numFiles": h.num_files(),
                 # Bytes still to arrive for what is wanted. Space that is spoken for but not yet
                 # written, which is invisible in a `df` and in the cache total alike.
                 "remaining": self._remaining_bytes(h),

@@ -558,11 +558,35 @@ def test_the_card_states_both_completeness_and_keptness():
 
 
 def test_a_release_that_cannot_fit_is_refused():
-    """No room on the disk is the only case that disables the button."""
+    """No room on the DISK is the only case that disables the button."""
     src = _fits_src()
-    b = "{diskFree: 60e9, cacheUsed: 0, cacheSize: 19327352832}"
+    b = "{diskFree: 60e9, diskTotal: 80e9, cacheUsed: 0, cacheSize: 19327352832}"
     assert _run_js(src, f"sizeVerdict(4.5e9, {b})") == "ok"
-    assert _run_js(src, f"sizeVerdict(45e9, {b})") == "nodisk"
+    assert _run_js(src, f"sizeVerdict(59e9, {b})") == "nodisk"
+
+
+def test_the_download_gate_does_not_reserve_the_cache_budget_the_way_a_pin_does():
+    """It applied pins.pin_fits: free space must exceed the release PLUS the whole budget and ten
+    percent. That is right for a PIN, which can never be evicted and therefore has to leave the
+    entire budget free beside it for ordinary streaming. Applied to a download -- ordinary
+    evictable cache since the want/pin split -- a 48 GiB budget demanded ~56.7 GB free ON TOP of
+    the release, so a 10 GB file was greyed out on a box with 61 GB free.
+    """
+    src = _fits_src()
+    b = "{diskFree: 61e9, diskTotal: 72e9, cacheUsed: 30e9, cacheSize: 51539607552}"
+    assert _run_js(src, f"sizeVerdict(10e9, {b})") != "nodisk"
+    # The reserve is real, though: a release that would leave the disk bare is still refused.
+    assert _run_js(src, f"sizeVerdict(60e9, {b})") == "nodisk"
+
+
+def test_the_reserve_scales_with_the_disk():
+    """A flat floor is too little to hold back on a large disk and too much on a small one, so it
+    is the larger of the two. Nothing fits when free space is already inside it."""
+    src = _fits_src()
+    big = "{diskFree: 30e9, diskTotal: 2e12, cacheUsed: 0, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(0, {big})") == "nodisk"      # 2% of 2 TB is 40 GB
+    small = "{diskFree: 30e9, diskTotal: 40e9, cacheUsed: 0, cacheSize: 19327352832}"
+    assert _run_js(src, f"sizeVerdict(1e9, {small})") == "ok"      # 2% of 40 GB is under the floor
 
 
 def test_a_release_that_overruns_the_budget_is_offered_with_a_warning():
@@ -641,10 +665,12 @@ def test_a_download_already_running_is_counted_against_the_next_one():
     the next download on those alone approves things there will be no room for once everything
     already in flight has finished -- which is exactly when the owner would find out."""
     src = _fits_src()
-    # 30 GB free, 18 GiB budget, 25 GB already promised to a download in progress.
-    busy = "{diskFree: 30e9, cacheUsed: 2e9, committed: 25e9, cacheSize: 19327352832}"
+    # 30 GB free, 18 GiB budget, 29 GB already promised to a download in progress.
+    busy = ("{diskFree: 30e9, diskTotal: 120e9, cacheUsed: 2e9, committed: 29e9,"
+            " cacheSize: 19327352832}")
     assert _run_js(src, f"sizeVerdict(2e9, {busy})") == "nodisk"
-    idle = "{diskFree: 30e9, cacheUsed: 2e9, committed: 0, cacheSize: 19327352832}"
+    idle = ("{diskFree: 30e9, diskTotal: 120e9, cacheUsed: 2e9, committed: 0,"
+            " cacheSize: 19327352832}")
     assert _run_js(src, f"sizeVerdict(2e9, {idle})") == "ok"
 
 
@@ -653,6 +679,75 @@ def test_committed_bytes_also_count_against_the_budget():
     src = _fits_src()
     b = "{diskFree: 200e9, cacheUsed: 2e9, committed: 15e9, cacheSize: 19327352832}"
     assert _run_js(src, f"sizeVerdict(4e9, {b})") == "overbudget"
+
+
+_RELFILE_SRC = re.compile(r"(const releaseFile = [\s\S]*?\n  \};)")
+_EPRE_SRC = re.compile(r"(const EPISODE_RE = [^\n]*)")
+
+
+def _release_file_src():
+    page = _page()
+    ep, rf = _EPRE_SRC.search(page), _RELFILE_SRC.search(page)
+    assert ep and rf, "releaseFile not found in the page"
+    return ep.group(1) + "\n" + rf.group(1)
+
+
+# Episode 5 is being fetched; episode 6 has boundary spill from it and nothing has asked for it;
+# episode 7 is not on this disk at all. All three live in ONE torrent.
+_PACK = ("{numFiles: 9, files: ["
+         "{index: 4, name: 'Show.S01E05.mkv', progress: 0.3, wanted: true},"
+         "{index: 5, name: 'Show.S01E06.mkv', progress: 0.01, wanted: false}]}")
+
+
+def test_a_release_inside_a_busy_torrent_is_still_offered():
+    """A pack is ONE infohash, so a button keyed on torrent identity showed whatever that torrent
+    was doing: with episode 5 downloading, every OTHER episode of the pack read "Downloading" and
+    was disabled. Nothing had asked for those files -- the torrent was busy, the episode was not.
+    """
+    src = _release_file_src()
+    assert _run_js(src, f"releaseFile({_PACK}, {{}}, {{season:1, episode:5}}).index") == 4
+    assert _run_js(src, f"releaseFile({_PACK}, {{}}, {{season:1, episode:6}}).wanted") is False
+    # Held in no sense at all: this torrent's business is not this release's state.
+    assert _run_js(src, f"releaseFile({_PACK}, {{}}, {{season:1, episode:7}})") is None
+
+
+def test_an_explicit_fileidx_decides_before_the_episode_number():
+    """An addon that points at one file inside a pack has said which; guessing from the episode
+    number over the top of that would be second-guessing the only authority there is."""
+    src = _release_file_src()
+    assert _run_js(src, f"releaseFile({_PACK}, {{fileIdx: 5}}, {{season:1, episode:5}}).index") == 5
+    assert _run_js(src, f"releaseFile({_PACK}, {{fileIdx: 8}}, {{}})") is None
+
+
+def test_a_single_file_torrent_needs_no_matching():
+    """That file IS the release. The length of `files` cannot say so on its own -- a pack with one
+    episode selected also reports one file -- which is why the torrent's file count travels."""
+    src = _release_file_src()
+    movie = "{numFiles: 1, files: [{index: 0, name: 'Film.mkv', progress: 1, wanted: true}]}"
+    assert _run_js(src, f"releaseFile({movie}, {{}}, {{}}).index") == 0
+
+
+def test_a_torrent_with_no_per_file_record_falls_back_to_itself():
+    """Nothing in the session knows this torrent's files -- after a restart, say. Answering "not
+    held" would offer a re-download of something already on the disk."""
+    src = _release_file_src()
+    assert _run_js(src, "releaseFile({files: []}, {}, {season:1, episode:5}) === undefined") is True
+
+
+def test_the_release_button_states_the_file_not_the_torrent():
+    page = _page()
+    assert "const part = entry ? releaseFile(entry, st, want) : undefined;" in page
+    assert "mine.state === 'downloading'" not in page, "the button still reads the torrent's state"
+
+
+def test_keep_on_a_release_pins_instead_of_downloading_it_again():
+    """Since the want/pin split a download does not pin, so a button labelled Keep that called the
+    download route kept nothing at all -- it wanted a file already on disk. Both surfaces go
+    through one keepTitle now, which is also the only copy of the 409 handling."""
+    page = _page()
+    assert "async function keepTitle(" in page
+    assert "data-keep-hash=" in page
+    assert "keepTitle(btn.dataset.keepHash, false)" in page
 
 
 def test_a_refused_or_warned_button_explains_itself_on_hover():

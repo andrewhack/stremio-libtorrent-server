@@ -184,6 +184,36 @@ def test_engine_pinned_status_reports_the_fields_the_ui_needs():
     assert "st.download_rate" in src and "st.num_seeds" in src
 
 
+def test_an_entry_carries_the_torrents_files_and_its_file_count(tmp_path):
+    """`children` is the subset worth drawing as a card -- it drops boundary spill, and it is not
+    built at all for a pack with a single episode in flight. The release list needs the facts
+    underneath it: which files this torrent holds or wants, and how many it has in all. Without
+    the count, one file in the list is ambiguous -- a film, or a pack with one episode selected.
+    """
+    _seed_cache(tmp_path, "Some.Pack")
+    eng = FakeEngine(
+        names={"Some.Pack": "b" * 40},
+        pinned=[{"infoHash": "b" * 40, "pinned": False, "progress": 0.3, "numFiles": 9,
+                 "files": [{"index": 4, "name": "S01E05.mkv", "size": 10, "downloaded": 3,
+                            "progress": 0.3, "wanted": True}]}],
+    )
+    e = state.build(str(tmp_path), eng)["entries"][0]
+    assert e["numFiles"] == 9
+    assert [f["index"] for f in e["files"]] == [4]
+    # one file, no scraps: no cards to draw, and the facts are still there
+    assert "children" not in e
+
+
+def test_a_download_with_nothing_on_disk_yet_still_carries_its_files(tmp_path):
+    """This is the moment the release list matters most: the click has happened, the bytes have
+    not arrived, and the button for the NEXT episode must not inherit this one's state."""
+    eng = FakeEngine(pinned=[{"infoHash": "c" * 40, "state": "downloading", "numFiles": 9,
+                              "files": [{"index": 4, "name": "S01E05.mkv", "size": 10,
+                                         "downloaded": 0, "progress": 0.0, "wanted": True}]}])
+    e = state.build(str(tmp_path), eng)["entries"][0]
+    assert e["numFiles"] == 9 and [f["index"] for f in e["files"]] == [4]
+
+
 def test_a_pack_holding_several_episodes_lists_them(tmp_path):
     """One entry per torrent could not account for a pack: download one episode through the
     library, let the player stream another, and the second one is invisible while its bytes sit on
