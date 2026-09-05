@@ -684,6 +684,40 @@ def test_arming_a_second_button_disarms_the_first():
     assert got["aAgain"] is False, "a stale armed button removed on one tap"
 
 
+def test_an_arm_survives_the_card_list_being_rebuilt():
+    """The list is rebuilt every few seconds by the poll, replacing the very button that was
+    armed. Keyed on identity alone, the owner taps, sees the prompt, and watches it revert while
+    looking at it -- and the confirm they came for cannot be completed."""
+    src = _arm_src()
+    got = _run_js(src, """(() => {
+      const before = {dataset:{remove:'abc'}, textContent:'\\u00d7', title:''};
+      const first = armOrConfirmRemove(before, true);
+      const after = {dataset:{remove:'abc'}, textContent:'\\u00d7', title:''};  // the poll rebuilt it
+      restoreArmed(after);
+      return {first, repainted: after.dataset.armed === '1', label: after.textContent,
+              confirmed: armOrConfirmRemove(after, true)};
+    })()""")
+    assert got["first"] is False
+    assert got["repainted"] is True and got["label"] == "?", "the rebuilt button lost its arming"
+    assert got["confirmed"] is True, "the second tap did not remove after a rebuild"
+
+
+def test_an_arm_expires():
+    """It disarms after REMOVE_ARM_MS. A stale arm means a later single tap deletes something the
+    owner armed minutes ago and forgot about."""
+    src = _arm_src()
+    got = _run_js(src, """(() => {
+      const b = {dataset:{remove:'abc'}, textContent:'\\u00d7', title:''};
+      armOrConfirmRemove(b, true);
+      const real = Date.now;
+      Date.now = () => real() + REMOVE_ARM_MS + 1;      // the window has passed
+      const stale = armOrConfirmRemove(b, true);
+      Date.now = real;
+      return {stale};
+    })()""")
+    assert got["stale"] is False, "an expired arm removed on a single tap"
+
+
 def test_the_sign_in_panel_links_to_the_player_rather_than_describing_it():
     """On a shared-cert box the panel cannot offer a password, so it sends the owner to the player
     to sign in there. It used to say "on this address" and leave them to construct it -- and the
