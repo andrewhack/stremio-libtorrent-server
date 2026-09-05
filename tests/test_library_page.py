@@ -630,6 +630,60 @@ def test_a_release_size_is_read_from_the_text_when_the_addon_omits_the_field():
     assert _run_js(src, "releaseSize({description:'no size here'})") == 0
 
 
+_ARM_SRC = re.compile(r"(const REMOVE_ARM_MS = [\s\S]*?return false;\n  \})")
+
+
+def _arm_src():
+    m = _ARM_SRC.search(_page())
+    assert m, "armOrConfirmRemove not found in the page"
+    return m.group(1)
+
+
+_BTN = "const b = {dataset:{}, textContent:'\\u00d7', title:'Remove'};"
+
+
+def test_a_mouse_still_removes_on_one_click():
+    """The confirm exists because the button became permanently VISIBLE on touch. Where it was
+    never hidden in the first place, nothing about the risk changed, so nothing about the
+    behaviour should."""
+    src = _arm_src()
+    assert _run_js(src, f"(() => {{ {_BTN} return armOrConfirmRemove(b, false); }})()") is True
+
+
+def test_touch_arms_before_it_removes():
+    """An always-visible delete button under a thumb, firing on first tap, would make accidental
+    deletion MORE likely than the invisible one it replaces."""
+    src = _arm_src()
+    got = _run_js(src, f"""(() => {{
+      {_BTN}
+      const first = armOrConfirmRemove(b, true);
+      const armed = b.dataset.armed === '1', label = b.textContent;
+      const second = armOrConfirmRemove(b, true);
+      return {{first, armed, label, second, cleared: b.dataset.armed ?? null}};
+    }})()""")
+    assert got["first"] is False, "the first tap removed something"
+    assert got["armed"] is True and got["label"] == "?"
+    assert got["second"] is True, "the second tap did not remove"
+    assert got["cleared"] is None, "the button stayed armed after removing"
+
+
+def test_arming_a_second_button_disarms_the_first():
+    """Otherwise two armed buttons sit on screen and the next tap anywhere removes something the
+    owner armed a minute ago and forgot."""
+    src = _arm_src()
+    got = _run_js(src, """(() => {
+      const a = {dataset:{}, textContent:'x', title:''};
+      const c = {dataset:{}, textContent:'x', title:''};
+      armOrConfirmRemove(a, true);
+      armOrConfirmRemove(c, true);
+      return {aArmed: a.dataset.armed ?? null, cArmed: c.dataset.armed ?? null,
+               aAgain: armOrConfirmRemove(a, true)};
+    })()""")
+    assert got["aArmed"] is None, "the first button stayed armed"
+    assert got["cArmed"] == "1"
+    assert got["aAgain"] is False, "a stale armed button removed on one tap"
+
+
 def test_the_sign_in_panel_links_to_the_player_rather_than_describing_it():
     """On a shared-cert box the panel cannot offer a password, so it sends the owner to the player
     to sign in there. It used to say "on this address" and leave them to construct it -- and the

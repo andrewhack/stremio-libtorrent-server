@@ -409,6 +409,38 @@ const LIB = (() => {
 
   const EMPTY = '<p class="note">Nothing here yet.</p>';
 
+  // Remove is revealed by :hover, so on a touch device it never appears at all -- while still
+  // occupying its box, which makes a stray tap on an invisible delete button possible. The CSS
+  // below reveals it where there is no hover; revealing it is what makes this necessary. A
+  // permanently visible delete control on a small card under a thumb, firing on the first tap,
+  // would be more dangerous than the invisible one it replaces. So on touch it arms first and
+  // commits second. A pointer that can hover keeps one click: nothing about its risk changed.
+  const REMOVE_ARM_MS = 3000;
+  let armedRemove = null, armedTimer = null;
+
+  function disarmRemove() {
+    clearTimeout(armedTimer);
+    armedTimer = null;
+    if (armedRemove) {
+      delete armedRemove.dataset.armed;
+      armedRemove.textContent = '×';
+      armedRemove.title = 'Remove';
+      armedRemove = null;
+    }
+  }
+
+  function armOrConfirmRemove(btn, touch) {
+    if (!touch) return true;
+    if (armedRemove === btn) { disarmRemove(); return true; }
+    disarmRemove();                       // never leave a second button armed behind us
+    armedRemove = btn;
+    btn.dataset.armed = '1';
+    btn.textContent = '?';
+    btn.title = 'Tap again to remove';
+    armedTimer = setTimeout(disarmRemove, REMOVE_ARM_MS);
+    return false;
+  }
+
   function render(data) {
     lastState = data;
     const entries = withClientLabels(data.entries);
@@ -448,6 +480,9 @@ const LIB = (() => {
     document.querySelectorAll('[data-remove]').forEach(btn => {
       btn.onclick = async () => {
         if (!btn.dataset.remove) return;
+        // Read the capability at click time, not at load: `hover: none` is what makes the button
+        // visible, so it is also what decides whether it needs confirming.
+        if (!armOrConfirmRemove(btn, window.matchMedia('(hover: none)').matches)) return;
         btn.disabled = true;
         await api('/library/api/remove', { method: 'POST',
           body: JSON.stringify({ infoHash: btn.dataset.remove }) });
