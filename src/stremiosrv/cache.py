@@ -17,6 +17,7 @@ import time
 import uuid
 
 from stremiosrv import pins as pinsmod
+from stremiosrv import wanted as wantedmod
 
 logger = logging.getLogger("stremiosrv.cache")
 
@@ -315,8 +316,111 @@ def evict_once(root: str, budget: int, engine=None, grace: int = 300) -> dict:
     return {"before": total, "after": total - sum(d["size"] for d in deleted), "deleted": deleted}
 
 
-def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: int = 300) -> None:
-    """Background loop: evict over-budget cache every `interval` seconds. Runs forever."""
+# --- fast-resume records ------------------------------------------------------------------------
+# `.resume/<infohash>.fastresume` outlives the data it describes, and that is deliberate: the record
+# carries the torrent's info-dict, so re-adding an evicted title gets its file list without a
+# metadata round trip to the swarm (a record read back into an offline session still reports
+# has_metadata). Eviction therefore deletes the data and the partfile but not this. What was missing
+# is a bound: on a live box 138 of 141 records described titles that had left the cache months
+# earlier, and `index.json` had grown in lockstep. Hence a year, not a week -- this caps the
+# directory, it does not tidy it.
+RESUME_DIR = ".resume"
+RESUME_SUFFIX = ".fastresume"
+# A `<hash>.fastresume.tmp` is renamed into place in the same breath it is written. One still there
+# a day later is a write that raised before os.replace, and nothing else reclaims it.
+_TMP_MAX_AGE = 86400.0
+
+
+def claimed_hashes(root: str) -> set[str]:
+    """Infohashes something on this server still claims: data in the cache, a keep, or a download
+    that wants it. Membership exempts a record from the sweep at any age."""
+    try:
+        on_disk = set(os.listdir(root))
+    except OSError:
+        on_disk = set()
+    claimed = {str(h).lower() for n, h in load_name_index(root).items() if h and n in on_disk}
+    claimed |= pinsmod.pinned_hashes(root)
+    claimed |= set(wantedmod.load(root))
+    return claimed
+
+
+def _prune_name_index(root: str, claimed: set[str]) -> int:
+    """Drop index entries that name nothing on disk and describe no surviving record.
+
+    The index is rewritten whenever resume data is saved, so an entry dropped from under a live
+    torrent is back within one save interval. What it must not do is outlive the records it indexes.
+    """
+    idx = load_name_index(root)
+    if not idx:
+        return 0
+    try:
+        on_disk = set(os.listdir(root))
+    except OSError:
+        return 0
+    d = os.path.join(root, RESUME_DIR)
+    keep = {n: h for n, h in idx.items()
+            if n in on_disk or str(h).lower() in claimed
+            or os.path.exists(os.path.join(d, str(h).lower() + RESUME_SUFFIX))}
+    dropped = len(idx) - len(keep)
+    if dropped:
+        save_name_index(root, keep)
+    return dropped
+
+
+def sweep_resume(root: str, max_age_days: int = 365, now: float | None = None) -> dict:
+    """Retire fast-resume records nothing claims any more. `max_age_days=0` disables the sweep.
+
+    Two steps, and their order is the whole design. Anything claimed is exempt regardless of age;
+    only what nothing claims is aged out. Age-first would be wrong rather than merely cruder: a
+    title sitting in the cache but not loaded in the session has a record as stale as any orphan's
+    -- only pinned and wanted torrents are re-added at startup -- so age alone would delete exactly
+    the metadata most likely to be needed next.
+    """
+    out = {"removed": 0, "kept": 0, "claimed": 0, "tmp": 0, "indexPruned": 0}
+    if max_age_days <= 0:
+        return {**out, "disabled": True}
+    now = time.time() if now is None else now
+    cutoff = now - max_age_days * 86400.0
+    d = os.path.join(root, RESUME_DIR)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return out
+    claimed = claimed_hashes(root)
+    for name in names:
+        path = os.path.join(d, name)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if name.endswith(".tmp"):
+            if mtime < now - _TMP_MAX_AGE:
+                _remove(path)
+                out["tmp"] += 1
+            continue
+        # index.json and trackers.remote live here too, and neither is ours to age out.
+        if not name.endswith(RESUME_SUFFIX):
+            continue
+        if name[:-len(RESUME_SUFFIX)].lower() in claimed:
+            out["claimed"] += 1
+        elif mtime < cutoff:
+            _remove(path)
+            out["removed"] += 1
+        else:
+            out["kept"] += 1
+    out["indexPruned"] = _prune_name_index(root, claimed)
+    return out
+
+
+def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: int = 300,
+                resume_retention_days: int = 365, resume_sweep_interval: float = 86400.0,
+                ) -> None:
+    """Background loop: evict over-budget cache every `interval` seconds. Runs forever.
+
+    It also sweeps `.resume` once a day, from inside this loop rather than a thread of its
+    own so that it inherits the cache-root claim below: deleting another server's resume
+    records is the same class of harm as evicting its data."""
+    next_sweep = 0.0
     if not logger.handlers:  # ensure visibility (uvicorn doesn't surface our INFO logs by default)
         h = logging.StreamHandler()
         h.setFormatter(logging.Formatter("%(asctime)s [cache] %(message)s"))
@@ -352,6 +456,19 @@ def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: 
         if blocked:
             logger.info("cache root %s is free again — resuming eviction", root)
             blocked = False
+        if resume_retention_days > 0 and time.time() >= next_sweep:
+            next_sweep = time.time() + resume_sweep_interval
+            try:
+                r = sweep_resume(root, resume_retention_days)
+                if r["removed"] or r["tmp"] or r["indexPruned"]:
+                    logger.info(
+                        "swept .resume: %d record(s) older than %dd, %d failed write(s), "
+                        "%d stale index entr(ies); kept %d claimed + %d recent",
+                        r["removed"], resume_retention_days, r["tmp"], r["indexPruned"],
+                        r["claimed"], r["kept"],
+                    )
+            except Exception:
+                logger.exception("resume sweep failed")
         try:
             res = evict_once(root, budget, engine, grace)
             if res["deleted"]:

@@ -83,6 +83,7 @@ Sizes and rates accept units (`64GiB`, `512MiB`) as well as plain byte counts. `
 | `STREMIOSRV_CACHE_ROOT` | `/root/.stremio-server` | download/transcode cache |
 | `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | download-cache budget in bytes; keep it **above your largest file** |
 | `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | seconds a served torrent is safe from eviction |
+| `STREMIOSRV_RESUME_RETENTION_DAYS` | `365` | days an *unclaimed* fast-resume record is kept (0 = forever) |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | libtorrent connection cap |
 | `STREMIOSRV_TRANSCODE_PROFILE` | autodetect | force a HW profile |
 

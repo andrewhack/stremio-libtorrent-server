@@ -230,7 +230,8 @@ def build_app() -> FastAPI:
     threading.Thread(
         target=run_evictor,
         args=(settings.cache_root, settings.cache_size, engine),
-        kwargs={"interval": settings.cache_evict_interval, "grace": settings.cache_evict_grace},
+        kwargs={"interval": settings.cache_evict_interval, "grace": settings.cache_evict_grace,
+                "resume_retention_days": settings.resume_retention_days},
         daemon=True,
     ).start()
     # ...and the same for transcode output, which the evictor is forbidden to reclaim.

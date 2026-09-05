@@ -173,6 +173,7 @@ Everything is a plain `-e NAME=value` environment variable:
 | `SERVER_URL` | auto | URL the web player targets. Set for a custom domain. |
 | `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | Download-cache budget in bytes (LRU-evicted). Keep it **above your largest file**. |
 | `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | Seconds a torrent stays safe from eviction after it was last served. Raise it if a player buffers long enough between range requests that the title being watched ages out. |
+| `STREMIOSRV_RESUME_RETENTION_DAYS` | `365` | How long a fast-resume record is kept for a title that has left the cache. The record carries the torrent's metadata, so re-playing an evicted title starts without fetching it from the swarm again — this only bounds the directory. A title still cached, kept, or downloading is exempt at any age. `0` keeps everything. |
 | `STREMIOSRV_TRANSCODE_GC_INTERVAL` | `300` | Seconds between sweeps of `transcode/`, where HLS segments land. That directory is exempt from cache eviction, so this is the only thing that reclaims it. |
 | `STREMIOSRV_TRANSCODE_GC_MAX_AGE` | `600` | Grace before an *unclaimed* transcode directory is deleted. A job with a live `ffmpeg` is kept no matter how old. Raise it only if you pause transcoded playback for long stretches. |
 | `STREMIOSRV_READAHEAD_BYTES` | `268435456` (256 MiB) | Playhead buffer — bigger absorbs more swarm jitter (fewer rebuffers). |

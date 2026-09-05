@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     stream_piece_timeout: float = 30.0
     stream_first_piece_timeout: float = 120.0
     resume_save_interval: int = 30  # seconds between periodic fast-resume saves (survives ungraceful stop)
+    # How long a fast-resume record outlives the data it describes. It is kept long past
+    # eviction on purpose -- it carries the torrent's info-dict, so re-adding an evicted title
+    # skips the metadata fetch -- so this is an upper bound on an unclaimed record rather than
+    # a retention target. Cached, kept and wanted torrents are exempt at any age. 0 disables it.
+    resume_retention_days: int = 365
     transcode_profile: str | None = None  # set by HW autodetect (later stage)
     # Transcode output GC. HLS segments live in <cache_root>/transcode, which the evictor is
     # forbidden to touch (it is in cache.PROTECTED), so nothing but this reclaims them. At
