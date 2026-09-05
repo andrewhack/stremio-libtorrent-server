@@ -16,6 +16,10 @@ def test_ids_that_are_not_ours_or_are_malformed_are_refused():
     assert am.parse_id("stremiosrv:../../etc/passwd") is None
     assert am.parse_id("stremiosrv:" + "z" * 40) is None
     assert am.parse_id(f"stremiosrv:{IH}:notanumber") is None
+    # str.isdigit() is true for these and int() then raises -- the boundary must return None,
+    # not throw, or the route in front of it answers 500 where it should answer 404.
+    assert am.parse_id(f"stremiosrv:{IH}:²") is None
+    assert am.parse_id(f"stremiosrv:{IH}:③") is None
 
 
 def test_the_manifest_declares_one_other_catalog_and_our_id_prefixes():

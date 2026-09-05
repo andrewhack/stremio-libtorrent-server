@@ -36,7 +36,10 @@ def parse_id(value: str) -> tuple[str, int | None] | None:
         return None
     if not idx:
         return ih, None
-    if not idx.isdigit():
+    # isdecimal() matches what int() will accept (0-9 only), unlike isdigit() which is true for
+    # Unicode digits like ² and ③ that cause int() to raise ValueError. The contract is to return
+    # None for malformed input, not raise, so the boundary rejects anything int() won't decode.
+    if not idx.isdecimal():
         return None
     return ih, int(idx)
 
