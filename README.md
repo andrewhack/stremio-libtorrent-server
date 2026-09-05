@@ -28,6 +28,7 @@ No subscription. No tracking. No black box. **100% free and open — our gift to
 - **🎛️ Truly yours to control.** Real dials for cache, buffering, peers, and transcode — tune deeply, or never touch a thing.
 - **🖥️ Hardware transcode, optional.** Intel **VAAPI** / NVIDIA **NVENC** when you expose a GPU to the container (opt-in — see [Advanced](#-advanced--tune-it-your-way)), with graceful CPU fallback — and a missing GPU never stops it from starting.
 - **🧩 Your addons, your choice.** It's **neutral infrastructure**: it streams whatever a Stremio addon hands it. It bundles no content and is not a source.
+- **📚 A real torrent client, if you want one.** Turn on the optional library page and the server stops being a passthrough: queue a download before you sit down, see which episodes of a pack are actually on the disk, and keep the ones you want protected from the cache evictor — and it seeds what it keeps, like any decent client should. Off by default; set `STREMIOSRV_LIBRARY_UI=true` to try it.
 - **🔓 Open source.** Read it, change it, trust it.
 
 ---

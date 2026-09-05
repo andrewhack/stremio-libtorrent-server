@@ -358,11 +358,25 @@ const LIB = (() => {
   // -- a title played to the end by the player showed only its size, so it read as unfinished.
   const stateWord = e => (isComplete(e) ? 'complete' : 'partial') + ', ' + keptWord(e);
 
+  // What this title is giving back, when it is giving anything back. Silent at zero on purpose:
+  // uploadSpeed is 0 both for a loaded torrent nobody is pulling from AND for an entry with no
+  // engine record at all, which after a restart is most of the cache. `0 B/s` would report the
+  // second as the first.
+  const upSuffix = e => (e.uploadSpeed > 0 ? ' · ↑ ' + fmt(e.uploadSpeed) + '/s' : '');
+
+  // The progress row. Painted from two places -- the card, and the tick that refreshes speeds
+  // between rebuilds -- which built the same string separately until one of them gained an upload
+  // rate and the other did not.
+  const busyLine = e => pct(e) + '%'
+    + (e.downloadSpeed ? ' · ↓ ' + fmt(e.downloadSpeed) + '/s' : '')
+    + upSuffix(e)
+    + ' · ' + (e.seeds || 0) + ' seeders';
+
   const subLine = e => {
     if (e.peers === 0 && e.progress < 1) return 'no seeds';
-    if (e.size) return fmt(e.size) + ' · ' + stateWord(e);
-    return e.state === 'seeding' ? 'seeding · ' + keptWord(e)
-                                 : (e.pinned ? 'kept' : 'size unknown');
+    if (e.size) return fmt(e.size) + ' · ' + stateWord(e) + upSuffix(e);
+    return (e.state === 'seeding' ? 'seeding · ' + keptWord(e)
+                                  : (e.pinned ? 'kept' : 'size unknown')) + upSuffix(e);
   };
 
   // The release a card came from. Shown wherever it adds something the title does not already
@@ -422,11 +436,7 @@ const LIB = (() => {
           e.pinned ? 'Kept: the evictor may not reclaim this. Click to stop keeping it.'
                    : 'Cached: the evictor may reclaim this. Click to keep it.'
         }">${e.pinned ? 'Kept' : 'Keep'}</button>` : ''}
-      ${downloading
-        ? `<div class="sub">${esc(String(Math.round(pct(e))) + '%'
-             + (e.downloadSpeed ? ' - ' + fmt(e.downloadSpeed) + '/s' : '')
-             + ' - ' + String(e.seeds || 0) + ' seeders')}</div>`
-        : `<div class="sub">${esc(subLine(e))}</div>`}
+      <div class="sub">${esc(downloading ? busyLine(e) : subLine(e))}</div>
       ${releaseHtml(e, title)}
       ${childrenHtml(e)}
     </div>`;
@@ -1003,10 +1013,11 @@ const LIB = (() => {
     document.querySelectorAll('#titles .card, #downloading .card').forEach(card => {
       const e = byHash[(card.dataset.infohash || '').toLowerCase()];
       const sub = e && card.querySelector('.sub');
-      if (!e || !sub || e.state !== 'downloading') return;
-      sub.textContent = Math.round((e.progress || 0) * 100) + '%'
-        + (e.downloadSpeed ? ' - ' + fmt(e.downloadSpeed) + '/s' : '')
-        + ' - ' + (e.seeds || 0) + ' seeders';
+      // Not only while downloading: a seeding title's upload rate has to move between polls too,
+      // and painting it once and never again is worse than not painting it -- a stale rate looks
+      // live.
+      if (!e || !sub) return;
+      sub.textContent = e.state === 'downloading' ? busyLine(e) : subLine(e);
     });
     document.querySelectorAll('#continue .card, #catalogs .card').forEach(card => {
       const id = card.dataset.metaid;

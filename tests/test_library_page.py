@@ -381,7 +381,14 @@ def test_speed_and_seeders_update_between_polls():
     nxt = min(x for x in (page.find(chr(10) + "  function ", start + 10),
                           page.find(chr(10) + "  async function ", start + 10)) if x > 0)
     body = page[start:nxt]
-    assert "downloadSpeed" in body and "seeders" in body
+    # This used to look for the literals `downloadSpeed` and `seeders` here. They were an
+    # implementation detail: the row is built by `busyLine` now, shared with the card so the two
+    # cannot drift, and the literals moved with it. What matters is that the poll still writes the
+    # sub-line -- and that it no longer skips a title that has FINISHED, which would freeze a
+    # seeding title's upload rate at whatever it happened to read once.
+    assert "sub.textContent" in body
+    assert "busyLine(e)" in body and "subLine(e)" in body
+    assert "e.state !== 'downloading'" not in body, "the tick skips seeding titles again"
 
 
 def test_cards_carry_their_infohash_for_in_place_updates():
@@ -458,7 +465,7 @@ const out = items
   .map(i => i._id);
 console.log(JSON.stringify(out));
 """
-    r = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([node, "-e", harness], capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -517,8 +524,11 @@ def _run_js(src, expr):
     node = shutil.which("node")
     if not node:
         pytest.skip("node not available")
+    # encoding, explicitly: node writes UTF-8 and `text=True` alone decodes with the platform
+    # locale, which on Windows mangles anything outside cp1252. Nothing returned non-ASCII until a
+    # rate line arrived carrying arrows, and then the assertion failed on correct output.
     r = subprocess.run([node, "-e", f"{src}\nconsole.log(JSON.stringify({expr}));"],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -716,6 +726,65 @@ def test_an_arm_expires():
       return {stale};
     })()""")
     assert got["stale"] is False, "an expired arm removed on a single tap"
+
+
+_SPEED_SRC = re.compile(r"(const upSuffix = [\s\S]*?\n  \};)")
+
+
+_FMT_SRC = re.compile(r"(const fmt = b => \{[\s\S]*?\n  \};)")
+# One-liners, taken whole-line. An earlier version of this tried to match them with the same
+# open-ended pattern as `fmt` and truncated `fmt` before its closing brace, which node reported as
+# "Unexpected end of input" -- a broken harness masquerading as a broken feature.
+_ONE_LINERS = ("const pct = ", "const isComplete = ", "const keptWord = ", "const stateWord = ")
+
+
+def _speed_src():
+    """upSuffix, busyLine and subLine — the three that paint a rate, lifted out together because
+    the last two both call the first, plus the helpers they lean on so the block runs standalone."""
+    page = _page()
+    m = _SPEED_SRC.search(page)
+    assert m, "upSuffix not found in the page"
+    fm = _FMT_SRC.search(page)
+    assert fm, "fmt not found in the page"
+    parts = [fm.group(1)]
+    for name in _ONE_LINERS:
+        i = page.index(name)
+        parts.append(page[i:page.index("\n", i)])
+    parts.append(m.group(1))
+    return "\n".join(parts)
+
+
+def test_a_seeding_title_shows_what_it_is_giving_back():
+    """Both places that painted a rate were gated on `state === 'downloading'`, so a title that had
+    finished and was seeding said nothing at all about its upload."""
+    src = _speed_src()
+    e = "{size: 4.5e9, state:'seeding', progress:1, pinned:true, peers:3, uploadSpeed: 1258291}"
+    got = _run_js(src, f"subLine({e})")
+    assert "\u2191" in got and "1.2 MB/s" in got, got
+    assert "complete, kept" in got
+
+
+def test_nothing_is_claimed_when_nobody_is_pulling():
+    """uploadSpeed is 0 both when a loaded torrent is idle AND when the entry has no engine record
+    at all -- after a restart, most of the cache. Printing `0 B/s` would report the second as the
+    first."""
+    src = _speed_src()
+    idle = "{size: 4.5e9, state:'seeding', progress:1, pinned:true, peers:3, uploadSpeed: 0}"
+    unloaded = "{size: 4.5e9, state:'idle', progress:1, pinned:false, peers:0}"
+    assert "\u2191" not in _run_js(src, f"subLine({idle})")
+    assert "\u2191" not in _run_js(src, f"subLine({unloaded})")
+
+
+def test_a_downloading_title_shows_both_directions_apart():
+    """A torrent downloads and uploads at once. Two bare rates in one line cannot be told apart, so
+    both take an arrow."""
+    src = _speed_src()
+    e = ("{progress: 0.45, state:'downloading', downloadSpeed: 3355443, uploadSpeed: 1153434,"
+         " seeds: 6}")
+    got = _run_js(src, f"busyLine({e})")
+    assert "45%" in got and "6 seeders" in got
+    assert "\u2193 3.2 MB/s" in got, got
+    assert "\u2191 1.1 MB/s" in got, got
 
 
 def test_the_sign_in_panel_links_to_the_player_rather_than_describing_it():
