@@ -217,6 +217,10 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "mtime": 0, "pinned": False, "progress": 0.0, "state": "idle", "peers": 0,
             "seeds": 0, "downloadSpeed": 0,
             "uploaded": 0, "ratio": 0.0, "uploadSpeed": 0, "label": None, "removable": True,
+            # Not a title: there is no torrent and no file, only leftover piece data. The page
+            # still shows it (it is real disk), but anything that offers something to PLAY has to
+            # be able to skip it without matching on the display name.
+            "kind": "orphan",
         })
 
     # cache.usage already reports the budget as `cacheSize`; adding a second key for it would give

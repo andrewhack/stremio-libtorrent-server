@@ -1,5 +1,6 @@
 from stremiosrv import cache as cachemod
 from stremiosrv.library import labels, session, state
+from stremiosrv.library import state as statemod
 
 
 class FakeEngine:
@@ -404,3 +405,14 @@ def test_the_budget_reports_what_downloads_have_already_claimed(tmp_path):
 
     out = st.build(str(tmp_path), Eng(), budget=1)
     assert out["budget"]["committed"] == 2_500_000_000
+
+
+def test_orphan_partfiles_are_marked_as_such(tmp_path):
+    """A `.parts` file whose torrent is gone is real disk usage and the page shows it, but there is
+    nothing to play, so anything offering titles needs a predicate that is not a name match."""
+    ih = "a" * 40
+    (tmp_path / f".{ih}.parts").write_bytes(b"x" * 2048)
+    out = statemod.build(str(tmp_path), engine=None, budget=0)
+    orphans = [e for e in out["entries"] if e.get("kind") == "orphan"]
+    assert len(orphans) == 1
+    assert orphans[0]["infoHash"] == ih
