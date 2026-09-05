@@ -97,3 +97,55 @@ def test_orphan_partfiles_and_entries_without_an_infohash_are_not_offered():
     ]}
     items = am.catalog(state)
     assert [i["name"] for i in items] == ["Sample Title"]
+
+
+ORIGIN = "https://box.invalid:12470"
+
+
+def test_a_stream_points_at_the_file_route_on_the_origin_it_was_asked_through():
+    """Not a configured hostname: the app may reach us by IP, by name or through the appliance's
+    own address, and a stream URL built from anything but the request would point somewhere the
+    client cannot follow."""
+    s = am.stream_for(_entry(), ORIGIN, file_idx=2)
+    assert s["url"] == f"{ORIGIN}/{IH}/2"
+    assert s["name"] == "My Library"
+    assert "4.00 GB" in s["title"]
+    assert s["behaviorHints"]["bingeGroup"] == f"stremiosrv:{IH}"
+
+
+def test_the_played_file_is_the_one_the_download_asked_for():
+    e = _entry(wantedFile=4, files=[{"index": 1, "name": "a.mkv", "size": 10},
+                                    {"index": 4, "name": "b.mkv", "size": 5}])
+    assert am.playable_index(e) == 4
+
+
+def test_without_a_wanted_file_the_biggest_file_on_disk_wins():
+    """A pack with no recorded selection: the feature is the video, and the video is the big file."""
+    e = _entry(files=[{"index": 1, "name": "sample.mkv", "size": 10},
+                      {"index": 7, "name": "feature.mkv", "size": 9000}])
+    assert am.playable_index(e) == 7
+
+
+def test_with_no_file_list_at_all_it_falls_back_to_index_zero():
+    assert am.playable_index(_entry()) == 0
+
+
+def test_a_series_label_matches_only_its_own_episode():
+    state = {"entries": [
+        _entry(label={"type": "series", "metaId": "tt0000002", "season": 1, "episode": 5,
+                      "name": "Pack Name"}),
+    ]}
+    assert len(am.streams_for_meta_id(state, "tt0000002:1:5", ORIGIN)) == 1
+    assert am.streams_for_meta_id(state, "tt0000002:1:6", ORIGIN) == []
+    assert am.streams_for_meta_id(state, "tt0000002", ORIGIN) == []
+
+
+def test_a_movie_label_matches_its_meta_id():
+    state = {"entries": [_entry(label={"type": "movie", "metaId": "tt0000003", "name": "Film"})]}
+    assert len(am.streams_for_meta_id(state, "tt0000003", ORIGIN)) == 1
+
+
+def test_an_unlabelled_entry_can_never_match_a_meta_id():
+    """The match key IS the label, so this is true by construction -- asserted so that a future
+    'clever' fallback that guesses from the folder name fails here first."""
+    assert am.streams_for_meta_id({"entries": [_entry()]}, "tt0000004", ORIGIN) == []

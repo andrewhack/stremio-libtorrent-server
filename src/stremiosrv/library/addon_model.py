@@ -117,3 +117,65 @@ def preview(entry: dict) -> dict:
 
 def catalog(state: dict) -> list[dict]:
     return [preview(e) for e in state.get("entries", []) if is_title(e)]
+
+
+def playable_index(entry: dict) -> int:
+    """Which file in the torrent this entry means.
+
+    The recorded selection wins -- that is the file the download was started for. Otherwise the
+    largest file on disk, because a pack's feature is its big file and its samples are not. With no
+    file list at all (an entry with no engine record and nothing readable on disk) index 0 is the
+    only answer available, and for a single-file torrent it is also the right one.
+    """
+    wanted = entry.get("wantedFile")
+    if isinstance(wanted, int):
+        return wanted
+    files = entry.get("files") or []
+    if not files:
+        return 0
+    return max(files, key=lambda f: f.get("size") or 0).get("index") or 0
+
+
+def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict:
+    """One stream entry pointing at the copy already on disk.
+
+    `bingeGroup` ties every episode of one torrent together so the app can play the next one
+    without asking again.
+    """
+    ih = entry["infoHash"].lower()
+    idx = playable_index(entry) if file_idx is None else file_idx
+    return {
+        "url": f"{origin}/{ih}/{idx}",
+        "name": CATALOG_NAME,
+        "title": describe(entry),
+        "behaviorHints": {"bingeGroup": f"{ID_PREFIX}{ih}"},
+    }
+
+
+def _label_matches(label: dict, base: str, season: int | None, episode: int | None) -> bool:
+    if (label.get("metaId") or "") != base:
+        return False
+    if season is None:
+        return label.get("season") is None and label.get("episode") is None
+    return label.get("season") == season and label.get("episode") == episode
+
+
+def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
+    """Streams for a Stremio meta id (`tt…` or `tt…:S:E`).
+
+    Matching is on the label, which is the only place this server records what a torrent IS. An
+    entry with no label cannot match and must not: guessing an identity from a folder name would
+    put the wrong film behind a right-looking row.
+    """
+    parts = meta_id.split(":")
+    base = parts[0]
+    season = int(parts[1]) if len(parts) > 2 and parts[1].isdecimal() else None
+    episode = int(parts[2]) if len(parts) > 2 and parts[2].isdecimal() else None
+    out: list[dict] = []
+    for e in state.get("entries", []):
+        if not is_title(e):
+            continue
+        label = e.get("label") or {}
+        if label and _label_matches(label, base, season, episode):
+            out.append(stream_for(e, origin))
+    return out
