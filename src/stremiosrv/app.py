@@ -10,6 +10,7 @@ from stremiosrv import health
 from stremiosrv.api import cache as cache_api
 from stremiosrv.api import casting, handshake, hls, netcheck, pins, playback, subs
 from stremiosrv.config import Settings
+from stremiosrv.library import addon as library_addon
 from stremiosrv.library import api as library_api
 
 # Exception leaf types that mean "the client went away mid-stream" (vs a real server bug). Matched by
@@ -153,6 +154,7 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     # allowlist test's "flag off -> no route" assertion is about absence, not about a 403.
     if settings.library_ui:
         app.include_router(library_api.router)
+        app.include_router(library_addon.router)
 
     @app.exception_handler(StarletteHTTPException)
     async def _flat_dict_detail(request, exc):

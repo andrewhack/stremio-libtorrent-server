@@ -1,0 +1,106 @@
+"""The addon's two gates and its routes. A rejected request is a 404, never a 401: the surface does
+not exist unless you are the owner."""
+import json
+
+from fastapi.testclient import TestClient
+
+from stremiosrv.app import create_app
+from stremiosrv.config import Settings
+from stremiosrv.library import session as sessionmod
+
+LAN = {"X-Forwarded-For": "192.168.1.20"}
+
+
+def _client(tmp_path, **kw):
+    kw.setdefault("library_ui", True)
+    kw.setdefault("cache_root", str(tmp_path))
+    # `client=` is load-bearing: TestClient's default peer is the literal string "testclient",
+    # which is not a loopback address, so client_ip would refuse to read X-Forwarded-For and the
+    # guard would 404 every request -- every test in this file would then pass for the wrong
+    # reason, including the ones asserting a refusal.
+    return TestClient(create_app(settings=Settings(**kw)), client=("127.0.0.1", 45678))
+
+
+def _token(tmp_path):
+    return sessionmod.ensure_addon_token(str(tmp_path))
+
+
+def test_the_manifest_is_served_for_the_right_token(tmp_path):
+    c = _client(tmp_path)
+    r = c.get(f"/library/addon/{_token(tmp_path)}/manifest.json", headers=LAN)
+    assert r.status_code == 200
+    assert r.json()["id"] == "org.stremiosrv.library"
+    # A manifest with no version is one Stremio will not install, and the server version does not
+    # live on Settings -- it comes from the installed package's metadata, as health.py reads it.
+    assert isinstance(r.json()["version"], str) and r.json()["version"]
+
+
+def test_a_wrong_token_is_a_404_not_a_401(tmp_path):
+    """A 401 confirms the route exists, which is exactly what the library guard refuses to do."""
+    c = _client(tmp_path)
+    _token(tmp_path)
+    assert c.get("/library/addon/wrong/manifest.json", headers=LAN).status_code == 404
+
+
+def test_a_client_outside_the_allowed_networks_is_refused(tmp_path):
+    c = _client(tmp_path)
+    r = c.get(f"/library/addon/{_token(tmp_path)}/manifest.json",
+              headers={"X-Forwarded-For": "203.0.113.9"})
+    assert r.status_code == 404
+
+
+def test_the_addon_does_not_exist_when_the_library_flag_is_off(tmp_path):
+    c = _client(tmp_path, library_ui=False)
+    assert c.get("/library/addon/anything/manifest.json", headers=LAN).status_code == 404
+
+
+def test_the_catalog_and_its_extra_form_both_answer(tmp_path):
+    """Stremio appends extra segments (skip=…) whether or not the manifest asks for them, and a 404
+    there empties the row with no error anywhere."""
+    c = _client(tmp_path)
+    t = _token(tmp_path)
+    for path in (f"/library/addon/{t}/catalog/other/library.json",
+                 f"/library/addon/{t}/catalog/other/library/skip=100.json"):
+        r = c.get(path, headers=LAN)
+        assert r.status_code == 200, path
+        assert isinstance(r.json()["metas"], list)
+
+
+def test_an_unknown_catalog_is_an_empty_list_not_an_error(tmp_path):
+    c = _client(tmp_path)
+    r = c.get(f"/library/addon/{_token(tmp_path)}/catalog/other/nope.json", headers=LAN)
+    assert r.status_code == 200
+    assert r.json() == {"metas": []}
+
+
+def test_a_malformed_meta_id_is_refused_before_it_reaches_a_lookup(tmp_path):
+    c = _client(tmp_path)
+    t = _token(tmp_path)
+    r = c.get(f"/library/addon/{t}/meta/other/stremiosrv:..%2F..%2Fetc.json", headers=LAN)
+    assert r.status_code == 404
+
+
+def test_a_meta_id_we_do_not_hold_is_an_empty_object_not_an_error(tmp_path):
+    c = _client(tmp_path)
+    t = _token(tmp_path)
+    r = c.get(f"/library/addon/{t}/meta/other/stremiosrv:{'a' * 40}.json", headers=LAN)
+    assert r.status_code == 200
+    assert r.json() == {"meta": {}}
+
+
+def test_streams_for_an_unknown_tt_id_are_an_empty_list(tmp_path):
+    c = _client(tmp_path)
+    t = _token(tmp_path)
+    r = c.get(f"/library/addon/{t}/stream/series/tt0000009:1:1.json", headers=LAN)
+    assert r.status_code == 200
+    assert r.json() == {"streams": []}
+
+
+def test_the_install_url_is_built_from_the_request(tmp_path):
+    """The app may reach the box by IP, by name or through the appliance's address."""
+    c = _client(tmp_path)
+    t = _token(tmp_path)
+    r = c.get(f"/library/addon/{t}/manifest.json",
+              headers={**LAN, "Host": "box.invalid:12470", "X-Forwarded-Proto": "https"})
+    assert r.status_code == 200
+    assert json.loads(r.text)["id"] == "org.stremiosrv.library"
