@@ -191,3 +191,40 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
             if stream is not None:
                 out.append(stream)
     return out
+
+
+def find_entry(state: dict, info_hash: str) -> dict | None:
+    ih = (info_hash or "").lower()
+    for e in state.get("entries", []):
+        if is_title(e) and (e.get("infoHash") or "").lower() == ih:
+            return e
+    return None
+
+
+def meta_for(entry: dict) -> dict:
+    """The detail page for one of our ids.
+
+    `videos` is emitted only for a pack, and only for files with bytes on disk: offering an episode
+    that is not there produces a row that cannot play, which is worse than not listing it.
+    """
+    label = entry.get("label") or {}
+    ih = entry["infoHash"].lower()
+    meta = {
+        "id": format_id(ih),
+        "type": "other",
+        "name": display_name(entry),
+        "description": describe(entry),
+    }
+    if label.get("poster"):
+        meta["poster"] = label["poster"]
+    # Addressable only: state.py's disk fallback reports index None for every file, and an id
+    # built from None is one parse_id rejects -- a video row that cannot be opened.
+    on_disk = [f for f in (entry.get("files") or [])
+               if (f.get("size") or 0) > 0 and isinstance(f.get("index"), int)]
+    if len(on_disk) > 1:
+        meta["videos"] = [
+            {"id": format_id(ih, f["index"]), "title": f.get("name") or f"file {f['index']}",
+             "released": None}
+            for f in on_disk
+        ]
+    return meta

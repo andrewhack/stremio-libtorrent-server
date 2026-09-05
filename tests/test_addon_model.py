@@ -179,3 +179,42 @@ def test_a_pack_with_no_addressable_file_is_not_offered_for_a_meta_id():
                files=[{"index": None, "name": "one.mkv", "size": 900},
                       {"index": None, "name": "two.mkv", "size": 800}])
     assert am.streams_for_meta_id({"entries": [e]}, "tt0000005", ORIGIN) == []
+
+
+def test_meta_carries_the_name_poster_and_description():
+    e = _entry(label={"name": "Real Name", "poster": "https://example.invalid/p.jpg"})
+    m = am.meta_for(e)
+    assert m["id"] == am.format_id(IH)
+    assert m["type"] == "other"
+    assert m["name"] == "Real Name"
+    assert m["poster"] == "https://example.invalid/p.jpg"
+    assert "4.00 GB" in m["description"]
+
+
+def test_a_pack_lists_only_the_files_that_are_actually_on_disk():
+    """The whole point of the library page's file view: a season folder holds the episodes you
+    fetched, not the ones the torrent contains."""
+    e = _entry(files=[{"index": 1, "name": "one.mkv", "size": 900, "progress": 1.0},
+                      {"index": 2, "name": "two.mkv", "size": 0, "progress": 0.0},
+                      {"index": 3, "name": "three.mkv", "size": 500, "progress": 0.5}])
+    videos = am.meta_for(e)["videos"]
+    assert [v["id"] for v in videos] == [am.format_id(IH, 1), am.format_id(IH, 3)]
+    assert videos[0]["title"] == "one.mkv"
+
+
+def test_files_recovered_from_disk_produce_no_video_rows():
+    """state.py's disk fallback carries index None, and an id built from that is one parse_id
+    refuses -- so those files cannot be offered as rows at all."""
+    e = _entry(files=[{"index": None, "name": "one.mkv", "size": 900, "progress": 1.0},
+                      {"index": None, "name": "two.mkv", "size": 800, "progress": 1.0}])
+    assert "videos" not in am.meta_for(e)
+
+
+def test_a_single_file_title_has_no_video_list():
+    assert "videos" not in am.meta_for(_entry())
+
+
+def test_find_entry_matches_case_insensitively_and_misses_cleanly():
+    state = {"entries": [_entry()]}
+    assert am.find_entry(state, IH.upper())["infoHash"] == IH
+    assert am.find_entry(state, "b" * 40) is None
