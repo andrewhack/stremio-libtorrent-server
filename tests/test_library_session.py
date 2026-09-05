@@ -4,6 +4,7 @@ import os
 import pytest
 
 from stremiosrv.library import session as S
+from stremiosrv.library import session as sessionmod
 
 USER = {"_id": "user-1", "email": "owner@example.com"}
 OTHER = {"_id": "user-2", "email": "someone@example.com"}
@@ -80,7 +81,7 @@ def test_sessions_survive_a_restart(tmp_path):
 
 def test_corrupt_state_file_does_not_crash(tmp_path):
     (tmp_path / S.STATE_FILE).write_text("{not json", encoding="utf-8")
-    assert S.load_state(str(tmp_path)) == {"owner_id": "", "sessions": {}}
+    assert S.load_state(str(tmp_path)) == {"owner_id": "", "sessions": {}, "addon_token": ""}
 
 
 def test_session_ids_are_unguessable(tmp_path):
@@ -153,3 +154,29 @@ def test_concurrent_sign_ins_keep_the_owner_pin_and_every_session():
         assert len(state["sessions"]) == 16, "sessions lost to a concurrent write"
     finally:
         sys.setswitchinterval(old)
+
+
+def test_the_addon_token_survives_a_save_and_reload(tmp_path):
+    """load_state rebuilds the dict from known keys, so a token written beside them would be
+    dropped by the very next sign-in."""
+    root = str(tmp_path)
+    token = sessionmod.ensure_addon_token(root)
+    assert len(token) >= 32
+    state = sessionmod.load_state(root)
+    state["owner_id"] = "someone"
+    sessionmod.save_state(root, state)
+    assert sessionmod.load_state(root)["addon_token"] == token
+
+
+def test_ensure_is_idempotent_and_reset_replaces(tmp_path):
+    root = str(tmp_path)
+    first = sessionmod.ensure_addon_token(root)
+    assert sessionmod.ensure_addon_token(root) == first
+    second = sessionmod.reset_addon_token(root)
+    assert second != first
+    assert sessionmod.ensure_addon_token(root) == second
+
+
+def test_a_state_file_written_before_tokens_existed_still_loads(tmp_path):
+    (tmp_path / "library-ui.json").write_text('{"owner_id": "x", "sessions": {}}', encoding="utf-8")
+    assert sessionmod.load_state(str(tmp_path))["addon_token"] == ""

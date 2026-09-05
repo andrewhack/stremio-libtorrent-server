@@ -29,7 +29,7 @@ _lock = threading.Lock()
 
 
 def _empty() -> dict:
-    return {"owner_id": "", "sessions": {}}
+    return {"owner_id": "", "sessions": {}, "addon_token": ""}
 
 
 class OwnerMismatch(Exception):
@@ -52,7 +52,11 @@ def load_state(cache_root: str) -> dict:
         return _empty()
     sessions = data.get("sessions")
     return {"owner_id": data.get("owner_id", "") or "",
-            "sessions": sessions if isinstance(sessions, dict) else {}}
+            "sessions": sessions if isinstance(sessions, dict) else {},
+            # Carried explicitly: this function rebuilds the dict from known keys, so anything not
+            # named here is dropped by the next save_state -- silently, and only for whoever had
+            # already installed the addon.
+            "addon_token": str(data.get("addon_token") or "")}
 
 
 def save_state(cache_root: str, state: dict) -> None:
@@ -129,3 +133,24 @@ def drop_session(cache_root: str, sid: str) -> None:
         state = load_state(cache_root)
         if state["sessions"].pop(sid, None) is not None:
             save_state(cache_root, state)
+
+
+def ensure_addon_token(cache_root: str) -> str:
+    """The addon's URL secret, minted on first use. Same file, same lock and same 0600 mode as the
+    session state -- it is the same kind of secret."""
+    with _lock:
+        state = load_state(cache_root)
+        if not state["addon_token"]:
+            state["addon_token"] = secrets.token_urlsafe(32)
+            save_state(cache_root, state)
+        return state["addon_token"]
+
+
+def reset_addon_token(cache_root: str) -> str:
+    """Mint a new token, invalidating every install of the old URL. A secret with no way to rotate
+    it is a defect, and this one is synced into the owner's Stremio account."""
+    with _lock:
+        state = load_state(cache_root)
+        state["addon_token"] = secrets.token_urlsafe(32)
+        save_state(cache_root, state)
+        return state["addon_token"]
