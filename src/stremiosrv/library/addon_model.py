@@ -218,9 +218,12 @@ def meta_for(entry: dict) -> dict:
     if label.get("poster"):
         meta["poster"] = label["poster"]
     # Addressable only: state.py's disk fallback reports index None for every file, and an id
-    # built from None is one parse_id rejects -- a video row that cannot be opened.
+    # built from None is one parse_id rejects -- a video row that cannot be opened. `downloaded`,
+    # not `size`: `size` is the file's declared size in the torrent, present the instant metadata
+    # arrives and identical for a file at 0% and one that is finished, so it is not evidence that
+    # anything of it is actually on disk -- `downloaded` is.
     on_disk = [f for f in (entry.get("files") or [])
-               if (f.get("size") or 0) > 0 and isinstance(f.get("index"), int)]
+               if (f.get("downloaded") or 0) > 0 and isinstance(f.get("index"), int)]
     if len(on_disk) > 1:
         meta["videos"] = [
             {"id": format_id(ih, f["index"]), "title": f.get("name") or f"file {f['index']}",

@@ -193,13 +193,31 @@ def test_meta_carries_the_name_poster_and_description():
 
 def test_a_pack_lists_only_the_files_that_are_actually_on_disk():
     """The whole point of the library page's file view: a season folder holds the episodes you
-    fetched, not the ones the torrent contains."""
-    e = _entry(files=[{"index": 1, "name": "one.mkv", "size": 900, "progress": 1.0},
-                      {"index": 2, "name": "two.mkv", "size": 0, "progress": 0.0},
-                      {"index": 3, "name": "three.mkv", "size": 500, "progress": 0.5}])
+    fetched, not the ones the torrent contains. `size` is the torrent's declared size and stays the
+    same whether or not anything has arrived -- `downloaded` is the bytes actually on disk, the
+    engine and disk shapes both carry it, and it is the one that says whether a file is really
+    here."""
+    e = _entry(files=[{"index": 1, "name": "one.mkv", "size": 900, "downloaded": 900,
+                       "progress": 1.0},
+                      {"index": 2, "name": "two.mkv", "size": 700, "downloaded": 0,
+                       "progress": 0.0},
+                      {"index": 3, "name": "three.mkv", "size": 500, "downloaded": 250,
+                       "progress": 0.5}])
     videos = am.meta_for(e)["videos"]
     assert [v["id"] for v in videos] == [am.format_id(IH, 1), am.format_id(IH, 3)]
     assert videos[0]["title"] == "one.mkv"
+
+
+def test_a_wanted_file_with_no_bytes_yet_is_not_treated_as_on_disk():
+    """The review finding this covers: `size` is the torrent's declared size, present the moment
+    metadata arrives and identical for a file at 0% and one that is finished -- it is not evidence
+    that a single byte of it is on disk. Only one of these two files is really there, which is one
+    short of the `> 1` a pack needs to be offered as a video list at all -- the honest outcome for a
+    torrent that, in reality, still has only one playable file."""
+    e = _entry(files=[{"index": 1, "name": "arrived.mkv", "size": 900, "downloaded": 900},
+                      {"index": 2, "name": "requested.mkv", "size": 700, "downloaded": 0,
+                       "wanted": True}])
+    assert "videos" not in am.meta_for(e)
 
 
 def test_files_recovered_from_disk_produce_no_video_rows():
