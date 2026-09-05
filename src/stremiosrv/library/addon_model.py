@@ -119,31 +119,39 @@ def catalog(state: dict) -> list[dict]:
     return [preview(e) for e in state.get("entries", []) if is_title(e)]
 
 
-def playable_index(entry: dict) -> int:
-    """Which file in the torrent this entry means.
+def playable_index(entry: dict) -> int | None:
+    """Which file in the torrent this entry means, or None when nothing here can be addressed.
 
-    The recorded selection wins -- that is the file the download was started for. Otherwise the
-    largest file on disk, because a pack's feature is its big file and its samples are not. With no
-    file list at all (an entry with no engine record and nothing readable on disk) index 0 is the
-    only answer available, and for a single-file torrent it is also the right one.
+    A file is addressable only if its index is an int: the stream URL is
+    `<origin>/<infohash>/<fileIdx>` and there is nothing else to put there. The recorded selection
+    wins when there is one, including 0 -- that is the file the download was started for. Otherwise
+    the largest addressable file, because a pack's feature is its big file and its samples are not.
+    With at most one file listed (a single-file torrent, or no file list at all) index 0 is the only
+    answer and a safe one. Anything wider with no addressable file -- state.py's disk fallback
+    reports every file as index None once the engine handle is gone -- is refused rather than
+    guessed: on a real torrent index 0 was a text file and the video was index 1.
     """
     wanted = entry.get("wantedFile")
     if isinstance(wanted, int):
         return wanted
     files = entry.get("files") or []
-    if not files:
-        return 0
-    return max(files, key=lambda f: f.get("size") or 0).get("index") or 0
+    addressable = [f for f in files if isinstance(f.get("index"), int)]
+    if addressable:
+        return max(addressable, key=lambda f: f.get("size") or 0)["index"]
+    return 0 if len(files) <= 1 else None
 
 
-def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict:
-    """One stream entry pointing at the copy already on disk.
+def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict | None:
+    """One stream entry pointing at the copy already on disk, or None when there is no file index
+    to point it at -- see `playable_index` for when that happens.
 
     `bingeGroup` ties every episode of one torrent together so the app can play the next one
     without asking again.
     """
-    ih = entry["infoHash"].lower()
     idx = playable_index(entry) if file_idx is None else file_idx
+    if idx is None:
+        return None
+    ih = entry["infoHash"].lower()
     return {
         "url": f"{origin}/{ih}/{idx}",
         "name": CATALOG_NAME,
@@ -165,7 +173,9 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
 
     Matching is on the label, which is the only place this server records what a torrent IS. An
     entry with no label cannot match and must not: guessing an identity from a folder name would
-    put the wrong film behind a right-looking row.
+    put the wrong film behind a right-looking row. A matched entry that `stream_for` refuses (no
+    addressable file) is dropped rather than included: the list this returns is what the app can
+    actually play, not a row of everything that matched by name.
     """
     parts = meta_id.split(":")
     base = parts[0]
@@ -177,5 +187,7 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
             continue
         label = e.get("label") or {}
         if label and _label_matches(label, base, season, episode):
-            out.append(stream_for(e, origin))
+            stream = stream_for(e, origin)
+            if stream is not None:
+                out.append(stream)
     return out

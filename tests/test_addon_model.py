@@ -119,15 +119,38 @@ def test_the_played_file_is_the_one_the_download_asked_for():
     assert am.playable_index(e) == 4
 
 
-def test_without_a_wanted_file_the_biggest_file_on_disk_wins():
-    """A pack with no recorded selection: the feature is the video, and the video is the big file."""
+def test_without_a_wanted_file_the_biggest_addressable_file_wins():
+    """Covers the engine-derived shape: real integer indices, never None. A pack with no recorded
+    selection: the feature is the video, and the video is the big file."""
     e = _entry(files=[{"index": 1, "name": "sample.mkv", "size": 10},
                       {"index": 7, "name": "feature.mkv", "size": 9000}])
     assert am.playable_index(e) == 7
 
 
+def test_a_file_the_engine_can_address_beats_one_it_cannot():
+    e = _entry(files=[{"index": None, "name": "unaddressable.mkv", "size": 9000},
+                      {"index": 2, "name": "addressable.mkv", "size": 10}])
+    assert am.playable_index(e) == 2
+
+
+def test_a_pack_recovered_from_disk_has_no_addressable_file():
+    """state.py's disk fallback reports index None for every file: it lists what is on disk, not
+    what the torrent says. Index 0 is not a safe guess for a pack -- on a real torrent index 0 was
+    a text file and the video was index 1 -- so this offers nothing rather than the wrong thing."""
+    e = _entry(files=[{"index": None, "name": "one.mkv", "size": 900},
+                      {"index": None, "name": "two.mkv", "size": 800}])
+    assert am.playable_index(e) is None
+    assert am.stream_for(e, ORIGIN) is None
+
+
 def test_with_no_file_list_at_all_it_falls_back_to_index_zero():
     assert am.playable_index(_entry()) == 0
+
+
+def test_a_single_file_entry_without_an_index_still_plays_as_index_zero():
+    e = _entry(files=[{"index": None, "name": "only.mkv", "size": 900}])
+    assert am.playable_index(e) == 0
+    assert am.stream_for(e, ORIGIN)["url"] == f"{ORIGIN}/{IH}/0"
 
 
 def test_a_series_label_matches_only_its_own_episode():
@@ -149,3 +172,10 @@ def test_an_unlabelled_entry_can_never_match_a_meta_id():
     """The match key IS the label, so this is true by construction -- asserted so that a future
     'clever' fallback that guesses from the folder name fails here first."""
     assert am.streams_for_meta_id({"entries": [_entry()]}, "tt0000004", ORIGIN) == []
+
+
+def test_a_pack_with_no_addressable_file_is_not_offered_for_a_meta_id():
+    e = _entry(label={"type": "movie", "metaId": "tt0000005", "name": "Film"},
+               files=[{"index": None, "name": "one.mkv", "size": 900},
+                      {"index": None, "name": "two.mkv", "size": 800}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000005", ORIGIN) == []
