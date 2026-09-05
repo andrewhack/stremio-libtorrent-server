@@ -36,22 +36,42 @@ def _settings(request: Request):
 
 
 def _guard(request: Request, token: str) -> None:
-    """Both gates. Raises 404 on failure -- never 401, never a distinguishable message."""
+    """Both gates. Raises 404 on failure -- never 401, never a distinguishable message.
+
+    Neither raise passes a `detail`: FastAPI then defaults it to the exact phrase Starlette's own
+    router uses for a route that matches nothing ("Not Found"), so the two bodies render
+    byte-identical JSON. A hand-written detail string, however similar, is a difference a prober can
+    see without ever holding a working token.
+    """
     s = _settings(request)
     peer = request.client.host if request.client else ""
     ip = netguard.client_ip(peer, request.headers.get("x-forwarded-for", ""))
     if not netguard.is_allowed(ip, netguard.parse_allow(s.library_addon_allow)):
-        raise HTTPException(status_code=404, detail="not found")
+        raise HTTPException(status_code=404)
     expected = sessionmod.ensure_addon_token(s.cache_root)
     if not hmac.compare_digest(token or "", expected):
-        raise HTTPException(status_code=404, detail="not found")
+        raise HTTPException(status_code=404)
 
 
 def _origin(request: Request) -> str:
     """The origin the client actually used. Built from the request rather than from a configured
     hostname: the app may reach the box by IP, by name, or through the appliance's own address, and
-    a stream URL built from anything else points somewhere the client cannot follow."""
-    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    a stream URL built from anything else points somewhere the client cannot follow.
+
+    `X-Forwarded-Proto` is trusted on the same condition `netguard.client_ip` trusts
+    `X-Forwarded-For`: only when the direct peer is loopback, i.e. the request really arrived
+    through this image's own nginx. From any other peer the header is just something the caller
+    typed, so the scheme falls back to the connection's own.
+    """
+    peer = request.client.host if request.client else ""
+    if netguard._is_loopback(peer):
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    else:
+        proto = request.url.scheme
+    # Host has no equivalent fallback and is taken as given regardless of the peer: the client may
+    # legitimately reach this server by IP, by hostname, or through the appliance's own address, and
+    # a stream URL built from anything other than the host the client actually used would point
+    # somewhere it cannot follow.
     host = request.headers.get("host") or request.url.netloc
     return f"{proto}://{host}"
 

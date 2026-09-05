@@ -4,8 +4,10 @@ import json
 
 from fastapi.testclient import TestClient
 
+from stremiosrv import cache as cachemod
 from stremiosrv.app import create_app
 from stremiosrv.config import Settings
+from stremiosrv.library import labels as labelsmod
 from stremiosrv.library import session as sessionmod
 
 LAN = {"X-Forwarded-For": "192.168.1.20"}
@@ -104,3 +106,56 @@ def test_the_install_url_is_built_from_the_request(tmp_path):
               headers={**LAN, "Host": "box.invalid:12470", "X-Forwarded-Proto": "https"})
     assert r.status_code == 200
     assert json.loads(r.text)["id"] == "org.stremiosrv.library"
+
+
+def test_a_refused_request_is_byte_identical_to_a_route_that_does_not_exist(tmp_path):
+    """The guard answers every refusal with a 404 so that a registered-but-refused route cannot be
+    told apart from one that was never registered at all. A prober cannot read the source -- the
+    response bytes are all they have -- so if the two bodies differed by even one character (a
+    capital letter, a trailing word) that difference alone would tell them the route exists and is
+    worth attacking further."""
+    c = _client(tmp_path)
+    refused = c.get("/library/addon/wrong/manifest.json", headers=LAN)
+    missing = c.get("/this-route-does-not-exist-anywhere", headers=LAN)
+    assert refused.status_code == missing.status_code == 404
+    assert refused.json() == missing.json()
+
+
+def test_x_forwarded_proto_from_a_non_loopback_peer_does_not_break_the_route(tmp_path):
+    """`client_ip` (netguard.py) trusts `X-Forwarded-For` only when the direct peer is loopback --
+    otherwise the header is just something the caller typed. `_origin` applies the same rule to
+    `X-Forwarded-Proto`. This client's peer is on the LAN and passes the network guard on its own
+    address, without being loopback, so the header must be ignored rather than crash or otherwise
+    change what an ordinary unknown-id lookup returns."""
+    c = TestClient(create_app(settings=Settings(library_ui=True, cache_root=str(tmp_path))),
+                   client=("192.168.1.20", 45678))
+    t = _token(tmp_path)
+    r = c.get(f"/library/addon/{t}/stream/series/tt0000009:1:1.json",
+              headers={"X-Forwarded-Proto": "https"})
+    assert r.status_code == 200
+    assert r.json() == {"streams": []}
+
+
+def test_x_forwarded_proto_from_a_non_loopback_peer_does_not_set_the_stream_scheme(tmp_path):
+    """The empty-list case above cannot show which scheme `_origin` picked -- an empty list carries
+    no URL to inspect. This gives the lookup a matching, labelled title on disk so a real stream URL
+    comes back, from the same non-loopback peer with the same forged header, and checks the URL
+    itself: if the fix regressed and trusted the header again, this would build `https://…` even
+    though the request arrived as plain http.
+    """
+    ih = "b" * 40
+    d = tmp_path / "Sample.Movie.2020"
+    d.mkdir()
+    (d / "Sample.Movie.2020.mkv").write_bytes(b"x" * 4096)
+    cachemod.save_name_index(str(tmp_path), {"Sample.Movie.2020": ih})
+    labelsmod.put(str(tmp_path), ih, {"metaId": "tt0000009", "type": "movie", "name": "Sample Movie"})
+
+    c = TestClient(create_app(settings=Settings(library_ui=True, cache_root=str(tmp_path))),
+                   client=("192.168.1.20", 45678))
+    t = _token(tmp_path)
+    r = c.get(f"/library/addon/{t}/stream/movie/tt0000009.json",
+              headers={"X-Forwarded-Proto": "https"})
+    assert r.status_code == 200
+    streams = r.json()["streams"]
+    assert len(streams) == 1
+    assert streams[0]["url"].startswith("http://")
