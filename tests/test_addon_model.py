@@ -77,6 +77,15 @@ def test_the_description_reports_size_state_and_keeping():
     assert "4.00 GB" in d
     assert "kept" in d
     assert "7 seeders" in d
+    assert "seeding" in d
+
+
+def test_the_description_names_the_state_a_row_is_actually_in():
+    """Three words come out of one ternary and only one of them was ever asserted, so a swapped
+    branch would have read the same to every test and wrong to every viewer."""
+    assert "downloading" in am.describe(_entry(state="downloading", progress=0.5))
+    assert "on disk" in am.describe(_entry(state="idle"))
+    assert "seeding" in am.describe(_entry(state="seeding"))
 
 
 def test_orphan_partfiles_and_entries_without_an_infohash_are_not_offered():
