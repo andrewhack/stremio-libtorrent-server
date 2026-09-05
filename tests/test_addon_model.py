@@ -37,3 +37,54 @@ def test_the_manifest_is_not_the_stock_local_addon():
     """org.stremio.local ships pre-installed and flagged official in client profiles. Serving a
     different addon under that id would impersonate it."""
     assert am.manifest("1.0.0")["id"] != "org.stremio.local"
+
+
+def _entry(**kw):
+    """A state.build() entry with the fields the addon reads. Neutral names on purpose: this repo
+    is public and carries no media titles."""
+    e = {"infoHash": IH, "name": "Sample Title", "size": 4 * 1024 ** 3, "state": "seeding",
+         "progress": 1.0, "pinned": False, "seeds": 7, "label": None}
+    e.update(kw)
+    return e
+
+
+def test_a_labelled_title_uses_its_real_name_and_poster():
+    e = _entry(label={"name": "Real Name", "poster": "https://example.invalid/p.jpg",
+                      "type": "movie", "metaId": "tt0000001"})
+    item = am.preview(e)
+    assert item["id"] == am.format_id(IH)
+    assert item["type"] == "other"
+    assert item["name"] == "Real Name"
+    assert item["poster"] == "https://example.invalid/p.jpg"
+
+
+def test_an_unlabelled_title_falls_back_to_the_folder_name_and_has_no_poster():
+    item = am.preview(_entry())
+    assert item["name"] == "Sample Title"
+    assert "poster" not in item
+
+
+def test_a_download_in_progress_carries_its_percentage_in_the_name():
+    """The row is a snapshot refreshed on reload, not a live bar -- so the number has to be in the
+    text, where the app will redraw it."""
+    item = am.preview(_entry(state="downloading", progress=0.4712))
+    assert item["name"] == "Sample Title · 47%"
+    assert am.preview(_entry(state="seeding", progress=1.0))["name"] == "Sample Title"
+
+
+def test_the_description_reports_size_state_and_keeping():
+    d = am.describe(_entry(pinned=True))
+    assert "4.00 GB" in d
+    assert "kept" in d
+    assert "7 seeders" in d
+
+
+def test_orphan_partfiles_and_entries_without_an_infohash_are_not_offered():
+    """An orphan is leftover piece data with no torrent -- real disk, nothing to play."""
+    state = {"entries": [
+        _entry(),
+        _entry(kind="orphan", name="incomplete download data (aaaaaaaa)"),
+        _entry(infoHash=None, name="a folder we have no hash for"),
+    ]}
+    items = am.catalog(state)
+    assert [i["name"] for i in items] == ["Sample Title"]
