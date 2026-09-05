@@ -6,6 +6,9 @@ index index.html;
 proxy_http_version 1.1;
 proxy_set_header Host $http_host;
 proxy_set_header X-Forwarded-Proto $scheme;
+# The addon judges the CLIENT's address, and without this every proxied request arrives as
+# nginx's own loopback address -- a LAN check that inspects the proxy passes everything.
+proxy_set_header X-Forwarded-For $remote_addr;
 proxy_buffering off;
 proxy_request_buffering off;
 proxy_read_timeout 3600s;

@@ -118,3 +118,7 @@ class Settings(BaseSettings):
     # VPN or on a trusted LAN. Default refuses, because the fallback sign-in puts a password on the
     # wire.
     library_allow_http: bool = False
+    # Which client addresses may reach the library addon. Empty = loopback, RFC1918, link-local,
+    # IPv6 ULA and CGNAT (a private mesh-VPN tunnel is not RFC1918 and must still work).
+    # Comma-separated CIDRs to replace that list outright.
+    library_addon_allow: str = ""
