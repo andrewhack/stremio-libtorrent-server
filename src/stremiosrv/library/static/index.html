@@ -152,6 +152,16 @@
   </div>
 
   <div id="app" hidden>
+    <section id="sec-addon" hidden>
+      <h2>Watch this library in Stremio</h2>
+      <p class="note">Add this address in Stremio &rarr; Addons &rarr; Add addon. It works only
+         from inside your network, and installing it stores the address in your Stremio account.</p>
+      <div><code id="addonUrl" style="word-break:break-word"></code></div>
+      <div class="addbar">
+        <button id="addonCopy" class="ghost">Copy</button>
+        <button id="addonReset" class="warn">New link</button>
+      </div>
+    </section>
     <section id="sec-add">
       <h2>Add</h2>
       <div class="addbar">
@@ -177,16 +187,6 @@
       <h2>Other on disk</h2>
       <p class="note">Not matched to a title &mdash; still taking up space.</p>
       <div class="shelf" id="other"></div>
-    </section>
-    <section id="sec-addon" hidden>
-      <h2>Watch this library in Stremio</h2>
-      <p class="note">Add this address in Stremio &rarr; Addons &rarr; Add addon. It works only
-         from inside your network, and installing it stores the address in your Stremio account.</p>
-      <div><code id="addonUrl" style="word-break:break-word"></code></div>
-      <div class="addbar">
-        <button id="addonCopy" class="ghost">Copy</button>
-        <button id="addonReset" class="warn">New link</button>
-      </div>
     </section>
   </div>
 </main>

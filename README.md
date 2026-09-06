@@ -235,7 +235,7 @@ stay on the page, because the addon protocol has no way to express an action.
 
 1. Start the server with `STREMIOSRV_LIBRARY_UI=true` (it is off by default, and so is the addon).
 2. Open **`https://<your-server>:12470/library/`** and sign in with your Stremio account.
-3. Scroll to **"Watch this library in Stremio"** at the bottom of that page and press **Copy**. That
+3. At the top of that page, under **"Watch this library in Stremio"**, press **Copy**. That
    gives you a URL of the shape
    `https://<your-server>:12470/library/addon/<token>/manifest.json` — the token is unique to your
    server, and the URL **must end in `/manifest.json`**.
