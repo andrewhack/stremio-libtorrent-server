@@ -970,3 +970,102 @@ def test_the_on_disk_badge_counts_episodes_not_torrents():
     body = page[page.index("function onDiskCounts"):page.index("function onDiskEpisodes")]
     assert "e.children" in body, "still counting one per torrent"
     assert "progress" in body, "a part-fetched episode is not one the owner has"
+
+
+# --- structural coverage: a script reaching for markup that is not there, or a loader nothing
+# calls, are both silent failures with no error to catch -- the browser returns null, or the
+# function simply never runs, and the feature quietly does not appear. A per-feature substring
+# test cannot catch either shape, because it only ever inspects the one string it was written to
+# check. This page shipped exactly that shape once already: a link whose loader was never wired to
+# anything that would run it, so it never rendered, while a substring test on the loader's own body
+# stayed green throughout. These three check the two failure modes -- and whether a same-origin
+# call is even a real route -- structurally, over the whole page, so the next feature shipped this
+# way is caught too, not just the addon panel that prompted writing them.
+
+_ID_LOOKUP_RE = re.compile(r"""(?:\$|document\.getElementById)\(\s*['"]([\w-]+)['"]\s*\)""")
+
+
+def test_every_id_the_script_looks_up_exists_in_the_markup():
+    """`$` is this page's own alias for `document.getElementById` (see its definition near the top
+    of the script), so both spellings are collected here. A script that reaches for an id the
+    markup does not define is silently inert: the browser hands back null, so whatever follows
+    either throws once with nothing on screen to explain it, or no-ops -- either way the feature
+    does not appear, and there is nothing for a substring test to see, because the id string it
+    looks up is exactly the thing that kind of test checks for.
+    """
+    page = _page()
+    looked_up = sorted(set(_ID_LOOKUP_RE.findall(page)))
+    assert len(looked_up) >= 20, f"id-lookup scan found only {looked_up} -- it is not working"
+    defined = set(re.findall(r'\bid=["\']([\w-]+)["\']', page))
+    missing = [i for i in looked_up if i not in defined]
+    assert not missing, f"the script looks up {missing}, which no element in the markup defines"
+
+
+def _balanced(src: str, open_idx: int) -> str:
+    """`src[open_idx:]` up to and including the `}` that matches the `{` at `open_idx`."""
+    depth = 0
+    for i in range(open_idx, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_idx:i + 1]
+    raise AssertionError(f"unbalanced braces from index {open_idx}")
+
+
+def _function_body(page: str, name: str) -> str:
+    m = re.search(rf"(?:async\s+)?function\s+{re.escape(name)}\s*\([^)]*\)\s*\{{", page)
+    assert m, f"function {name} not found in the page"
+    return _balanced(page, m.end() - 1)
+
+
+_LOAD_FN_RE = re.compile(r"(?:async\s+)?function\s+(load\w*)\s*\(")
+
+
+def test_every_loader_the_page_defines_is_called_from_somewhere():
+    """Not one function named by hand: every `load*` the page defines, checked the same way. This
+    finds whatever function DOMContentLoaded actually starts -- without assuming its name is
+    `boot` -- and then requires each loader to have a call site somewhere else in the script. A
+    helper invoked from an event handler or from another loader still counts as called; the
+    failure this catches is "defined, but not called from anywhere at all", which is exactly the
+    shape of the historical defect this generalises from: a loader that looked correct in
+    isolation and was never wired to anything that would run it.
+    """
+    page = _page()
+    wiring = re.search(
+        r"DOMContentLoaded['\"]\s*,\s*(?:async\s*)?\(\s*\)\s*=>\s*\{\s*(\w+)\s*\(\s*\)", page)
+    assert wiring, "nothing is wired to DOMContentLoaded"
+    boot_name = wiring.group(1)
+    boot_body = _function_body(page, boot_name)
+    assert len(boot_body) > 20, f"{boot_name}, wired to DOMContentLoaded, looks like an empty stub"
+
+    loaders = sorted(set(_LOAD_FN_RE.findall(page)))
+    assert len(loaders) >= 3, f"loader scan found only {loaders} -- the convention is not in use"
+    for name in loaders:
+        m = re.search(rf"(?:async\s+)?function\s+{re.escape(name)}\s*\([^)]*\)\s*\{{", page)
+        own_end = (m.end() - 1) + len(_balanced(page, m.end() - 1))
+        elsewhere = page[:m.start()] + page[own_end:]
+        called_in_boot = re.search(rf"\b{re.escape(name)}\s*\(", boot_body) is not None
+        assert re.search(rf"\b{re.escape(name)}\s*\(", elsewhere), (
+            f"{name} is defined but never called anywhere else in the page "
+            f"(called in {boot_name}: {called_in_boot})")
+
+
+_ENDPOINT_LITERAL_RE = re.compile(r"""['"](/library/api/[\w/-]*)['"]""")
+
+
+def test_every_same_origin_endpoint_the_page_calls_is_a_route_the_server_serves(tmp_path):
+    """`test_page_calls_every_endpoint_it_needs` pins four specific calls but never checks the
+    server actually answers any of them -- and knows nothing of the two the addon panel added,
+    `/library/api/addon` and `/library/api/addon/reset`. Deriving the list from the page instead
+    of hand-listing it a second time is what makes this catch a typo in the next endpoint too, not
+    just today's two.
+    """
+    page = _page()
+    endpoints = sorted(set(_ENDPOINT_LITERAL_RE.findall(page)))
+    assert len(endpoints) >= 8, f"endpoint scan found only {endpoints} -- the scan is not working"
+    app = create_app(settings=Settings(library_ui=True, cache_root=str(tmp_path)))
+    routes = {r.path for r in app.routes if "methods" in dir(r)}
+    missing = [e for e in endpoints if e not in routes]
+    assert not missing, f"the page calls {missing}, which the server does not serve"
