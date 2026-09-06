@@ -71,6 +71,43 @@ Titles and artwork come from the Stremio data already in your browser — your l
 of which stream played which video. The server stores a small `labels.json` beside the cache for the
 downloads you start here, so they are still labelled on a different device.
 
+## The library as a Stremio addon
+
+Turning the library on also registers it as a Stremio **addon**. The install address is on the page
+itself, in the **"Watch this library in Stremio"** panel below the shelves — add it once, in the app,
+under Addons → Add addon, and it produces two surfaces there:
+
+- a **My Library** row on the board, one card per title the server holds;
+- a **My Library** entry in a normal title's stream list, beside every other source, whenever the box
+  already holds that title.
+
+An entry the server has no Stremio identity for — a pasted magnet, or anything played before the
+library existed — still shows up on that board row, but under its on-disk **folder name** and with
+**no poster**: the addon can only name a title from `labels.json`, and guessing an identity from a
+folder name would risk putting the wrong film behind a right-looking row.
+
+The install address carries a token. **New link**, in the same panel, mints a fresh one and retires
+the old — every device that installed the previous address stops working immediately, which is what
+you want the moment a link has leaked or a device is retired.
+
+> **Installing the addon writes its URL into your Stremio account.** That is how a second device or a
+> TV inherits the install with nothing retyped — and also how that URL leaves this device and comes
+> to rest in Stremio's own storage. So the token alone is not treated as the boundary: the addon also
+> checks that the request comes from a **private network**, and this check trusts the
+> `X-Forwarded-For` header — which this image's own nginx sets to the real client address. If you put
+> **your own** reverse proxy in front of this server for remote access, it will typically overwrite
+> that header with *its own* address, and its own address is on your LAN. Every visitor arriving
+> through such a proxy then reads as local, and the token left in the URL becomes the only thing
+> between the addon and the internet. Prefer a VPN back to the LAN over fronting this port with a
+> reverse proxy, or make sure whatever you front it with forwards the original client address rather
+> than replacing it.
+>
+> A request either check rejects gets back a plain 404 — the same one a route that does not exist
+> would return — never a 401, which would at least confirm the path is real.
+
+Reachable from the LAN only, and — like the page itself — off entirely unless `STREMIOSRV_LIBRARY_UI`
+is turned on.
+
 ## How a download is started
 
 The page asks **your own addons** for streams, in the browser, exactly as the Stremio client does,

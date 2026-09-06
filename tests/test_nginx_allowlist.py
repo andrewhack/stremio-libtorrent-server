@@ -131,3 +131,22 @@ def test_library_routes_are_proxied_when_the_flag_is_on():
     assert not unreachable, (
         f"library routes not proxied by docker/nginx-locations.inc: {unreachable}"
     )
+
+
+def test_the_addon_paths_reach_the_app_through_the_include():
+    """`location ^~ /library` already covers these -- asserted so that narrowing that prefix later
+    cannot silently serve the web player's index.html to Stremio instead of a manifest."""
+    matchers = _proxied_matchers()
+    assert any(
+        _matches("/library/addon/sometoken/manifest.json", mod, val) for mod, val in matchers
+    )
+    assert any(
+        _matches("/library/addon/sometoken/catalog/other/library.json", mod, val)
+        for mod, val in matchers
+    )
+
+
+def test_the_client_address_is_forwarded():
+    """Without this header every proxied request arrives as nginx's own loopback address, and the
+    addon's LAN check would inspect the proxy instead of the client."""
+    assert "proxy_set_header X-Forwarded-For" in _INC.read_text(encoding="utf-8")

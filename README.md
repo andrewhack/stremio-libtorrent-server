@@ -28,7 +28,7 @@ No subscription. No tracking. No black box. **100% free and open — our gift to
 - **🎛️ Truly yours to control.** Real dials for cache, buffering, peers, and transcode — tune deeply, or never touch a thing.
 - **🖥️ Hardware transcode, optional.** Intel **VAAPI** / NVIDIA **NVENC** when you expose a GPU to the container (opt-in — see [Advanced](#-advanced--tune-it-your-way)), with graceful CPU fallback — and a missing GPU never stops it from starting.
 - **🧩 Your addons, your choice.** It's **neutral infrastructure**: it streams whatever a Stremio addon hands it. It bundles no content and is not a source.
-- **📚 A real torrent client, if you want one.** Turn on the optional library page and the server stops being a passthrough: queue a download before you sit down, see which episodes of a pack are actually on the disk, and keep the ones you want protected from the cache evictor — and it seeds what it keeps, like any decent client should. Off by default; set `STREMIOSRV_LIBRARY_UI=true` to try it.
+- **📚 A real torrent client, if you want one.** Turn on the optional library page and the server stops being a passthrough: queue a download before you sit down, see which episodes of a pack are actually on the disk, and keep the ones you want protected from the cache evictor — and it seeds what it keeps, like any decent client should. It also publishes itself as a Stremio addon, so what is on the box shows up as a row on your board and as a "play the local copy" entry beside every other source — on your LAN only, and off unless you turn the library on. Off by default; set `STREMIOSRV_LIBRARY_UI=true` to try it.
 - **🔓 Open source.** Read it, change it, trust it.
 
 ---
@@ -197,6 +197,7 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_PREFETCH_NEXT_MAX_BYTES` | `134217728` (128 MiB) | Ceiling on that head, so a very large episode doesn't pull 200 MB. |
 | `STREMIOSRV_PREFETCH_TRIGGER_FRACTION` | `0.90` | How far into the current episode the trigger sits. |
 | `STREMIOSRV_LIBRARY_UI` | `false` | **Opt-in download manager** at `/library` on the same origin as the web player: browse your Stremio library, download a title in full, and manage what is on disk as titles rather than folder names. Off by default — it is an authenticated page, so enabling it is a deliberate choice. See [docs/library-ui.md](docs/library-ui.md). |
+| `STREMIOSRV_LIBRARY_ADDON_ALLOW` | *(unset)* | Which client addresses may reach the library addon. Unset means loopback, private ranges, link-local, IPv6 ULA and carrier-grade NAT (so a private tunnel still works). Comma-separated CIDRs to replace that list. |
 | `STREMIOSRV_LIBRARY_OWNER` | *(unset)* | Which Stremio account may use it — the account id or its email. Unset = the **first** account to sign in claims the server. |
 | `STREMIOSRV_LIBRARY_ALLOW_HTTP` | `false` | Allow the library UI without TLS. Its session cookie is `Secure`, so plain HTTP is refused unless you set this — only do so on a trusted LAN or behind a VPN. |
 | `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
