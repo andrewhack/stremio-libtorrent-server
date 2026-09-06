@@ -336,6 +336,10 @@ const LIB = (() => {
       await loadStremioData();
       const st = await loadState();
       await renderBoard(st || lastState);
+      // Same tail as boot()'s signed-in branch. Without it a device's FIRST sign-in -- which is
+      // exactly the moment someone wants to install the addon -- rendered the library with the
+      // install panel still hidden, and it appeared only after an unprompted reload.
+      await loadAddon();
     } catch (e) {
       $('auth-err').textContent = e.status === 429
         ? 'Too many attempts. Wait a few minutes.'

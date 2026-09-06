@@ -1052,6 +1052,40 @@ def test_every_loader_the_page_defines_is_called_from_somewhere():
             f"(called in {boot_name}: {called_in_boot})")
 
 
+def _functions_calling(page: str, callee: str) -> list[str]:
+    """Every function whose body calls `callee`, excluding `callee` itself."""
+    out = []
+    for m in re.finditer(r"(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*\{", page):
+        name = m.group(1)
+        if name == callee:
+            continue
+        if re.search(rf"\b{re.escape(callee)}\s*\(", _balanced(page, m.end() - 1)):
+            out.append(name)
+    return out
+
+
+def test_every_path_that_renders_the_board_also_loads_the_addon_panel():
+    """The panel holding the addon install URL unhides only when `loadAddon` runs, and it is the
+    only place that URL appears -- so a path that puts the library on screen without it shows a
+    working library with no way to install anything.
+
+    That shipped: `boot()` called `loadAddon`, and the password sign-in path -- the one taken on a
+    device's FIRST sign-in -- rendered the board and did not, so the panel appeared only after a
+    later reload. `test_every_loader_the_page_defines_is_called_from_somewhere` passed throughout,
+    because "somewhere" was satisfied by `boot()`; this asserts the stronger thing that was
+    actually meant.
+    """
+    page = _page()
+    revealers = _functions_calling(page, "renderBoard")
+    assert len(revealers) >= 2, (
+        f"expected at least two paths that render the board, found {revealers} -- if the page was "
+        "restructured, this test needs to learn the new shape rather than be deleted")
+    for name in revealers:
+        assert re.search(r"\bloadAddon\s*\(", _function_body(page, name)), (
+            f"{name} renders the library but never calls loadAddon, so the install panel stays "
+            "hidden on that path")
+
+
 _ENDPOINT_LITERAL_RE = re.compile(r"""['"](/library/api/[\w/-]*)['"]""")
 
 

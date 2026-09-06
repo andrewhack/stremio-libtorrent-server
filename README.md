@@ -28,7 +28,7 @@ No subscription. No tracking. No black box. **100% free and open — our gift to
 - **🎛️ Truly yours to control.** Real dials for cache, buffering, peers, and transcode — tune deeply, or never touch a thing.
 - **🖥️ Hardware transcode, optional.** Intel **VAAPI** / NVIDIA **NVENC** when you expose a GPU to the container (opt-in — see [Advanced](#-advanced--tune-it-your-way)), with graceful CPU fallback — and a missing GPU never stops it from starting.
 - **🧩 Your addons, your choice.** It's **neutral infrastructure**: it streams whatever a Stremio addon hands it. It bundles no content and is not a source.
-- **📚 A real torrent client, if you want one.** Turn on the optional library page and the server stops being a passthrough: queue a download before you sit down, see which episodes of a pack are actually on the disk, and keep the ones you want protected from the cache evictor — and it seeds what it keeps, like any decent client should. It also publishes itself as a Stremio addon, so what is on the box shows up as a row on your board and as a "play the local copy" entry beside every other source — on your LAN only, and off unless you turn the library on. Off by default; set `STREMIOSRV_LIBRARY_UI=true` to try it.
+- **📚 A real torrent client, if you want one.** Turn on the optional library page and the server stops being a passthrough: queue a download before you sit down, see which episodes of a pack are actually on the disk, and keep the ones you want protected from the cache evictor — and it seeds what it keeps, like any decent client should. It also publishes itself as a Stremio addon, so what is on the box shows up as a row on your board and as a "play the local copy" entry beside every other source — on your LAN only, and off unless you turn the library on — see [Watch your library inside Stremio](#watch-your-library-inside-stremio) for the four steps. Off by default; set `STREMIOSRV_LIBRARY_UI=true` to try it.
 - **🔓 Open source.** Read it, change it, trust it.
 
 ---
@@ -224,6 +224,41 @@ the built-in routers for that first boot either.
 **Next-episode prefetch** (opt-in, off by default) pulls the head of the next episode in a pack so *Next* starts instantly — see [the full description on GitHub](https://github.com/andrewhack/stremio-libtorrent-server#next-episode-prefetch).
 
 <!--hub:skip-->
+### Watch your library inside Stremio
+
+Turning on the library page also publishes it as a **Stremio addon**, so what is on the box shows up
+in the app itself: a **My Library** row on your board, and a **play the local copy** entry in the
+stream list next to every other source. It is read-only — keeping, removing and starting downloads
+stay on the page, because the addon protocol has no way to express an action.
+
+**Installing it — four steps:**
+
+1. Start the server with `STREMIOSRV_LIBRARY_UI=true` (it is off by default, and so is the addon).
+2. Open **`https://<your-server>:12470/library/`** and sign in with your Stremio account.
+3. Scroll to **"Watch this library in Stremio"** at the bottom of that page and press **Copy**. That
+   gives you a URL of the shape
+   `https://<your-server>:12470/library/addon/<token>/manifest.json` — the token is unique to your
+   server, and the URL **must end in `/manifest.json`**.
+4. In Stremio: **Addons → Add addon**, paste, install.
+
+> Paste the address of the library **page** (`…/library/`) and Stremio will report
+> *"Failed to fetch: expected value at line 1 column 1"* — it asked for a manifest and got the HTML
+> of the page. Copy the link from the panel rather than from the address bar.
+
+Install it once on any device signed into your Stremio account and it syncs to the others, so a TV
+inherits it without anyone typing a URL. That convenience is also why the addon refuses requests from
+outside your network: the install URL and its token come to rest in your Stremio account, so the
+token alone is not treated as the boundary. Both a wrong token and an outside address get the same
+404 as a route that does not exist.
+
+Two things worth knowing before you judge what you see:
+
+- **Titles you merely watched have no poster and show a folder name.** The server only learns what a
+  torrent *is* when a download is started from the library page; anything cached by ordinary playback
+  was never told, so it appears as the name of the folder on disk.
+- **Rotating the link breaks existing installs**, which is the point of the **New link** button next
+  to Copy — it is how you take back a URL that has spread further than you meant.
+
 ### Next-episode prefetch
 
 Off by default. With `STREMIOSRV_PREFETCH_NEXT=true`, the server watches how much of the current
