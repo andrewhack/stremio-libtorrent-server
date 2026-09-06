@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import re
 
+from stremiosrv import pins as pinsmod
+from stremiosrv.library.state import is_watchable
+
 ADDON_ID = "org.stremiosrv.library"
 CATALOG_ID = "library"
 CATALOG_NAME = "My Library"
@@ -160,6 +163,11 @@ def playable_index(entry: dict) -> int | None:
         for f in addressable:
             if _basename(f.get("name") or "") == wanted_base:
                 return f["index"]
+    # Watchable, not merely present: ranking by raw bytes can pick a neighbour's boundary spill
+    # over the episode that is actually here.
+    watchable = [f for f in addressable if is_watchable(f)]
+    if watchable:
+        return max(watchable, key=lambda f: f.get("downloaded") or 0)["index"]
     if addressable:
         return max(addressable, key=lambda f: f.get("downloaded") or 0)["index"]
     return 0 if len(files) <= 1 else None
@@ -182,6 +190,28 @@ def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict | 
         "title": describe(entry),
         "behaviorHints": {"bingeGroup": f"{ID_PREFIX}{ih}"},
     }
+
+
+def episode_index(entry: dict, season: int, episode: int) -> int | None:
+    """The torrent file index holding this episode, or None if the pack does not hold it.
+
+    There is one label per infohash and a season pack holds many episodes, so matching the label's
+    own episode number answered for exactly one of them: on a real box, a pack with six episodes on
+    disk offered a stream on one episode page and nothing on the other five. The pack's file names
+    know better, and `pins.select_wanted_file` already reads them -- it is what the download path
+    uses to pick an episode out of a pack, so the same names resolve the same way in both places.
+
+    Only files with bytes count. Offering an episode that is not here would start fetching it on
+    play, which is the opposite of what "play the local copy" promises.
+    """
+    have = [f for f in (entry.get("files") or [])
+            if isinstance(f.get("index"), int) and is_watchable(f)]
+    if not have:
+        return None
+    # select_wanted_file returns a position in the list it was handed, not a torrent file index.
+    pos = pinsmod.select_wanted_file([f.get("name") or "" for f in have],
+                                     {"season": season, "episode": episode})
+    return None if pos is None else have[pos]["index"]
 
 
 def _label_matches(label: dict, base: str, season: int | None, episode: int | None) -> bool:
@@ -210,10 +240,20 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
         if not is_title(e):
             continue
         label = e.get("label") or {}
-        if label and _label_matches(label, base, season, episode):
+        if not label or (label.get("metaId") or "") != base:
+            continue
+        stream = None
+        if season is not None:
+            # The pack's own files first: they cover every episode it holds, not only the one the
+            # label happens to name. The label match stays below as the fallback for a torrent
+            # whose file names carry no readable episode number -- there, the label is all we have.
+            idx = episode_index(e, season, episode)
+            if idx is not None:
+                stream = stream_for(e, origin, idx)
+        if stream is None and _label_matches(label, base, season, episode):
             stream = stream_for(e, origin)
-            if stream is not None:
-                out.append(stream)
+        if stream is not None:
+            out.append(stream)
     return out
 
 
@@ -247,7 +287,7 @@ def meta_for(entry: dict) -> dict:
     # arrives and identical for a file at 0% and one that is finished, so it is not evidence that
     # anything of it is actually on disk -- `downloaded` is.
     on_disk = [f for f in (entry.get("files") or [])
-               if (f.get("downloaded") or 0) > 0 and isinstance(f.get("index"), int)]
+               if is_watchable(f) and isinstance(f.get("index"), int)]
     if len(on_disk) > 1:
         meta["videos"] = [
             {"id": format_id(ih, f["index"]), "title": f.get("name") or f"file {f['index']}",

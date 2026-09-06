@@ -33,6 +33,18 @@ FRAGMENT_BYTES = 64 * 1024 * 1024
 FRAGMENT_FRACTION = 0.02
 
 
+
+def is_watchable(f: dict) -> bool:
+    """Whether this file is something someone could actually watch, rather than boundary spill.
+
+    A piece straddles the boundary between two files, so fetching one leaves kilobytes -- sometimes
+    a few megabytes -- of its neighbours behind. Named here rather than inlined because the addon
+    asks the same question about the same files: an episode offered on the strength of 11 MB of
+    spill is a stream that stalls on the first seek.
+    """
+    return bool(f.get("wanted")) or (f.get("downloaded") or 0) >= FRAGMENT_BYTES         or (f.get("progress") or 0) >= FRAGMENT_FRACTION
+
+
 def _disk_files(cache_root: str, name: str) -> list[dict]:
     """Per-file facts read from the DISK, for a torrent the session is not holding.
 
@@ -165,9 +177,7 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         # the other way round. Show what someone could actually watch; account for the rest in one
         # line rather than dropping it, because unattributed disk is what this view exists to stop.
         held = [f for f in (engine_files or disk_files) if f.get("downloaded")]
-        files = [f for f in held
-                 if f.get("wanted") or f["downloaded"] >= FRAGMENT_BYTES
-                 or f.get("progress", 0) >= FRAGMENT_FRACTION]
+        files = [f for f in held if is_watchable(f)]
         scraps = [f for f in held if f not in files]
         # One file is worth a card too when the list came from the disk: the entry is named after
         # the TORRENT, so a pack holding a single episode otherwise shows the season's name and

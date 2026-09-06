@@ -3,6 +3,7 @@ from stremiosrv.library import addon_model as am
 from stremiosrv.library import state as statemod
 
 IH = "a1b2c3d4e5" * 4  # 40 hex chars
+GB = 1073741824
 
 
 def test_an_id_round_trips_with_and_without_a_file_index():
@@ -283,6 +284,79 @@ def test_a_pack_with_no_addressable_file_is_not_offered_for_a_meta_id():
                files=[{"index": None, "name": "one.mkv", "size": 900},
                       {"index": None, "name": "two.mkv", "size": 800}])
     assert am.streams_for_meta_id({"entries": [e]}, "tt0000005", ORIGIN) == []
+
+
+def test_a_pack_answers_for_every_episode_it_holds_not_just_the_labelled_one():
+    """One infohash carries one label, and a season pack carries many episodes -- so matching the
+    label's own episode number answered for exactly one of them. On a real box a nine-file pack
+    with six episodes on disk offered a stream on one episode page and nothing on the other five.
+    The episode is resolved from the pack's own file names instead, the same way the download path
+    already picks an episode out of a pack."""
+    e = _entry(
+        label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
+        files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                "progress": 1.0},
+               {"index": 7, "name": "Show.S01E08.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                "progress": 1.0}])
+    state = {"entries": [e]}
+    five = am.streams_for_meta_id(state, "tt0000010:1:5", ORIGIN)
+    eight = am.streams_for_meta_id(state, "tt0000010:1:8", ORIGIN)
+    assert len(five) == 1 and five[0]["url"].endswith("/3"), five
+    assert len(eight) == 1 and eight[0]["url"].endswith("/7"), eight
+
+
+def test_an_episode_the_pack_does_not_hold_is_not_offered():
+    """Saying nothing is the honest answer: offering it would play a file with no bytes and start
+    fetching it, which is not what "play the local copy" means."""
+    e = _entry(
+        label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
+        files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                "progress": 1.0}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:9", ORIGIN) == []
+
+
+def test_an_episode_present_but_with_no_bytes_yet_is_not_offered():
+    e = _entry(
+        label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
+        files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                "progress": 1.0},
+               {"index": 7, "name": "Show.S01E08.mkv", "size": 4 * GB, "downloaded": 0,
+                "progress": 0.0}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:8", ORIGIN) == []
+
+
+def test_boundary_spill_from_a_neighbour_is_not_an_episode():
+    """The real shape this was written against: a nine-file pack where two episodes nobody asked
+    for hold a few MB each, left behind because a piece straddles the boundary between files. The
+    server reported them as present and the addon would have offered a stream that stalls on the
+    first seek. `wanted`, 64 MiB, or 2% -- the same rule the library page draws the line with."""
+    e = _entry(
+        label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
+        files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                "progress": 1.0},
+               {"index": 0, "name": "Show.S01E01.mkv", "size": 4 * GB, "downloaded": 11_300_000,
+                "progress": 0.003}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:1", ORIGIN) == []
+    assert len(am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:5", ORIGIN)) == 1
+
+
+def test_a_single_file_episode_still_matches_on_its_label_alone():
+    """A one-file torrent whose name the episode patterns cannot read is why the label match has to
+    stay: the file list can resolve nothing, and the label is all there is."""
+    e = _entry(label={"type": "series", "metaId": "tt0000011", "season": 2, "episode": 4,
+                      "name": "Episode"},
+               files=[{"index": 0, "name": "some.release.name.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    state = {"entries": [e]}
+    assert len(am.streams_for_meta_id(state, "tt0000011:2:4", ORIGIN)) == 1
+    assert am.streams_for_meta_id(state, "tt0000011:2:5", ORIGIN) == []
+
+
+def test_a_pack_never_answers_for_a_different_show():
+    e = _entry(label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5},
+               files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0009999:1:5", ORIGIN) == []
 
 
 def test_meta_carries_the_name_poster_and_description():
