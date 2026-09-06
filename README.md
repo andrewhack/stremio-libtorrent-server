@@ -241,6 +241,11 @@ stay on the page, because the addon protocol has no way to express an action.
    server, and the URL **must end in `/manifest.json`**.
 4. In Stremio: **Addons → Add addon**, paste, install.
 
+**Where to look for it.** On the board it is a row titled *My Library*. On a film or episode
+page it is a source in the right-hand list — at the **bottom**, below your other addons: the
+app groups streams by addon in install order and the protocol has no way to ask for a
+position. With a couple of torrent addons installed that can be a dozen rows down, so scroll.
+
 > Paste the address of the library **page** (`…/library/`) and Stremio will report
 > *"Failed to fetch: expected value at line 1 column 1"* — it asked for a manifest and got the HTML
 > of the page. Copy the link from the panel rather than from the address bar.

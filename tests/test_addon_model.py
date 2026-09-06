@@ -359,6 +359,31 @@ def test_a_pack_never_answers_for_a_different_show():
     assert am.streams_for_meta_id({"entries": [e]}, "tt0009999:1:5", ORIGIN) == []
 
 
+def test_a_stream_for_one_episode_describes_that_episode_not_the_whole_pack():
+    """The row read "24.74 GB" behind a 3.57 GB episode, because the title described the TORRENT.
+    A season pack's size on a single episode's row is not a rounding error -- it is the wrong
+    number entirely, and the one the viewer uses to judge what they are about to play."""
+    e = _entry(
+        size=24 * GB,
+        label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
+        files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                "progress": 1.0},
+               {"index": 7, "name": "Show.S01E08.mkv", "size": 3 * GB, "downloaded": 3 * GB,
+                "progress": 1.0}])
+    s = am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:8", ORIGIN)[0]
+    assert "3.00 GB" in s["title"], s["title"]
+    assert "24.00 GB" not in s["title"], s["title"]
+    # and it names the file, so the row is recognisable next to every other source
+    assert "Show.S01E08.mkv" in s["title"], s["title"]
+
+
+def test_a_whole_torrent_stream_still_describes_the_torrent():
+    """A film, or a title offered as a whole: there is no single file to describe, so the entry's
+    own size is the right one."""
+    s = am.stream_for(_entry(size=4 * GB), ORIGIN)
+    assert "4.00 GB" in s["title"]
+
+
 def test_meta_carries_the_name_poster_and_description():
     e = _entry(label={"name": "Real Name", "poster": "https://example.invalid/p.jpg"})
     m = am.meta_for(e)

@@ -87,16 +87,31 @@ def display_name(entry: dict) -> str:
     return name
 
 
-def describe(entry: dict) -> str:
-    bits = [human_size(entry.get("size") or 0)]
+def _state_bits(entry: dict) -> list[str]:
+    """Everything after the size: facts about the TORRENT, true whichever of its files is offered."""
     state = entry.get("state") or "idle"
-    bits.append("downloading" if state == "downloading" else
-                ("seeding" if state == "seeding" else "on disk"))
+    bits = ["downloading" if state == "downloading" else
+            ("seeding" if state == "seeding" else "on disk")]
     if entry.get("pinned"):
         bits.append("kept")
     if entry.get("seeds"):
         bits.append(f"{entry['seeds']} seeders")
-    return " · ".join(bits)
+    return bits
+
+
+def describe(entry: dict) -> str:
+    return " · ".join([human_size(entry.get("size") or 0), *_state_bits(entry)])
+
+
+def describe_file(entry: dict, f: dict) -> str:
+    """The line under a stream offering ONE file of a pack.
+
+    The size is the file's, not the torrent's. A 24 GB season pack printed on the row for a 3.5 GB
+    episode is not a rounding error, it is the wrong number -- and it is the number a viewer reads
+    to decide what they are about to play.
+    """
+    size = f.get("size") or f.get("downloaded") or 0
+    return " · ".join([human_size(size), *_state_bits(entry)])
 
 
 def is_title(entry: dict) -> bool:
@@ -184,10 +199,18 @@ def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict | 
     if idx is None:
         return None
     ih = entry["infoHash"].lower()
+    # Describe the file being offered when the entry knows it -- a pack's own size on one episode's
+    # row is the wrong number. The file name goes first, the way every other source row names what
+    # it is about to play, so ours is recognisable beside them.
+    chosen = next((f for f in (entry.get("files") or []) if f.get("index") == idx), None)
+    if chosen is not None and len(entry.get("files") or []) > 1:
+        title = _basename(chosen.get("name") or "") + "\n" + describe_file(entry, chosen)
+    else:
+        title = describe(entry)
     return {
         "url": f"{origin}/{ih}/{idx}",
         "name": CATALOG_NAME,
-        "title": describe(entry),
+        "title": title,
         "behaviorHints": {"bingeGroup": f"{ID_PREFIX}{ih}"},
     }
 
