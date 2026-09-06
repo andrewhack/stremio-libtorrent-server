@@ -115,29 +115,53 @@ def preview(entry: dict) -> dict:
     return item
 
 
-def catalog(state: dict) -> list[dict]:
-    return [preview(e) for e in state.get("entries", []) if is_title(e)]
+def parse_skip(extra: str) -> int:
+    """The paged grid's offset, out of an `extra` path segment like `skip=100` or
+    `genre=Action&skip=100` -- Stremio's own format, `&`-joined `key=value` pairs. 0 when absent or
+    unparseable: an addon must not fail a whole row over an extra property it does not recognise.
+    """
+    for pair in (extra or "").split("&"):
+        key, _, value = pair.partition("=")
+        if key == "skip" and value.isdecimal():
+            return int(value)
+    return 0
+
+
+def catalog(state: dict, skip: int = 0) -> list[dict]:
+    return [preview(e) for e in state.get("entries", []) if is_title(e)][skip:]
+
+
+def _basename(name: str) -> str:
+    """The last path segment, on either separator: an engine-side name and a disk-side one are not
+    guaranteed to agree on which one they carry, or whether they carry one at all."""
+    return (name or "").replace("\\", "/").rsplit("/", 1)[-1]
 
 
 def playable_index(entry: dict) -> int | None:
     """Which file in the torrent this entry means, or None when nothing here can be addressed.
 
     A file is addressable only if its index is an int: the stream URL is
-    `<origin>/<infohash>/<fileIdx>` and there is nothing else to put there. The recorded selection
-    wins when there is one, including 0 -- that is the file the download was started for. Otherwise
-    the largest addressable file, because a pack's feature is its big file and its samples are not.
-    With at most one file listed (a single-file torrent, or no file list at all) index 0 is the only
-    answer and a safe one. Anything wider with no addressable file -- state.py's disk fallback
-    reports every file as index None once the engine handle is gone -- is refused rather than
-    guessed: on a real torrent index 0 was a text file and the video was index 1.
+    `<origin>/<infohash>/<fileIdx>` and there is nothing else to put there. `wantedFile` is the
+    NAME of the file the download was started for (engine.wanted_path), never an index -- it wins
+    by matching basenames against the addressable files, whichever of them it matches, whether or
+    not it has bytes yet, because it is what the download was started for. Otherwise the
+    addressable file with the most bytes DOWNLOADED, not the largest declared size -- size is
+    identical for a file at 0% and one that is finished, so ranking by it can point at a file that
+    is not actually here yet. With at most one file listed (a single-file torrent, or no file list
+    at all) index 0 is the only answer and a safe one. Anything wider with no addressable file --
+    state.py's disk fallback reports every file as index None once the engine handle is gone -- is
+    refused rather than guessed: on a real torrent index 0 was a text file and the video was index 1.
     """
-    wanted = entry.get("wantedFile")
-    if isinstance(wanted, int):
-        return wanted
     files = entry.get("files") or []
     addressable = [f for f in files if isinstance(f.get("index"), int)]
+    wanted = entry.get("wantedFile")
+    if isinstance(wanted, str) and wanted:
+        wanted_base = _basename(wanted)
+        for f in addressable:
+            if _basename(f.get("name") or "") == wanted_base:
+                return f["index"]
     if addressable:
-        return max(addressable, key=lambda f: f.get("size") or 0)["index"]
+        return max(addressable, key=lambda f: f.get("downloaded") or 0)["index"]
     return 0 if len(files) <= 1 else None
 
 

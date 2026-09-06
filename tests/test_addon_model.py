@@ -1,5 +1,6 @@
 """The pure half of the Stremio addon: ids, manifest, and the payloads built from library state."""
 from stremiosrv.library import addon_model as am
+from stremiosrv.library import state as statemod
 
 IH = "a1b2c3d4e5" * 4  # 40 hex chars
 
@@ -99,6 +100,31 @@ def test_orphan_partfiles_and_entries_without_an_infohash_are_not_offered():
     assert [i["name"] for i in items] == ["Sample Title"]
 
 
+def test_parse_skip_reads_the_paging_offset_and_ignores_the_rest():
+    """Stremio's paged grid appends the same page again at 100+ entries via `skip=<n>` in the extra
+    segment, joined with `&` when other extra properties are present."""
+    assert am.parse_skip("skip=100") == 100
+    assert am.parse_skip("genre=Action&skip=50") == 50
+    assert am.parse_skip("skip=50&genre=Action") == 50
+
+
+def test_parse_skip_defaults_to_zero_when_absent_or_unparseable():
+    """Ignore what is not understood rather than failing the whole row."""
+    assert am.parse_skip("") == 0
+    assert am.parse_skip("genre=Action") == 0
+    assert am.parse_skip("skip=notanumber") == 0
+    assert am.parse_skip("skip=-5") == 0
+
+
+def test_catalog_slices_by_skip():
+    state = {"entries": [_entry(infoHash="a" * 40, name="One"),
+                         _entry(infoHash="b" * 40, name="Two"),
+                         _entry(infoHash="c" * 40, name="Three")]}
+    assert [i["name"] for i in am.catalog(state)] == ["One", "Two", "Three"]
+    assert [i["name"] for i in am.catalog(state, skip=1)] == ["Two", "Three"]
+    assert am.catalog(state, skip=10) == []
+
+
 ORIGIN = "https://box.invalid:12470"
 
 
@@ -114,17 +140,47 @@ def test_a_stream_points_at_the_file_route_on_the_origin_it_was_asked_through():
 
 
 def test_the_played_file_is_the_one_the_download_asked_for():
-    e = _entry(wantedFile=4, files=[{"index": 1, "name": "a.mkv", "size": 10},
-                                    {"index": 4, "name": "b.mkv", "size": 5}])
+    """`wantedFile` is the NAME the download was started for (engine.wanted_path/wanted_path()),
+    never an index -- a shape that never occurs in production. Matching by name is what makes the
+    smaller, wanted file win over the larger one here."""
+    e = _entry(wantedFile="b.mkv",
+               files=[{"index": 1, "name": "a.mkv", "size": 9000, "downloaded": 9000},
+                      {"index": 4, "name": "b.mkv", "size": 5, "downloaded": 5}])
     assert am.playable_index(e) == 4
+
+
+def test_the_wanted_file_wins_even_with_no_bytes_downloaded_yet():
+    """It is what the download was started for, whether or not any of it has arrived -- ranking by
+    bytes downloaded must never override a recorded selection."""
+    e = _entry(wantedFile="b.mkv",
+               files=[{"index": 1, "name": "a.mkv", "size": 5000, "downloaded": 5000},
+                      {"index": 4, "name": "b.mkv", "size": 900, "downloaded": 0}])
+    assert am.playable_index(e) == 4
+
+
+def test_the_wanted_file_matches_by_basename_even_when_one_side_carries_a_path():
+    e = _entry(wantedFile="show.s01e02.mkv",
+               files=[{"index": 1, "name": "show.s01e01.mkv", "size": 900, "downloaded": 900},
+                      {"index": 2, "name": "subdir/show.s01e02.mkv", "size": 10, "downloaded": 0}])
+    assert am.playable_index(e) == 2
 
 
 def test_without_a_wanted_file_the_biggest_addressable_file_wins():
     """Covers the engine-derived shape: real integer indices, never None. A pack with no recorded
-    selection: the feature is the video, and the video is the big file."""
-    e = _entry(files=[{"index": 1, "name": "sample.mkv", "size": 10},
-                      {"index": 7, "name": "feature.mkv", "size": 9000}])
+    selection and both files fully on disk: the feature is the video, and the video is the big
+    file."""
+    e = _entry(files=[{"index": 1, "name": "sample.mkv", "size": 10, "downloaded": 10},
+                      {"index": 7, "name": "feature.mkv", "size": 9000, "downloaded": 9000}])
     assert am.playable_index(e) == 7
+
+
+def test_ranking_with_no_wanted_file_uses_bytes_downloaded_not_declared_size():
+    """`meta_for` was already fixed to rank by `downloaded`; this is the same fix for
+    `playable_index`. `size` is the torrent's declared size and is identical for a file at 0% and
+    one that is finished -- it says nothing about what is actually on disk."""
+    e = _entry(files=[{"index": 1, "name": "a.mkv", "size": 9000, "downloaded": 100},
+                      {"index": 2, "name": "b.mkv", "size": 10, "downloaded": 5000}])
+    assert am.playable_index(e) == 2
 
 
 def test_a_file_the_engine_can_address_beats_one_it_cannot():
@@ -151,6 +207,54 @@ def test_a_single_file_entry_without_an_index_still_plays_as_index_zero():
     e = _entry(files=[{"index": None, "name": "only.mkv", "size": 900}])
     assert am.playable_index(e) == 0
     assert am.stream_for(e, ORIGIN)["url"] == f"{ORIGIN}/{IH}/0"
+
+
+class _FakeEngine:
+    """The exact two methods state.build calls on an engine -- see state._engine_view, which is the
+    only place `build` ever touches its `engine` argument. Nothing else is implemented on purpose:
+    a test double growing extra methods is how a fake quietly stops matching the real contract."""
+
+    def __init__(self, names: dict, statuses: list[dict]) -> None:
+        self._names = names
+        self._statuses = statuses
+
+    def name_to_hash(self) -> dict:
+        return self._names
+
+    def tracked_status(self) -> list[dict]:
+        return self._statuses
+
+
+def test_a_real_state_build_feeds_playable_index_a_pack_where_the_wanted_file_is_not_the_biggest(
+        tmp_path):
+    """The root-cause finding: every other test in this file hand-builds the entry dict, and one of
+    those hand-built shapes (`wantedFile` as an int) never occurs in production -- which is exactly
+    how the dead `isinstance(wantedFile, int)` branch survived. This drives the real
+    state.build/_disk_files path against a temporary cache root instead, with a pack whose wanted
+    file is the SMALLER of the two, so a ranking-by-size regression fails it just as surely as the
+    dead int-branch would."""
+    ih = "d" * 40
+    name = "Pack"
+    d = tmp_path / name
+    d.mkdir()
+    (d / "small.mkv").write_bytes(b"x" * 10)
+    (d / "big.mkv").write_bytes(b"x" * 10)
+    files = [
+        {"index": 0, "name": "big.mkv", "size": 9_000_000_000, "downloaded": 9_000_000_000,
+         "progress": 1.0, "wanted": False},
+        {"index": 1, "name": "small.mkv", "size": 400_000_000, "downloaded": 400_000_000,
+         "progress": 1.0, "wanted": True},
+    ]
+    status = {"infoHash": ih, "name": name, "pinned": False, "wantedFile": "small.mkv",
+              "files": files, "numFiles": 2, "remaining": 0, "progress": 1.0, "state": "seeding",
+              "downloaded": 9_400_000_000, "uploaded": 0, "ratio": 0.0, "uploadSpeed": 0,
+              "downloadSpeed": 0, "peers": 0, "seeds": 0}
+    engine = _FakeEngine(names={name: ih}, statuses=[status])
+
+    state = statemod.build(str(tmp_path), engine)
+    entry = am.find_entry(state, ih)
+    assert entry is not None
+    assert am.playable_index(entry) == 1
 
 
 def test_a_series_label_matches_only_its_own_episode():
