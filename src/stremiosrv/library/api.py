@@ -161,6 +161,27 @@ def config(request: Request) -> dict:
             "certShared": authmode.is_shared_cert(san)}
 
 
+def _addon_url(request: Request, token: str) -> str:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}/library/addon/{token}/manifest.json"
+
+
+@router.get("/api/addon", dependencies=[Depends(require_session)])
+def addon_link(request: Request) -> dict:
+    """Where to install the addon from. Session-guarded: the URL contains the token."""
+    s = _settings(request)
+    return {"url": _addon_url(request, sessionmod.ensure_addon_token(s.cache_root))}
+
+
+@router.post("/api/addon/reset", dependencies=[Depends(require_session)])
+def addon_reset(request: Request) -> dict:
+    """Mint a new token. Every device that installed the old URL stops working, which is the
+    point: the URL syncs into the Stremio account and this is the only way to take it back."""
+    s = _settings(request)
+    return {"url": _addon_url(request, sessionmod.reset_addon_token(s.cache_root))}
+
+
 @router.post("/api/session")
 def create_session(body: SessionBody, request: Request, response: Response) -> dict:
     """Exchange an authKey the browser already had for a session cookie."""

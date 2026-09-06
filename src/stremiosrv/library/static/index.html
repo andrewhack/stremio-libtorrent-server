@@ -178,6 +178,16 @@
       <p class="note">Not matched to a title &mdash; still taking up space.</p>
       <div class="shelf" id="other"></div>
     </section>
+    <section id="sec-addon" hidden>
+      <h2>Watch this library in Stremio</h2>
+      <p class="note">Add this address in Stremio &rarr; Addons &rarr; Add addon. It works only
+         from inside your network, and installing it stores the address in your Stremio account.</p>
+      <div><code id="addonUrl" style="word-break:break-word"></code></div>
+      <div class="addbar">
+        <button id="addonCopy" class="ghost">Copy</button>
+        <button id="addonReset" class="warn">New link</button>
+      </div>
+    </section>
   </div>
 </main>
 
@@ -546,6 +556,15 @@ const LIB = (() => {
     showApp();
     render(data);
     return data;
+  }
+
+  // The addon install link. A convenience panel, not something the rest of the page depends on --
+  // so a failure here just leaves it hidden rather than surfacing an error anywhere.
+  async function loadAddon() {
+    let data;
+    try { data = await api('/library/api/addon'); } catch { return; }
+    $('addonUrl').textContent = data.url;
+    $('sec-addon').hidden = false;
   }
 
   // Populated from api.strem.io when this browser has no player data of its own — a device that
@@ -1314,6 +1333,19 @@ const LIB = (() => {
       $('magnet').value = '';
       startDownload(m, null);
     };
+    $('addonCopy').onclick = () => {
+      navigator.clipboard.writeText($('addonUrl').textContent);
+    };
+    $('addonReset').onclick = async () => {
+      // Rotation breaks every existing install, so it asks first. A plain confirm() is fine here
+      // -- unlike Remove, this button is always visible rather than :hover-revealed, so it does
+      // not need the two-tap arm/disarm dance that one uses.
+      if (!confirm('Replace the link? Devices that already added it will stop working.')) return;
+      try {
+        const data = await api('/library/api/addon/reset', { method: 'POST' });
+        $('addonUrl').textContent = data.url;
+      } catch { /* the panel just keeps showing the old link */ }
+    };
     $('signout').onclick = async () => {
       await api('/library/api/session', { method: 'DELETE' }).catch(() => {});
       rememberAuthKey(null); remoteLibrary = null; remoteAddons = null; libraryError = '';
@@ -1326,6 +1358,7 @@ const LIB = (() => {
       await loadStremioData();
       const st = await loadState();
       await renderBoard(st || lastState);   // built ONCE; the poll only refreshes markers
+      await loadAddon();
     }
     setInterval(() => { if (!$('app').hidden) loadState().catch(() => {}); }, 5000);
     // The 5s poll above is local disk state and must stay that way -- it must never become an
