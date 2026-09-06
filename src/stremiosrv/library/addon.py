@@ -49,7 +49,10 @@ def _guard(request: Request, token: str) -> None:
     if not netguard.is_allowed(ip, netguard.parse_allow(s.library_addon_allow)):
         raise HTTPException(status_code=404)
     expected = sessionmod.ensure_addon_token(s.cache_root)
-    if not hmac.compare_digest(token or "", expected):
+    # Bytes, not str: hmac.compare_digest raises TypeError on a str containing non-ASCII
+    # characters, and the token comes straight off the URL path -- an uncaught 500 there is just as
+    # much a tell as a 401 would be, on a route whose whole point is answering 404 either way.
+    if not hmac.compare_digest((token or "").encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=404)
 
 
@@ -90,12 +93,14 @@ def manifest(token: str, request: Request) -> dict:
 @router.get("/{token}/catalog/{type_}/{catalog_id}.json")
 @router.get("/{token}/catalog/{type_}/{catalog_id}/{extra}.json")
 def catalog(token: str, type_: str, catalog_id: str, request: Request, extra: str = "") -> dict:
-    """`extra` is accepted and ignored. Stremio appends it (skip=…) whether or not the manifest
-    asks for it, and a 404 there empties the row with nothing in any log to say why."""
+    """`extra` may carry `skip=<n>` (Stremio's paged grid re-requests the same page again once a
+    row passes ~100 entries) alongside other `&`-joined pairs, or nothing at all -- Stremio appends
+    it whether or not the manifest asks for it. Anything in it besides `skip` is ignored rather than
+    failing the row, and a 404 here would empty it with nothing in any log to say why."""
     _guard(request, token)
     if type_ != "other" or catalog_id != model.CATALOG_ID:
         return {"metas": []}
-    return {"metas": model.catalog(_state(request))}
+    return {"metas": model.catalog(_state(request), model.parse_skip(extra))}
 
 
 @router.get("/{token}/meta/{type_}/{meta_id}.json")
@@ -103,7 +108,10 @@ def meta(token: str, type_: str, meta_id: str, request: Request) -> dict:
     _guard(request, token)
     parsed = model.parse_id(meta_id)
     if parsed is None:
-        raise HTTPException(status_code=404, detail="not found")
+        # No `detail`: same reason `_guard` passes none -- FastAPI then defaults it to the exact
+        # phrase Starlette's own router uses for a route that matches nothing, so every reachable
+        # refusal in this file renders the same byte-identical body.
+        raise HTTPException(status_code=404)
     entry = model.find_entry(_state(request), parsed[0])
     return {"meta": model.meta_for(entry) if entry else {}}
 
@@ -111,11 +119,20 @@ def meta(token: str, type_: str, meta_id: str, request: Request) -> dict:
 @router.get("/{token}/stream/{type_}/{stream_id}.json")
 def stream(token: str, type_: str, stream_id: str, request: Request) -> dict:
     """Two id shapes: our own (the catalog and its meta pages) and Stremio's `tt…`, which is the
-    row that appears in the app's stream list beside every other source."""
+    row that appears in the app's stream list beside every other source.
+
+    The id is parsed BEFORE the library state is built. Stremio asks every installed addon for
+    streams on every title the user opens, held or not, so a third id shape -- some other addon's
+    own -- arrives here constantly; building state for it would be a full disk scan (state.build
+    walks the whole cache directory) with no possible use, once per title, on every page the owner
+    opens.
+    """
     _guard(request, token)
+    parsed = model.parse_id(stream_id)
+    if parsed is None and not stream_id.startswith("tt"):
+        return {"streams": []}
     state = _state(request)
     origin = _origin(request)
-    parsed = model.parse_id(stream_id)
     if parsed is not None:
         ih, idx = parsed
         entry = model.find_entry(state, ih)
@@ -123,6 +140,4 @@ def stream(token: str, type_: str, stream_id: str, request: Request) -> dict:
         # nothing is the point of that, so it must not become a [None] here.
         found = model.stream_for(entry, origin, idx) if entry else None
         return {"streams": [found] if found else []}
-    if stream_id.startswith("tt"):
-        return {"streams": model.streams_for_meta_id(state, stream_id, origin)}
-    return {"streams": []}
+    return {"streams": model.streams_for_meta_id(state, stream_id, origin)}
