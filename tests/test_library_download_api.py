@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -221,6 +223,54 @@ def test_remove_reclaims_the_partfile_and_resume_record(tmp_path, monkeypatch):
     assert not (root / "a-download").exists(), "the data directory survived"
     assert not part.exists(), "the .parts holding file survived — most of the data lives there"
     assert not resume.exists(), "the fast-resume record survived"
+
+
+def test_remove_deletes_a_cached_title_the_engine_never_loaded(tmp_path, monkeypatch):
+    """Only pinned and wanted torrents are re-added to the session at startup, so an ordinary
+    cached title is invisible to `engine.name_to_hash()` -- and Remove resolved the directory to
+    delete from the engine alone. On a live box the button did nothing at all: no error, no
+    deletion, and the card came straight back on the next refresh. The name index, written whenever
+    resume data is saved, remembers what the session has forgotten -- the same registry the evictor
+    already consults for exactly this reason."""
+    root = tmp_path / "cache"
+    (root / ".resume").mkdir(parents=True)
+    (root / "A Cached Title").mkdir()
+    (root / "A Cached Title" / "f.bin").write_bytes(b"x" * 64)
+    (root / ".resume" / "index.json").write_text(
+        json.dumps({"A Cached Title": IH}), encoding="utf-8")
+
+    eng = FakeEngine()  # the session knows nothing about this torrent
+    c = _signed_in(root, monkeypatch, eng)
+    r = c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
+    assert r.status_code == 200
+    assert r.json().get("removed") is True
+    assert not (root / "A Cached Title").exists(), "the data directory survived"
+
+
+def test_remove_reports_when_it_found_nothing_to_delete(tmp_path, monkeypatch):
+    """A remove that deletes nothing must not answer the same as one that worked: that is what made
+    the failure above invisible from the outside."""
+    root = tmp_path / "cache"
+    (root / ".resume").mkdir(parents=True)
+    c = _signed_in(root, monkeypatch, FakeEngine())
+    r = c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
+    assert r.status_code == 200
+    assert r.json().get("removed") is False
+
+
+def test_remove_still_refuses_a_traversing_name_from_the_index(tmp_path, monkeypatch):
+    """The index is written from torrent names, which the operator did not author -- so the new
+    lookup inherits the same guard the engine-supplied name already had."""
+    outside = tmp_path.parent / "must-survive-index.txt"
+    outside.write_text("do not delete me", encoding="utf-8")
+    root = tmp_path / "cache"
+    (root / ".resume").mkdir(parents=True)
+    (root / ".resume" / "index.json").write_text(
+        json.dumps({"../must-survive-index.txt": IH}), encoding="utf-8")
+
+    c = _signed_in(root, monkeypatch, FakeEngine())
+    c.post("/library/api/remove", json={"infoHash": IH}, headers=HTTPS)
+    assert outside.exists(), "remove escaped cache_root via the name index"
 
 
 def test_remove_stops_the_torrent_before_deleting(tmp_path, monkeypatch):

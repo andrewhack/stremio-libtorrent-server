@@ -357,14 +357,31 @@ def remove(body: RemoveBody, request: Request) -> dict:
     eng.unwant(info_hash)  # forget the selectors too, or a restart resumes what was just removed
     eng.remove(info_hash)  # drops it from the session: downloading stops before anything is deleted
     name = names.get(info_hash)
+    if not name:
+        # The engine knows only what is IN THE SESSION, and only pinned and wanted torrents are
+        # re-added at startup -- so an ordinary cached title is invisible to it, and Remove
+        # resolved nothing, deleted nothing, and still answered ok. On a live box the button did
+        # nothing at all and the card returned on the next refresh. The name index, written
+        # whenever resume data is saved, remembers what the session forgot; the evictor already
+        # reads it for exactly this reason.
+        name = next((n for n, h in cachemod.load_name_index(s.cache_root).items()
+                     if str(h).lower() == info_hash), None)
+    removed = False
     # The name comes from the TORRENT, not from the operator. Require a plain direct child of
     # cache_root and refuse PROTECTED names, so a torrent called `../../something` or `pins.json`
-    # cannot steer the delete. Same guard /cache/remove already applies for the same reason.
+    # cannot steer the delete. Same guard /cache/remove already applies for the same reason, and it
+    # covers the index lookup above too -- that registry is built from torrent names as well.
     if name and os.path.basename(name) == name and name not in cachemod.PROTECTED:
-        cachemod._remove(os.path.join(s.cache_root, name))
+        target = os.path.join(s.cache_root, name)
+        removed = os.path.exists(target)
+        cachemod._remove(target)
     # Both of these are named from the infohash, which is already validated as 40 hex above, so
     # neither can be steered anywhere.
     cachemod._remove(os.path.join(s.cache_root, f".{info_hash}.parts"))
     cachemod._remove(os.path.join(s.cache_root, ".resume", f"{info_hash}.fastresume"))
     labelsmod.drop(s.cache_root, info_hash)
-    return {"ok": True}
+    if not removed:
+        # Not an error -- the partfile and resume record may still have been reclaimed -- but a
+        # remove that deleted no data must not look identical to one that did.
+        log.warning("remove %s: no cached directory found for it", info_hash)
+    return {"ok": True, "removed": removed}
