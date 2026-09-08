@@ -92,6 +92,11 @@ def serve_file(job_id: str, filename: str, request: Request):
         path = conv.job_file(job_id, filename)
     except ValueError as e:
         raise HTTPException(status_code=400, detail="invalid job path") from e
+    # A request for a segment or a playlist is the only evidence this server ever gets that anyone
+    # is still watching: ffmpeg keeps encoding whether or not the output is being read. Recorded
+    # before the wait below, so a client blocked on a segment that has not been written yet still
+    # counts as present.
+    conv.touch(job_id)
     is_playlist = filename.endswith(".m3u8")
     if not _wait_file(path, 25 if is_playlist else 35):
         raise HTTPException(status_code=404, detail="segment not found")

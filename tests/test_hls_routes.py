@@ -74,9 +74,13 @@ def test_head_is_accepted_on_the_playlist_and_segment_routes(monkeypatch):
 class _FakeConv:
     def __init__(self):
         self.stopped = []
+        self.touched = []
 
     def stop(self, job_id):
         self.stopped.append(job_id)
+
+    def touch(self, job_id):
+        self.touched.append(job_id)
 
     def job_dir(self, job_id):
         import pathlib
@@ -85,6 +89,55 @@ class _FakeConv:
 
     def job_file(self, job_id, filename):
         return self.job_dir(job_id) / filename
+
+
+def test_asking_for_a_segment_marks_the_job_as_still_being_watched(tmp_path):
+    """The reaper ends transcodes nothing has read, and this route is where "read" is observed. Its
+    absence is not visible in any test of the reaper itself: that would keep passing while the
+    server quietly killed the encoder of a player that was watching perfectly happily.
+
+    Real files on disk, because a missing one makes the route wait 35 seconds for a segment that is
+    never coming -- correct behaviour, and a minute of it does not belong in the suite."""
+    from fastapi.testclient import TestClient
+
+    from stremiosrv.app import create_app
+
+    (tmp_path / "seg7.m4s").write_bytes(b"x")
+    (tmp_path / "index.m3u8").write_text("#EXTM3U\n")
+
+    class Served(_FakeConv):
+        def job_file(self, job_id, filename):
+            return tmp_path / filename
+
+    app = create_app()
+    conv = Served()
+    app.state.converter = conv
+    c = TestClient(app)
+
+    assert c.get("/hlsv2/job1/seg7.m4s").status_code == 200
+    assert conv.touched == ["job1"]
+
+    assert c.get("/hlsv2/job1/index.m3u8").status_code == 200
+    assert conv.touched == ["job1", "job1"]
+
+
+def test_a_malformed_job_path_is_refused_before_it_counts_as_activity():
+    """Otherwise anyone who can reach the route could keep a transcode alive with nonsense ids."""
+    from fastapi.testclient import TestClient
+
+    from stremiosrv.app import create_app
+
+    class Rejecting(_FakeConv):
+        def job_file(self, job_id, filename):
+            raise ValueError("unsafe")
+
+    app = create_app()
+    conv = Rejecting()
+    app.state.converter = conv
+    c = TestClient(app)
+
+    assert c.get("/hlsv2/job1/..%2Fescape").status_code in (400, 404)
+    assert conv.touched == []
 
 
 def test_head_cannot_tear_down_a_transcode_job():

@@ -243,6 +243,7 @@ def build_app() -> FastAPI:
         kwargs={
             "interval": settings.transcode_gc_interval,
             "max_age": settings.transcode_gc_max_age,
+            "idle_after": settings.transcode_idle_timeout,
         },
         daemon=True,
     ).start()

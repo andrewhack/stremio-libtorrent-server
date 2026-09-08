@@ -183,3 +183,116 @@ def test_sweep_is_not_fooled_by_an_mtime_from_the_future(tmp_path):
     os.utime(d, (ahead, ahead))
     assert conv.sweep(max_age=0) == 1
     assert not d.exists()
+
+
+# --- abandoned transcodes (issue #2) -------------------------------------------------------------
+# The sweep spares any job whose ffmpeg is alive, so a transcode nobody is consuming was protected
+# BY ITS OWN LIVENESS: a crashed player left ffmpeg at ~99% CPU indefinitely, and repeated attempts
+# stacked several at once because each attempt carries a fresh job id. Nothing tracked whether a
+# client was still reading the output -- only whether the encoder was running.
+
+def test_a_transcode_nobody_is_reading_is_terminated(tmp_path):
+    conv = Converter(str(tmp_path), None)
+    d = _job(conv, "abandoned")
+    p = FakeProc()
+    conv._jobs["abandoned"] = p
+    conv.touch("abandoned")
+    conv._seen["abandoned"] -= 600  # nothing has asked for a segment in ten minutes
+
+    assert conv.reap_idle(300) == ["abandoned"]
+    assert p.terminated
+    assert not d.exists()
+
+
+def test_a_transcode_someone_is_still_reading_is_left_alone(tmp_path):
+    conv = Converter(str(tmp_path), None)
+    d = _job(conv, "watched")
+    p = FakeProc()
+    conv._jobs["watched"] = p
+    conv.touch("watched")
+
+    assert conv.reap_idle(300) == []
+    assert not p.terminated
+    assert d.exists()
+
+
+def test_a_segment_request_keeps_a_transcode_alive(tmp_path):
+    """The whole mechanism: a player fetching segments is the only evidence anyone is watching."""
+    conv = Converter(str(tmp_path), None)
+    _job(conv, "job")
+    conv._jobs["job"] = FakeProc()
+    conv.touch("job")
+    conv._seen["job"] -= 600
+
+    conv.touch("job")  # what the route does on every playlist and segment request
+    assert conv.reap_idle(300) == []
+
+
+def test_reaping_ignores_a_job_whose_process_already_exited(tmp_path):
+    """It exited on its own -- there is nothing to terminate, and the directory sweep owns the
+    cleanup from here."""
+    conv = Converter(str(tmp_path), None)
+    _job(conv, "finished")
+    p = FakeProc(alive=False)
+    conv._jobs["finished"] = p
+    conv.touch("finished")
+    conv._seen["finished"] -= 600
+
+    assert conv.reap_idle(300) == []
+    assert not p.terminated
+
+
+def test_an_untouched_job_is_reaped_rather_than_living_forever(tmp_path):
+    """A job with no recorded activity at all -- registered before this bookkeeping existed, or by
+    a path that forgot to touch it. Treating "unknown" as "keep" is how the original bug worked."""
+    conv = Converter(str(tmp_path), None)
+    _job(conv, "unknown")
+    p = FakeProc()
+    conv._jobs["unknown"] = p
+
+    assert conv.reap_idle(0) == ["unknown"]
+    assert p.terminated
+
+
+def test_starting_a_job_counts_as_activity(tmp_path):
+    """Otherwise a transcode could be reaped in the window between starting and the player's first
+    segment request."""
+    conv = Converter(str(tmp_path), None)
+    _job(conv, "fresh")
+    conv._jobs["fresh"] = FakeProc()
+    conv.touch("fresh")
+    assert conv.reap_idle(300) == []
+
+
+def test_the_gc_loop_is_what_calls_the_reaper(monkeypatch):
+    """A reaper nothing invokes is the original bug with more code in it. The loop is its only
+    caller, so the wiring gets an assertion of its own."""
+    import stremiosrv.transcode.converter as convmod
+
+    reaped, swept = [], []
+
+    class Conv:
+        def reap_idle(self, idle_after):
+            reaped.append(idle_after)
+            return []
+
+        def sweep(self, max_age=0.0):
+            swept.append(max_age)
+            return 0
+
+    class Stop(Exception):
+        pass
+
+    sleeps = []
+
+    def fake_sleep(_):
+        sleeps.append(1)
+        if len(sleeps) >= 2:
+            raise Stop
+
+    monkeypatch.setattr(convmod.time, "sleep", fake_sleep)
+    with pytest.raises(Stop):
+        convmod.run_transcode_gc(Conv(), interval=1, max_age=600, idle_after=42)
+
+    assert reaped == [42], "the loop never asked the converter to reap idle transcodes"
+    assert swept == [600], "the loop stopped sweeping directories"

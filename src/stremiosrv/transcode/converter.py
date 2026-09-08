@@ -79,6 +79,12 @@ class Converter:
         self.base = Path(cache_root) / "transcode"
         self.profile = profile
         self._jobs: dict[str, subprocess.Popen] = {}
+        # job_id -> monotonic time of the last request a CLIENT made for this job's output. The
+        # sweep below spares any job whose ffmpeg is alive, which means a transcode nobody is
+        # reading was protected by its own liveness: a crashed player left ffmpeg encoding at full
+        # tilt forever, and because each playback attempt carries a fresh job id, repeated attempts
+        # stacked several at once. Whether the encoder runs is not evidence that anyone is watching.
+        self._seen: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def job_dir(self, job_id: str) -> Path:
@@ -129,6 +135,7 @@ class Converter:
         with self._lock:
             existing = self._jobs.get(job_id)
             if existing is not None and existing.poll() is None:
+                self._seen[job_id] = time.monotonic()
                 return self.job_dir(job_id)
             d = self.job_dir(job_id)
             d.mkdir(parents=True, exist_ok=True)
@@ -138,10 +145,36 @@ class Converter:
             # job's log the moment it starts writing. Released when the Popen is collected.
             log = open(d / "ffmpeg.log", "wb")  # noqa: SIM115
             self._jobs[job_id] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
+            # Counts as activity immediately, or the reaper could take a transcode in the window
+            # between starting it and the player's first segment request.
+            self._seen[job_id] = time.monotonic()
             # Counted here, not in the route: the early return above means a player re-fetching
             # master.m3u8 mid-playback reuses this job, and counting requests would multiply it.
             metrics.record_hls_session(decision)
             return d
+
+    def touch(self, job_id: str) -> None:
+        """Record that a client just asked for this job's playlist or a segment."""
+        with self._lock:
+            if job_id in self._jobs:
+                self._seen[job_id] = time.monotonic()
+
+    def reap_idle(self, idle_after: float) -> list[str]:
+        """End transcodes nothing has read for `idle_after` seconds. Returns the ids reaped.
+
+        `/destroy` cannot be the only path that stops an encoder: a crashed app, a player that
+        refuses the stream, and a dropped connection all skip it, and the process left behind holds
+        a GPU as firmly as a wanted one. A job with no recorded activity at all is reaped too --
+        treating "unknown" as "still wanted" is exactly how this went unnoticed.
+        """
+        now = time.monotonic()
+        with self._lock:
+            idle = [jid for jid, p in self._jobs.items()
+                    if p.poll() is None and now - self._seen.get(jid, 0.0) >= idle_after]
+        for job_id in idle:
+            logger.info("transcode gc: no client for %.0fs, ending job %s", idle_after, job_id)
+            self.stop(job_id)
+        return idle
 
     def active_count(self) -> int:
         """Number of ffmpeg transcode jobs currently running (for the admin transcode/GPU card)."""
@@ -172,6 +205,7 @@ class Converter:
         """
         with self._lock:
             p = self._jobs.pop(job_id, None)
+            self._seen.pop(job_id, None)
         self._end(p)
         self._remove_job_dir(job_id)
 
@@ -179,6 +213,7 @@ class Converter:
         with self._lock:
             jobs = list(self._jobs.items())
             self._jobs.clear()
+            self._seen.clear()
         for job_id, p in jobs:
             self._end(p)
             self._remove_job_dir(job_id)
@@ -223,12 +258,19 @@ class Converter:
             with self._lock:
                 for name in removed:
                     self._jobs.pop(name, None)
+                    self._seen.pop(name, None)
             logger.info("transcode gc: reclaimed %d orphaned job dir(s)", len(removed))
         return len(removed)
 
 
-def run_transcode_gc(converter: Converter, interval: int = 300, max_age: int = 600) -> None:
-    """Background loop reclaiming orphaned transcode output. Runs forever."""
+def run_transcode_gc(converter: Converter, interval: int = 60, max_age: int = 600,
+                     idle_after: int = 300) -> None:
+    """Background loop reclaiming abandoned transcodes and their output. Runs forever.
+
+    Two reclaims, in order. `reap_idle` ends encoders nothing is reading -- a crashed player holds
+    a GPU otherwise -- and `sweep` deletes directories no encoder owns. The reap comes first so a
+    job it just ended is eligible for the sweep in the same pass rather than the next one.
+    """
     if not logger.handlers:  # match the evictor: uvicorn doesn't surface our INFO logs by default
         h = logging.StreamHandler()
         h.setFormatter(logging.Formatter("%(asctime)s [transcode] %(message)s"))
@@ -237,6 +279,10 @@ def run_transcode_gc(converter: Converter, interval: int = 300, max_age: int = 6
         logger.propagate = False
     while True:
         time.sleep(interval)
+        try:
+            converter.reap_idle(idle_after)
+        except Exception:
+            logger.exception("transcode reap failed")
         try:
             converter.sweep(max_age=max_age)
         except Exception:

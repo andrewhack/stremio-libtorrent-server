@@ -73,7 +73,13 @@ class Settings(BaseSettings):
     # them behind. `max_age` is a grace, not a retention target: a directory younger than this is
     # spared even when no process claims it, so a job caught between segment writes is never taken
     # for garbage. Jobs with a live ffmpeg are spared regardless of age.
-    transcode_gc_interval: int = 300  # seconds between sweeps
+    transcode_gc_interval: int = 60   # seconds between passes (reap abandoned encoders, then sweep)
+    # How long a transcode may go unread before its ffmpeg is ended. `/destroy` is the clean path,
+    # but a crashed app, a player that refuses the stream, and a dropped connection all skip it --
+    # and the encoder left behind holds a GPU as firmly as a wanted one, at ~99% of a core. Generous
+    # on purpose: a paused player asks for nothing, and resuming after a reap re-transcodes from the
+    # start. 0 disables the reaper and restores the pre-1.6 behaviour.
+    transcode_idle_timeout: int = 300
     transcode_gc_max_age: int = 600   # an unclaimed job dir older than this is removed
     # Operator-supplied extra trackers appended to every torrent's announce list (in addition to the
     # built-in DEFAULT_TRACKERS). Comma/space/newline separated; udp/http(s)/ws(s) URLs only.
