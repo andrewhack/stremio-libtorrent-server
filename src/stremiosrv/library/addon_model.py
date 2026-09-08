@@ -8,7 +8,6 @@ from __future__ import annotations
 import re
 
 from stremiosrv import pins as pinsmod
-from stremiosrv.library.state import is_watchable
 
 ADDON_ID = "org.stremiosrv.library"
 CATALOG_ID = "library"
@@ -114,6 +113,22 @@ def describe_file(entry: dict, f: dict) -> str:
     return " · ".join([human_size(size), *_state_bits(entry)])
 
 
+def is_complete(f: dict) -> bool:
+    """Every byte of this file is here.
+
+    Stricter than `state.is_watchable`, deliberately. That rule answers "is this file worth naming
+    on the page", and a file being fetched qualifies. This one answers "can it be played right
+    now", which is what a stream row promises: a partial file opens by waiting for its head and its
+    index to arrive, so the first attempt stalls and a retry a minute later succeeds -- and the size
+    printed on the row reads as what is already on disk when it is not. An episode at 18% behaved
+    exactly that way on a real box.
+    """
+    size = f.get("size") or 0
+    if size and (f.get("downloaded") or 0) >= size:
+        return True
+    return (f.get("progress") or 0) >= 0.999
+
+
 def is_title(entry: dict) -> bool:
     """Something that can actually be played. Orphan partfiles are real disk usage with no torrent
     and no file, and an entry with no infohash cannot be addressed at all."""
@@ -177,15 +192,22 @@ def playable_index(entry: dict) -> int | None:
         wanted_base = _basename(wanted)
         for f in addressable:
             if _basename(f.get("name") or "") == wanted_base:
-                return f["index"]
-    # Watchable, not merely present: ranking by raw bytes can pick a neighbour's boundary spill
-    # over the episode that is actually here.
-    watchable = [f for f in addressable if is_watchable(f)]
-    if watchable:
-        return max(watchable, key=lambda f: f.get("downloaded") or 0)["index"]
+                return f["index"] if is_complete(f) else None
+    # Complete only. Ranking by raw bytes would hand back a neighbour's boundary spill, and
+    # offering a file still arriving cannot keep the promise the row makes.
+    complete = [f for f in addressable if is_complete(f)]
+    if complete:
+        return max(complete, key=lambda f: f.get("downloaded") or 0)["index"]
     if addressable:
-        return max(addressable, key=lambda f: f.get("downloaded") or 0)["index"]
-    return 0 if len(files) <= 1 else None
+        return None
+    # No addressable index -- state.py's disk fallback reports every file as index None once the
+    # engine handle is gone, which after a restart is most of the cache. A single file there is
+    # still index 0, and its completeness is knowable even when its index is not.
+    if len(files) == 1:
+        return 0 if is_complete(files[0]) else None
+    # Nothing listed at all: no engine record and nothing readable on disk. Index 0 is the only
+    # answer available, and for a single-file torrent it is the right one.
+    return 0 if not files else None
 
 
 def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict | None:
@@ -228,7 +250,7 @@ def episode_index(entry: dict, season: int, episode: int) -> int | None:
     play, which is the opposite of what "play the local copy" promises.
     """
     have = [f for f in (entry.get("files") or [])
-            if isinstance(f.get("index"), int) and is_watchable(f)]
+            if isinstance(f.get("index"), int) and is_complete(f)]
     if not have:
         return None
     # select_wanted_file returns a position in the list it was handed, not a torrent file index.
@@ -310,7 +332,7 @@ def meta_for(entry: dict) -> dict:
     # arrives and identical for a file at 0% and one that is finished, so it is not evidence that
     # anything of it is actually on disk -- `downloaded` is.
     on_disk = [f for f in (entry.get("files") or [])
-               if is_watchable(f) and isinstance(f.get("index"), int)]
+               if is_complete(f) and isinstance(f.get("index"), int)]
     if len(on_disk) > 1:
         meta["videos"] = [
             {"id": format_id(ih, f["index"]), "title": f.get("name") or f"file {f['index']}",

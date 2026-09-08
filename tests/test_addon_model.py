@@ -150,19 +150,22 @@ def test_the_played_file_is_the_one_the_download_asked_for():
     assert am.playable_index(e) == 4
 
 
-def test_the_wanted_file_wins_even_with_no_bytes_downloaded_yet():
+def test_the_wanted_file_is_not_offered_until_it_has_actually_arrived():
     """It is what the download was started for, whether or not any of it has arrived -- ranking by
     bytes downloaded must never override a recorded selection."""
     e = _entry(wantedFile="b.mkv",
                files=[{"index": 1, "name": "a.mkv", "size": 5000, "downloaded": 5000},
                       {"index": 4, "name": "b.mkv", "size": 900, "downloaded": 0}])
-    assert am.playable_index(e) == 4
+    # The selection still decides WHICH file this entry means -- it simply cannot be played yet,
+    # and falling through to the other file would serve something nobody asked for.
+    assert am.playable_index(e) is None
 
 
 def test_the_wanted_file_matches_by_basename_even_when_one_side_carries_a_path():
     e = _entry(wantedFile="show.s01e02.mkv",
                files=[{"index": 1, "name": "show.s01e01.mkv", "size": 900, "downloaded": 900},
-                      {"index": 2, "name": "subdir/show.s01e02.mkv", "size": 10, "downloaded": 0}])
+                      {"index": 2, "name": "subdir/show.s01e02.mkv", "size": 10,
+                       "downloaded": 10}])
     assert am.playable_index(e) == 2
 
 
@@ -185,8 +188,9 @@ def test_ranking_with_no_wanted_file_uses_bytes_downloaded_not_declared_size():
 
 
 def test_a_file_the_engine_can_address_beats_one_it_cannot():
-    e = _entry(files=[{"index": None, "name": "unaddressable.mkv", "size": 9000},
-                      {"index": 2, "name": "addressable.mkv", "size": 10}])
+    e = _entry(files=[{"index": None, "name": "unaddressable.mkv", "size": 9000,
+                       "downloaded": 9000},
+                      {"index": 2, "name": "addressable.mkv", "size": 10, "downloaded": 10}])
     assert am.playable_index(e) == 2
 
 
@@ -205,7 +209,7 @@ def test_with_no_file_list_at_all_it_falls_back_to_index_zero():
 
 
 def test_a_single_file_entry_without_an_index_still_plays_as_index_zero():
-    e = _entry(files=[{"index": None, "name": "only.mkv", "size": 900}])
+    e = _entry(files=[{"index": None, "name": "only.mkv", "size": 900, "downloaded": 900}])
     assert am.playable_index(e) == 0
     assert am.stream_for(e, ORIGIN)["url"] == f"{ORIGIN}/{IH}/0"
 
@@ -384,6 +388,40 @@ def test_a_whole_torrent_stream_still_describes_the_torrent():
     assert "4.00 GB" in s["title"]
 
 
+def test_an_episode_still_downloading_is_not_offered():
+    """A partial file can be streamed -- the server fetches as it goes -- but a row saying "play the
+    local copy" promises something it cannot keep: the first open stalls while the head and the
+    index arrive, and the size on the row reads as what is already here. On a real box an episode at
+    18% was offered, did not play, and played on a retry a minute later."""
+    e = _entry(
+        label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
+        files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                "progress": 1.0},
+               {"index": 8, "name": "Show.S01E09.mkv", "size": 4 * GB, "downloaded": 842_000_000,
+                "progress": 0.18, "wanted": True}])
+    state = {"entries": [e]}
+    assert am.streams_for_meta_id(state, "tt0000010:1:9", ORIGIN) == []
+    assert len(am.streams_for_meta_id(state, "tt0000010:1:5", ORIGIN)) == 1
+
+
+def test_a_partly_downloaded_single_file_title_is_not_offered_either():
+    e = _entry(files=[{"index": 0, "name": "film.mkv", "size": 4 * GB, "downloaded": 2 * GB,
+                       "progress": 0.5, "wanted": True}])
+    assert am.stream_for(e, ORIGIN) is None
+
+
+def test_meta_lists_only_episodes_that_are_finished():
+    """A video row whose stream request returns nothing is a dead end -- the two have to agree."""
+    e = _entry(files=[{"index": 1, "name": "one.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                       "progress": 1.0},
+                      {"index": 2, "name": "two.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                       "progress": 1.0},
+                      {"index": 3, "name": "three.mkv", "size": 4 * GB, "downloaded": GB,
+                       "progress": 0.25, "wanted": True}])
+    ids = [v["id"] for v in am.meta_for(e)["videos"]]
+    assert ids == [am.format_id(IH, 1), am.format_id(IH, 2)]
+
+
 def test_meta_carries_the_name_poster_and_description():
     e = _entry(label={"name": "Real Name", "poster": "https://example.invalid/p.jpg"})
     m = am.meta_for(e)
@@ -405,9 +443,13 @@ def test_a_pack_lists_only_the_files_that_are_actually_on_disk():
                       {"index": 2, "name": "two.mkv", "size": 700, "downloaded": 0,
                        "progress": 0.0},
                       {"index": 3, "name": "three.mkv", "size": 500, "downloaded": 250,
-                       "progress": 0.5}])
+                       "progress": 0.5},
+                      {"index": 4, "name": "four.mkv", "size": 900, "downloaded": 900,
+                       "progress": 1.0}])
     videos = am.meta_for(e)["videos"]
-    assert [v["id"] for v in videos] == [am.format_id(IH, 1), am.format_id(IH, 3)]
+    # Not the untouched file, and not the half-finished one either: a row here has to have a
+    # stream behind it, and only a finished file does.
+    assert [v["id"] for v in videos] == [am.format_id(IH, 1), am.format_id(IH, 4)]
     assert videos[0]["title"] == "one.mkv"
 
 
