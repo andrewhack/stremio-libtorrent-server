@@ -1,6 +1,8 @@
 """Playlists fetched through /proxy come back with every URL routed through it again."""
 from __future__ import annotations
 
+import pytest
+
 from stremiosrv.proxy import opts, playlist
 
 OPTS = opts.ProxyOpts("http://origin.example:8099", (("X-Token", "abc"),),
@@ -37,3 +39,17 @@ def test_detection_by_extension_or_content_type():
     assert playlist.is_playlist("/live/list.M3U", "text/plain")
     assert playlist.is_playlist("/live/index", "application/vnd.apple.mpegurl")
     assert not playlist.is_playlist("/movie.mp4", "video/mp4")
+
+
+def test_the_rewrite_stops_at_its_limit():
+    """Many short lines each grow by the whole proxy prefix -- the limit has to hold part-way."""
+    with pytest.raises(playlist.TooLarge):
+        playlist.rewrite("/a\n" * 1000, OPTS, limit=10_000)
+    assert playlist.rewrite("/a\n", OPTS, limit=10_000) == f"{ROOT}/a\n"
+
+
+def test_lines_are_split_exactly_as_they_came():
+    """No trailing newline, an empty playlist, blank lines: all kept as they came."""
+    assert playlist.rewrite("", OPTS) == ""
+    assert playlist.rewrite("/a", OPTS) == f"{ROOT}/a"
+    assert playlist.rewrite("\n\n/a\n\n", OPTS) == f"\n\n{ROOT}/a\n\n"

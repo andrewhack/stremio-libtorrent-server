@@ -86,7 +86,7 @@ Sizes and rates accept units (`64GiB`, `512MiB`) as well as plain byte counts. `
 | `STREMIOSRV_RESUME_RETENTION_DAYS` | `365` | days an *unclaimed* fast-resume record is kept (0 = forever) |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | libtorrent connection cap |
 | `STREMIOSRV_TRANSCODE_PROFILE` | autodetect | force a HW profile |
-| `STREMIOSRV_LIBRARY_ADDON_ALLOW` | *(unset)* | CIDRs allowed to reach the library addon (default: private ranges + CGNAT) |
+| `STREMIOSRV_LIBRARY_ADDON_ALLOW` | *(unset)* | CIDRs that count as the home network: they may reach the library addon, and `/proxy` fetches any address for them but only public ones for anyone else (default: private ranges + CGNAT). Behind a reverse proxy every client arrives from its address, so narrow the list |
 
 ### Web player (all-in-one)
 The image bundles the Stremio **web player** and serves it on the same origin as the streaming API

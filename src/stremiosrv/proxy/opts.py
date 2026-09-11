@@ -8,6 +8,7 @@ server has already decoded them in the path the router sees.
 """
 from __future__ import annotations
 
+import re
 import urllib.parse
 from dataclasses import dataclass
 
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 # alphabet as the ones the stock server writes.
 _SAFE = "-_.!~*'()"
 _LINE_BREAKERS = ("\r", "\n", "\0")
+_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")  # an RFC 9110 field name
 
 
 @dataclass(frozen=True)
@@ -26,19 +28,28 @@ class ProxyOpts:
 
 def split_header(spec: str) -> tuple[str, str] | None:
     """`Name:value` -> (name, value), split at the first colon as stock does. None for anything
-    that is not a header, or that would inject a line (CR, LF or NUL anywhere)."""
+    http.client could not send as a header: a name that is not an RFC 9110 token, a value that is
+    not Latin-1, or CR, LF or NUL anywhere (CR and LF would inject a line)."""
     name, sep, value = spec.partition(":")
     name, value = name.strip(), value.strip()
-    if not sep or not name or any(c in spec for c in _LINE_BREAKERS):
+    if not sep or not _TOKEN.fullmatch(name) or any(c in spec for c in _LINE_BREAKERS):
         return None
-    if any(c.isspace() for c in name):
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
         return None
     return name, value
 
 
 def _origin(value: str) -> str | None:
-    u = urllib.parse.urlsplit(value)
-    if u.scheme not in ("http", "https") or not u.hostname:
+    """`scheme://host[:port]` of a usable destination, or None -- also for a host or port that
+    cannot be parsed, which would otherwise fail later, mid-request."""
+    try:
+        u = urllib.parse.urlsplit(value)  # a broken IPv6 literal raises ValueError
+        port = u.port  # so does a port outside 0-65535, or one that is not a number
+    except ValueError:
+        return None
+    if u.scheme not in ("http", "https") or not u.hostname or port == 0:
         return None
     return f"{u.scheme}://{u.netloc}"
 

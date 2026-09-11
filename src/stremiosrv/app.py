@@ -141,6 +141,9 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     # Added after CORS so it wraps it: it has to see the final status of every response, including
     # the 404 the router produces before any route runs.
     app.add_middleware(unmatched.CountUnmatched)
+    # Outermost: a request carrying this server's own proxy marker is refused before any route
+    # runs, so /proxy can never reach this server's own routes (see api/proxy.py).
+    app.add_middleware(proxy.RefuseOwnRequests)
     app.state.settings = settings
     app.state.engine = engine
     app.state.converter = converter

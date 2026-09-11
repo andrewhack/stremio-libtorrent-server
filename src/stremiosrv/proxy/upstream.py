@@ -19,9 +19,20 @@ MAX_REDIRECTS = 4  # stock follows four; its fifth throws "Too many redirects"
 CONNECT_TIMEOUT = 15.0
 READ_TIMEOUT = 60.0
 
+# One context for every hop: it verifies nothing (see above), so nothing in it depends on the
+# destination -- and an HLS stream opens a connection per segment.
+_TLS = ssl.create_default_context()
+_TLS.check_hostname = False
+_TLS.verify_mode = ssl.CERT_NONE
+
 
 class TooManyRedirects(Exception):
     """A fifth redirect in a row, as the stock proxy counts them."""
+
+
+class BadUpstream(Exception):
+    """A URL that cannot be requested: a malformed destination, port or host name, a header
+    http.client cannot send, or a redirect to any of those."""
 
 
 class _Pinned(http.client.HTTPConnection):
@@ -39,10 +50,7 @@ class _Pinned(http.client.HTTPConnection):
 class _PinnedTLS(_Pinned):
     def connect(self) -> None:
         super().connect()
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        self.sock = ctx.wrap_socket(self.sock, server_hostname=self.host)
+        self.sock = _TLS.wrap_socket(self.sock, server_hostname=self.host)
 
 
 def _host_header(u: urllib.parse.SplitResult) -> str:
@@ -52,23 +60,39 @@ def _host_header(u: urllib.parse.SplitResult) -> str:
     return host if u.port is None else f"{host}:{u.port}"
 
 
-def open_url(url: str, method: str, headers: dict[str, str], home_client: bool):
+def _hop_headers(headers: dict[str, str], u: urllib.parse.SplitResult) -> dict[str, str]:
+    """This hop's headers. A Host among the addon's `h` headers wins on every hop, as in stock;
+    otherwise the hop's own. Matched in any case, so the upstream never gets two."""
+    given = [v for k, v in headers.items() if k.lower() == "host"]
+    out = {k: v for k, v in headers.items() if k.lower() != "host"}
+    out["Host"] = given[-1] if given else _host_header(u)
+    return out
+
+
+def open_url(url: str, method: str, headers: dict[str, str],
+             home_client: bool) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
     """(response, connection) for `url` after any redirects; the caller closes both.
 
-    `headers` must not carry Host -- each hop sets its own. Raises dest.Refused for a destination
-    this client may not reach (or a redirect to anything but http/https), TooManyRedirects, and
-    OSError / http.client.HTTPException when the upstream cannot be reached or spoken to."""
+    Raises dest.Refused for a destination this client may not reach (or a redirect to anything but
+    http/https), BadUpstream for a URL that cannot be requested, TooManyRedirects, and OSError /
+    http.client.HTTPException when the upstream cannot be reached or spoken to."""
     for _ in range(MAX_REDIRECTS + 1):
-        u = urllib.parse.urlsplit(url)
-        if u.scheme not in ("http", "https") or not u.hostname:
-            raise dest.Refused(u.scheme)
-        port = u.port or (443 if u.scheme == "https" else 80)
-        address = dest.pick(u.hostname, port, home_client)
+        try:
+            u = urllib.parse.urlsplit(url)
+            port = u.port or (443 if u.scheme == "https" else 80)
+            if u.scheme not in ("http", "https") or not u.hostname:
+                raise dest.Refused(u.scheme)
+            address = dest.pick(u.hostname, port, home_client)
+        except ValueError:  # a malformed URL, port or host name (dest.Refused is not a ValueError)
+            raise BadUpstream from None
         conn = (_PinnedTLS if u.scheme == "https" else _Pinned)(address, u.hostname, port)
         target = (u.path or "/") + (f"?{u.query}" if u.query else "")
         try:
-            conn.request(method, target, headers={**headers, "Host": _host_header(u)})
+            conn.request(method, target, headers=_hop_headers(headers, u))
             resp = conn.getresponse()
+        except ValueError:  # a header http.client cannot put on the wire
+            conn.close()
+            raise BadUpstream from None
         except BaseException:
             conn.close()
             raise
@@ -77,5 +101,8 @@ def open_url(url: str, method: str, headers: dict[str, str], home_client: bool):
             return resp, conn
         resp.close()
         conn.close()
-        url = urllib.parse.urljoin(f"{u.scheme}://{_host_header(u)}/", location)
+        try:
+            url = urllib.parse.urljoin(f"{u.scheme}://{_host_header(u)}/", location)
+        except ValueError:  # a Location that is not a URL, e.g. a broken IPv6 literal
+            raise BadUpstream from None
     raise TooManyRedirects

@@ -8,8 +8,10 @@ is already a proxy URL. In a tag line only the first `URI="..."` attribute is re
 """
 from __future__ import annotations
 
+import io
 import re
 import urllib.parse
+from collections.abc import Iterator
 
 from stremiosrv.proxy.opts import ProxyOpts, serialize
 
@@ -40,11 +42,29 @@ def _rewrite_url(url: str, root: str, o: ProxyOpts) -> str:
     return url
 
 
-def rewrite(text: str, o: ProxyOpts) -> str:
-    """The playlist with its URLs routed back through /proxy; line endings kept as they came."""
+class TooLarge(Exception):
+    """The rewritten playlist would pass the caller's limit."""
+
+
+def _lines(text: str) -> Iterator[str]:
+    """text.split("\n"), one line at a time, so a playlist of many short lines never becomes a
+    list of as many strings."""
+    start = 0
+    while (end := text.find("\n", start)) >= 0:
+        yield text[start:end]
+        start = end + 1
+    yield text[start:]
+
+
+def rewrite(text: str, o: ProxyOpts, limit: int | None = None) -> str:
+    """The playlist with its URLs routed back through /proxy; line endings kept as they came.
+
+    Raises TooLarge as soon as the output would pass `limit` characters: every rewritten line grows
+    by the whole proxy prefix, so a small playlist of many short lines can grow a great deal."""
     root = "/proxy/" + serialize(o)
-    lines = text.split("\n")
-    for i, line in enumerate(lines):
+    out = io.StringIO()
+    size = 0
+    for i, line in enumerate(_lines(text)):
         body = line.rstrip("\r")
         cr = line[len(body):]
         if body.startswith("#"):
@@ -53,5 +73,9 @@ def rewrite(text: str, o: ProxyOpts) -> str:
                 body = body[:m.start(1)] + _rewrite_url(m.group(1), root, o) + body[m.end(1):]
         elif body:
             body = _rewrite_url(body, root, o)
-        lines[i] = body + cr
-    return "\n".join(lines)
+        piece = ("\n" if i else "") + body + cr
+        size += len(piece)
+        if limit is not None and size > limit:
+            raise TooLarge
+        out.write(piece)
+    return out.getvalue()

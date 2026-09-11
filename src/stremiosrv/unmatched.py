@@ -110,9 +110,12 @@ class CountUnmatched:
 
     A 404 with no `endpoint` in the scope is a path no route matched -- Starlette adds `endpoint`
     only when a route matches, so a route's own deliberate 404 (the library addon's token guard, an
-    unknown transcode job) is not counted. A 405 is a known path asked with a method it does not
-    implement: how an unbuilt `POST /settings` shows. /_unmatched is itself a route and counts its
-    own requests, so this wrapper never sees those as misses.
+    unknown transcode job) is not counted. A 405 is counted only when the matched route itself
+    lacks the method (FastAPI leaves the route in the scope, partial matches included): a known
+    path asked with a method it does not implement, how an unbuilt `POST /settings` shows. A 405 a
+    route passes on from elsewhere -- /proxy relaying an upstream's answer -- is that route
+    answering. /_unmatched is itself a route and counts its own requests, so this wrapper never
+    sees those as misses.
     """
 
     def __init__(self, app) -> None:
@@ -126,7 +129,9 @@ class CountUnmatched:
         async def watch(message) -> None:
             if message.get("type") == "http.response.start":
                 status = message.get("status")
-                if status == 405 or (status == 404 and "endpoint" not in scope):
+                methods = getattr(scope.get("route"), "methods", None) or ()
+                if (status == 404 and "endpoint" not in scope) or (
+                        status == 405 and scope.get("method") not in methods):
                     record(scope.get("method", ""), scope.get("path", ""))
             await send(message)
 

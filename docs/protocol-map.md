@@ -80,9 +80,12 @@ Query params observed on hlsv2 requests (from live logs): `mediaURL`, `videoCode
 > (repeatable). stremio-video builds it for any stream whose addon sets
 > `behaviorHints.proxyHeaders`; stremio-core builds it for external players. Redirects are
 > followed as stock does (Location against the origin, `h` re-applied, the fifth is an error) and
-> `.m3u`/`.m3u8` playlists are rewritten to come back through the proxy. Our addition, because
-> this server may face the internet: a client on a private network may proxy anywhere, a client
-> from the internet only to public addresses.
+> `.m3u`/`.m3u8` playlists are rewritten to come back through the proxy. Our additions, because
+> this server may face the internet: a client on the home network (`STREMIOSRV_LIBRARY_ADDON_ALLOW`,
+> by default the private ranges) may proxy anywhere, any other client only to public addresses; a
+> request carrying this server's own proxy marker is refused on every route, so the proxy cannot
+> reach this server itself; at most 16 proxied requests run at once (503 beyond); and a playlist is
+> read, decompressed and rewritten within fixed sizes.
 
 ## 4. Subtitles
 

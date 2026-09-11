@@ -39,9 +39,19 @@ def test_a_header_that_would_inject_a_line_is_dropped():
     assert o.req_headers == (("X-B", "2"),)
 
 
-@pytest.mark.parametrize("spec", ["no-colon", ":value", "Bad Name:v"])
-def test_split_header_rejects_non_headers(spec):
+@pytest.mark.parametrize("spec", ["no-colon", ":value", "Bad Name:v", "Bad(Name:v",
+                                  "X-Euro:€"])
+def test_split_header_rejects_what_http_client_cannot_send(spec):
     assert opts.split_header(spec) is None
+
+
+@pytest.mark.parametrize("raw", [
+    "d=http%3A%2F%2Fexample.com%3A99999/x", "d=http%3A%2F%2Fexample.com%3A0/x",
+    "d=http%3A%2F%2F%5B%3A%3A1/y", "d=http%3A%2F%2F%5Bnothost%5D/y",
+])
+def test_a_destination_that_cannot_be_requested_is_refused(raw):
+    """A port out of range, port 0, a broken IPv6 literal: refused here, never a crash later."""
+    assert opts.parse(raw) is None
 
 
 def test_a_value_keeps_its_own_colons():
