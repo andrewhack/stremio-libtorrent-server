@@ -267,6 +267,18 @@ def test_on_disk_entries_are_named_from_the_players_own_records():
     assert "withClientLabels" in page and "streamIndex" in page
 
 
+def test_a_label_learned_from_playback_still_gets_a_name_and_a_poster():
+    """The addon records a title's identity from playback -- an id, with no name and no poster.
+    Taking that as a finished label skipped the page's own naming and turned posters back into
+    folder names. Only a label with a name is taken as it is; the rest are named from their own
+    exact id first, before any match on the release name."""
+    page = _page()
+    body = page[page.index("function withClientLabels"):page.index("// How many entries each")]
+    assert "if (e.label) return e;" not in body
+    assert "e.label && e.label.name" in body
+    assert "lib[own.metaId]" in body
+
+
 def test_data_loading_errors_have_somewhere_to_show():
     """`libraryError` lost its only render site when the library shelf was replaced by the board,
     so a failed fetch became invisible again."""

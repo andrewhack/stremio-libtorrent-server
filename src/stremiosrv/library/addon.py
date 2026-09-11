@@ -11,16 +11,19 @@ Two gates, both answering 404 rather than 401, because a 401 confirms the route 
 from __future__ import annotations
 
 import hmac
+import logging
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 from fastapi import APIRouter, HTTPException, Request
 
 from stremiosrv.library import addon_model as model
+from stremiosrv.library import labels as labelsmod
 from stremiosrv.library import netguard
 from stremiosrv.library import session as sessionmod
 from stremiosrv.library import state as statemod
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/library/addon")
 
 # Same source health.py uses. There is no `version` on Settings, and hardcoding one here would be
@@ -141,3 +144,44 @@ def stream(token: str, type_: str, stream_id: str, request: Request) -> dict:
         found = model.stream_for(entry, origin, idx) if entry else None
         return {"streams": [found] if found else []}
     return {"streams": model.streams_for_meta_id(state, stream_id, origin)}
+
+
+def _raw_extra(request: Request, decoded: str) -> str:
+    """The `extra` segment exactly as sent, still percent-encoded.
+
+    stremio-core encodes each extra value as a URI component, and the ASGI server decodes the whole
+    path before routing -- so by the time the router hands `extra` over, a %26 inside a file name
+    has already become a separator. The raw path keeps the encoding; `decoded` is the fallback for
+    a server that does not provide one.
+    """
+    raw = request.scope.get("raw_path") or b""
+    last = raw.decode("latin-1").rsplit("/", 1)[-1]
+    return last[: -len(".json")] if raw and last.endswith(".json") else decoded
+
+
+@router.get("/{token}/subtitles/{type_}/{video_id}.json")
+@router.get("/{token}/subtitles/{type_}/{video_id}/{extra}.json")
+def subtitles(token: str, type_: str, video_id: str, request: Request, extra: str = "") -> dict:
+    """Always an empty subtitle list: this resource exists to learn, not to serve.
+
+    The app asks every installed subtitles addon whenever it plays anything, from any addon, and
+    says what it is playing: the video id, and the file's size and name. Matched to a torrent on
+    disk that has no label, that is enough to label it, and from then on the title's page offers
+    the local copy -- see model.learn_labels. A request that cannot teach anything (an id that is
+    not `tt…`, no size yet) returns before the state build, which walks the whole cache.
+    """
+    _guard(request, token)
+    if not video_id.startswith("tt") or not extra:
+        return {"subtitles": []}
+    report = model.parse_extra(_raw_extra(request, extra))
+    if not (report.get("videoSize") or "").isdecimal():
+        return {"subtitles": []}
+    cache_root = _settings(request).cache_root
+    learned = model.learn_labels(_state(request), type_, video_id, report)
+    for ih, label in learned:
+        labelsmod.put(cache_root, ih, label)
+    if learned:
+        # A count only: labels.json is the owner's library and never goes into a log.
+        log.info("library addon: learned the title of %d cached torrent(s) from playback",
+                 len(learned))
+    return {"subtitles": []}

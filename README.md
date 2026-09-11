@@ -247,6 +247,13 @@ page it is a source in the right-hand list — at the **bottom**, below your oth
 app groups streams by addon in install order and the protocol has no way to ask for a
 position. With a couple of torrent addons installed that can be a dozen rows down, so scroll.
 
+**Which titles get that row.** Anything you download from the library page, and anything you play
+in the app — from any addon — once it has been playing for a moment: the app tells the addon which
+title and which file it is playing, and the addon records that for the copy on disk. A title that
+was already on disk gets its row the next time it is played. *Installed the addon before 1.6.5?*
+Remove it and add it again once — the app keeps the capabilities it read at install time, and this
+one is new.
+
 > Paste the address of the library **page** (`…/library/`) and Stremio will report
 > *"Failed to fetch: expected value at line 1 column 1"* — it asked for a manifest and got the HTML
 > of the page. Copy the link from the panel rather than from the address bar.

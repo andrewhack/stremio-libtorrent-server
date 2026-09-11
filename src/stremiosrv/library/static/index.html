@@ -777,20 +777,28 @@ const LIB = (() => {
     };
   }
 
-  // Give unlabelled disk entries the title the player already knows for them.
+  // Give disk entries the title the player already knows for them. A label written by a download
+  // from this page is complete and is taken as it is. One the addon learned from playback carries
+  // the identity only -- an exact id, no name, no poster -- so its display is filled in here too:
+  // from that same id first, and from a release-name match only when the match names that id.
   function withClientLabels(entries) {
     const idx = streamIndex();
     const lib = storedLibrary();
     const byName = nameMatcher();
     return (entries || []).map(e => {
-      if (e.label) return e;
+      if (e.label && e.label.name) return e;
+      const own = e.label && e.label.metaId ? e.label : null;
       const hit = e.infoHash ? idx[e.infoHash.toLowerCase()] : null;
-      const item = (hit && lib[hit.metaId]) || byName(e.name);
+      const guess = byName(e.name);
+      const item = (own && (lib[own.metaId] || catalogMetas[own.metaId]))
+        || (hit && lib[hit.metaId])
+        || (guess && (!own || guess._id === own.metaId) ? guess : null);
       if (!item) return e;
       // videoId comes from the streams bucket and was being dropped -- without it the episode
       // picker cannot tell which episode of a series is already here.
-      return { ...e, label: { metaId: item._id, name: item.name, poster: item.poster,
-                              type: item.type, videoId: (hit && hit.videoId) || undefined } };
+      return { ...e, label: { ...own, metaId: item._id, name: item.name, poster: item.poster,
+                              type: item.type,
+                              videoId: (hit && hit.videoId) || (own && own.videoId) || undefined } };
     });
   }
 

@@ -6,6 +6,7 @@ can be tested without a torrent session, a cache root or a network.
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote
 
 from stremiosrv import pins as pinsmod
 
@@ -66,10 +67,73 @@ def manifest(version: str) -> dict:
             {"name": "meta", "types": ["other"], "idPrefixes": [ID_PREFIX]},
             {"name": "stream", "types": ["other", "movie", "series"],
              "idPrefixes": [ID_PREFIX, "tt"]},
+            # Not to serve subtitles -- the answer is always an empty list. The app sends this
+            # request, with the video id and the playing file's size and name, whenever it plays
+            # anything, and that is the only moment the server can learn what a torrent it never
+            # downloaded itself actually is. See learn_labels.
+            {"name": "subtitles", "types": ["movie", "series"], "idPrefixes": ["tt"]},
         ],
         "behaviorHints": {"adult": False, "p2p": False,
                           "configurable": False, "configurationRequired": False},
     }
+
+
+# --- learning a title from playback ----------------------------------------------------------
+
+_VIDEO_ID_RE = re.compile(r"(tt[0-9]+)(?::([0-9]+):([0-9]+))?")
+
+
+def parse_extra(raw: str) -> dict[str, str]:
+    """A subtitles request's `extra` segment, as sent, into its values.
+
+    stremio-core percent-encodes every value as a URI component, so an `&` inside a file name
+    arrives as %26. Split on the real separators first and decode each value after: decoding the
+    whole segment first -- which is what the path the router hands over already is -- cuts such a
+    name in two.
+    """
+    out: dict[str, str] = {}
+    for pair in (raw or "").split("&"):
+        key, sep, value = pair.partition("=")
+        if sep and key:
+            out[unquote(key)] = unquote(value)
+    return out
+
+
+def learn_labels(state: dict, type_: str, video_id: str, extra: dict) -> list[tuple[str, dict]]:
+    """(infohash, label) for each unlabelled cached torrent holding the file a player reports.
+
+    Only a download started from the page writes a label, so a title that arrived through ordinary
+    playback had no identity to match on `stream/…/tt…` -- no row on its page, films included. The
+    subtitles request is the one place the app says what it is playing: the video id, and the
+    file's size and name. That is a join from a real playback to a real file, so the label it gives
+    is a fact, not the guess from a folder name that `streams_for_meta_id` refuses to make.
+
+    The size must match to the byte. The name must match too when the app sends one; without it,
+    the size alone is accepted only when it points at exactly one torrent. A label that is already
+    there is never replaced: the page writes one with a name and a poster, and the owner chose it.
+    """
+    m = _VIDEO_ID_RE.fullmatch(video_id or "")
+    if m is None or type_ not in ("movie", "series"):
+        return []
+    base, season, episode = m.groups()
+    if (type_ == "series") != (season is not None):
+        return []
+    size = extra.get("videoSize") or ""
+    if not size.isdecimal() or int(size) <= 0:
+        return []
+    size = int(size)
+    name = _basename(extra.get("filename") or "")
+    label = {"metaId": base, "type": type_}
+    if season is not None:
+        label.update(season=int(season), episode=int(episode), videoId=video_id)
+    hits = [e["infoHash"].lower() for e in state.get("entries", [])
+            if is_title(e) and not e.get("label")
+            and any((f.get("size") or 0) == size
+                    and (not name or _basename(f.get("name") or "") == name)
+                    for f in e.get("files") or [])]
+    if not name and len(hits) > 1:
+        return []
+    return [(ih, dict(label)) for ih in hits]
 
 
 def human_size(n: int) -> str:
