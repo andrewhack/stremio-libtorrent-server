@@ -34,11 +34,13 @@ location = /subtitleSignature  { proxy_pass http://127.0.0.1:11470; }
 location /subtitles.           { proxy_pass http://127.0.0.1:11470; }
 location = /removeAll          { proxy_pass http://127.0.0.1:11470; }
 location ^~ /hlsv2/            { proxy_pass http://127.0.0.1:11470; }
-# Torrent routes are /<40-hex-infohash>/<idx|stats.json|remove>. The second segment MUST be
-# anchored: the bundled web build serves its JS/CSS from a 40-hex-named dir
+# Torrent routes are /<40-hex-infohash>/<idx|-1|stats.json|remove|create>. The second segment MUST
+# be anchored: the bundled web build serves its JS/CSS from a 40-hex-named dir
 # (e.g. /<hash>/scripts/main.js, /<hash>/styles/main.css), which an unanchored ^/<40hex> would
 # wrongly proxy to uvicorn -> the SPA never boots (blank page). Keep these as static.
-location ~ "^/[0-9a-fA-F]{40}/([0-9]+|stats\.json|remove)" { proxy_pass http://127.0.0.1:11470; }
+# `create` is the POST the player sends before streaming a stream with `sources` or no fileIdx,
+# and -1 the index stremio-core writes for the latter; both used to land on index.html (405/200).
+location ~ "^/[0-9a-fA-F]{40}/(-1|[0-9]+|stats\.json|remove|create)" { proxy_pass http://127.0.0.1:11470; }
 # Library download UI (opt-in, off unless STREMIOSRV_LIBRARY_UI). Prefix, not exact: the page AND
 # its API both live under here, and uvicorn 404s the whole tree when the flag is off — so this
 # line is inert rather than wrong on a server that has not enabled it. It must come before the

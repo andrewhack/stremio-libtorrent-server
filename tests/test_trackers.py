@@ -3,6 +3,7 @@ from stremiosrv.torrent.trackers import (
     is_tracker_url,
     merge_trackers,
     parse_tracker_string,
+    sources_to_trackers,
 )
 
 
@@ -85,3 +86,35 @@ def test_is_tracker_url_schemes():
     assert not is_tracker_url("magnet:?xt=urn:btih:x")
     assert not is_tracker_url("tracker.example.com")
     assert not is_tracker_url("")
+
+
+# --- sources_to_trackers: the client's peer-search sources -> announce URLs ---
+# Stremio passes an addon's `sources` as `tracker:<url>` and `dht:<infohash>`, in the create body
+# and again as tr= on the stream URL. Neither is a URL libtorrent can announce to.
+
+
+def test_sources_strip_the_tracker_prefix():
+    assert sources_to_trackers(["tracker:udp://a:1337/announce"]) == ["udp://a:1337/announce"]
+
+
+def test_sources_drop_dht_entries():
+    """`dht:<infohash>` names the swarm, not a tracker, and DHT is always on."""
+    assert sources_to_trackers(["dht:" + "a" * 40]) == []
+
+
+def test_sources_keep_bare_announce_urls():
+    """A caller that never used the prefix -- a magnet's own tr=, an older client -- still works."""
+    assert sources_to_trackers(["udp://a/announce", "https://b/announce"]) == [
+        "udp://a/announce",
+        "https://b/announce",
+    ]
+
+
+def test_sources_drop_junk_and_dedupe():
+    raw = ["tracker:udp://a/announce", "udp://a/announce", "tracker:", "garbage", "", None, 7]
+    assert sources_to_trackers(raw) == ["udp://a/announce"]
+
+
+def test_sources_empty_is_empty_list():
+    assert sources_to_trackers(None) == []
+    assert sources_to_trackers([]) == []

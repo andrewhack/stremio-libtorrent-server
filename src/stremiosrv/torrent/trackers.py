@@ -75,6 +75,31 @@ def parse_tracker_string(raw: str | None) -> list[str]:
     return out
 
 
+def sources_to_trackers(sources: list | None) -> list[str]:
+    """Announce URLs from Stremio's peer-search `sources`, de-duped, order kept.
+
+    The client hands an addon's `sources` to the server in the stock server's peer-search form --
+    `tracker:<announce url>` and `dht:<infohash>` -- in the body of POST /<ih>/create, and again as
+    the `tr=` values of the stream URL it builds afterwards. Neither form is a URL libtorrent can
+    announce to, so passing them through verbatim silently dropped the addon's own trackers: no
+    difference on a public torrent, which the default list covers, but a private one has no other
+    way to find peers. `dht:` entries carry nothing to add (DHT is always on); bare announce URLs
+    from a caller that never used the prefix still pass.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for src in sources or []:
+        if not isinstance(src, str):
+            continue
+        url = src.strip()
+        if url.startswith("tracker:"):
+            url = url[len("tracker:"):]
+        if is_tracker_url(url) and url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
+
+
 def merge_trackers(
     existing: list[str] | None = None,
     extra: list[str] | None = None,

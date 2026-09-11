@@ -19,7 +19,8 @@ This document fixes **method + path** (done); **shape** is filled from captured 
 
 | Method | Path | server.js | Purpose | Notes |
 |---|---|---|---|---|
-| GET | `/:infoHash/:idx` and `/:infoHash/:idx/*` | 18420 | **Byte-range file stream** (direct play) | MUST honor HTTP Range (206, Content-Range, Accept-Ranges) + HEAD. Lazily creates the engine on first request. |
+| GET | `/:infoHash/:idx` and `/:infoHash/:idx/*` | 18420 | **Byte-range file stream** (direct play) | MUST honor HTTP Range (206, Content-Range, Accept-Ranges) + HEAD. Lazily creates the engine on first request. `idx` **-1** = choose the file (GuessFileIdx: the largest media file) — stremio-core writes it for a stream with no `fileIdx`. `tr=` values arrive in peer-search form (`tracker:<url>`, `dht:<ih>`). |
+| ALL | `/:infoHash/create` | 18356 | **Start a torrent, choose its file** | stremio-video calls it before streaming whenever a stream carries `sources` or no `fileIdx`; a non-2xx answer is fatal to playback. Body: `torrent.infoHash`, `peerSearch.sources`, `guessFileIdx` (`{}` / `{season, episode}` = choose, `false` = the client has an index). Answer: the stats object once metadata is in, plus `guessedFileIdx` when asked. stremio-core also calls it, with no guess, for a magnet opened in the app. |
 | GET | `/:infoHash/stats.json` | 18344 | per-torrent stats | downloaded/speed/peers/… (shape ⏳) |
 | GET | `/:infoHash/:idx/stats.json` | 18346 | per-file stats | (shape ⏳) |
 | GET | `/stats.json` | 18348 | global stats | `{}` when idle |
@@ -27,8 +28,10 @@ This document fixes **method + path** (done); **shape** is filled from captured 
 | GET | `/removeAll` | 18417 | drop all engines | |
 | GET | `/favicon.ico` | 18342 | — | trivial |
 
-> Note: torrent engines are created **lazily** by requesting `/:infoHash/:idx` (no mandatory POST
-> create for torrents). `POST /create/:createKey` (96033) + `/stream/:key/:fileName` (96043/96053)
+> Note: torrent engines are created **lazily** by requesting `/:infoHash/:idx` — but the player
+> calls `/:infoHash/create` first for any stream that carries `sources` or lacks a `fileIdx` (see
+> the table). This map used to say torrents had no create call, and every such stream failed to
+> start until 1.6.4. `POST /create/:createKey` (96033) + `/stream/:key/:fileName` (96043/96053)
 > are a **separate** local-file/url streaming flow, not the torrent path.
 
 ## 2. Transcode / HLS (hlsv2 sub-router — hardest parity surface)

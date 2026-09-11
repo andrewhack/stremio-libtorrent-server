@@ -124,6 +124,81 @@ def test_no_match_means_every_file():
     assert select_wanted_file(["Some.Film.2019.1080p.mkv"], {"season": 1, "episode": 5}) is None
 
 
+# --- which file a stream wants when the addon does not say -------------------------------------
+# A stream with no fileIdx leaves the choice to the server: stremio-video asks for a guess in
+# POST /<ih>/create, and stremio-core writes -1 into the URL it builds. The stock rule
+# (GuessFileIdx in server.reference.js): among the media files, the requested episode, else the
+# largest; -1 when nothing in the torrent is playable.
+
+from stremiosrv.pins import guess_file_idx  # noqa: E402
+
+MB = 1 << 20
+
+
+def test_guess_picks_the_largest_media_file():
+    files = [("Film/poster.jpg", 1 * MB), ("Film/Film.mkv", 900 * MB),
+             ("Film/Sample.mkv", 40 * MB)]
+    assert guess_file_idx(files, {}) == 1
+
+
+def test_guess_ignores_larger_files_that_are_not_media():
+    """A disc image or archive bigger than the film must not be what gets played."""
+    files = [("Film/extras.iso", 4000 * MB), ("Film/Film.mp4", 700 * MB)]
+    assert guess_file_idx(files, {}) == 1
+
+
+def test_guess_counts_audio_as_media():
+    assert guess_file_idx([("Album/cover.png", 2 * MB), ("Album/01.flac", 30 * MB)], {}) == 1
+
+
+def test_guess_is_minus_one_when_nothing_is_playable():
+    assert guess_file_idx([("readme.txt", 1), ("cover.jpg", 2)], {}) == -1
+    assert guess_file_idx([], {}) == -1
+
+
+def test_guess_prefers_the_requested_episode_over_a_larger_one():
+    files = [("Show.S01E01.mkv", 1200 * MB), ("Show.S01E02.mkv", 400 * MB)]
+    assert guess_file_idx(files, {"season": 1, "episode": 2}) == 1
+
+
+def test_guess_episode_numbers_do_not_bleed_into_each_other():
+    files = [("Show.S01E10.mkv", 900 * MB), ("Show.S01E01.mkv", 300 * MB)]
+    assert guess_file_idx(files, {"season": 1, "episode": 1}) == 1
+
+
+def test_guess_takes_the_largest_of_several_matches():
+    files = [("Show.S01E02.Sample.mkv", 20 * MB), ("Show.S01E02.mkv", 400 * MB)]
+    assert guess_file_idx(files, {"season": 1, "episode": 2}) == 1
+
+
+def test_guess_never_picks_a_matching_subtitle():
+    files = [("Show.S01E02.srt", 1 * MB), ("Show.S01E02.mkv", 400 * MB),
+             ("Show.S01E03.mkv", 500 * MB)]
+    assert guess_file_idx(files, {"season": 1, "episode": 2}) == 1
+
+
+def test_guess_falls_back_to_the_largest_when_the_episode_is_absent():
+    files = [("Show.S01E01.mkv", 300 * MB), ("Show.S01E02.mkv", 500 * MB)]
+    assert guess_file_idx(files, {"season": 1, "episode": 9}) == 1
+
+
+def test_guess_uses_a_season_zero_special():
+    """The stock server drops season 0 as falsy and plays the largest file instead; a special is
+    season 0 in the catalog, so it is honoured here."""
+    files = [("Show.S00E01.Special.mkv", 100 * MB), ("Show.S01E05.mkv", 200 * MB)]
+    assert guess_file_idx(files, {"season": 0, "episode": 1}) == 0
+
+
+def test_guess_without_both_numbers_means_largest():
+    files = [("Show.S01E01.mkv", 100 * MB), ("Show.S01E05.mkv", 200 * MB)]
+    assert guess_file_idx(files, {"episode": 1}) == 1
+    assert guess_file_idx(files, None) == 1
+
+
+def test_guess_keeps_the_first_of_equal_sizes():
+    assert guess_file_idx([("a.mkv", 5), ("b.mkv", 5)], {}) == 0
+
+
 # --- applying a pin's file choice --------------------------------------------------------------
 # The choice is recorded at pin time, when a magnet has no file list, so it has to be applied
 # later. The first attempt keyed that off metadata_received_alert -- which is in the

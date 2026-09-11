@@ -96,6 +96,18 @@ def test_subtitle_signature_is_reachable_through_nginx():
     assert not _matches("/subtitleSignature", *prefix[0])
 
 
+def test_the_clients_create_call_and_guess_index_are_proxied():
+    """stremio-video POSTs /<ih>/create before streaming any addon stream that carries `sources` or
+    no fileIdx, and stremio-core builds /<ih>/-1 for the same streams. Both used to fall through to
+    the web player -- the POST as a 405, the GET as index.html -- and the stream never started."""
+    matchers = _proxied_matchers()
+    ih = "a" * 40
+    for path in (f"/{ih}/create", f"/{ih}/-1"):
+        assert any(_matches(path, mod, val) for mod, val in matchers), path
+    # ...without loosening the anchor: the web build's own 40-hex asset dir must stay static.
+    assert not any(_matches(f"/{ih}/scripts/main.js", mod, val) for mod, val in matchers)
+
+
 def test_origin_only_entries_are_real_routes():
     """A stale exclusion is worse than none: it silently blesses a path that no longer exists."""
     api = {r.path for r in create_app().routes if getattr(r, "path", "").startswith("/")}

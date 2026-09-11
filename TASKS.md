@@ -6,7 +6,7 @@ yet, and why each item is still open.
 Convention: `- [ ]` open · `- [x]` done · `- [~]` in progress · `- [!]` blocked. Every entry states
 what "done" looks like, so it can be picked up without context.
 
-**Last updated:** 2026-09-04
+**Last updated:** 2026-09-11
 
 ---
 
@@ -27,6 +27,16 @@ what "done" looks like, so it can be picked up without context.
   *Done =* upstream defines the signature and the server computes the same value. Until then,
   `playback.subtitleSignatureAsks` in `/stats.json` counts how often real clients ask, which is the
   evidence for whether this is worth reverse-engineering.
+
+- [ ] **Three rarer ways of naming a torrent's file are still ignored.** 1.6.4 added
+  `/:infoHash/create` and the `-1` index, the stock client's two ways of saying "choose for me".
+  Not honoured yet: `f=` on the stream URL (an addon's `fileMustInclude`, which stremio-core appends
+  as regexes) is ignored, so the index or the guess is used instead; a file *name* in place of the
+  index (`/:infoHash/<name>`) 404s; and `POST /create` with a `.torrent` blob (a torrent file opened
+  in the app) 404s.
+  *Done =* each answers as `server.reference.js` does (18204-18245 and 18383), with the `f=`
+  regexes run under a time bound as the stock server's `safeStatelessRegex` does, since an addon
+  writes them.
 
 ## Library UI
 

@@ -1,10 +1,13 @@
+import re
 import time
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Body, Request, Response
 from fastapi.responses import StreamingResponse
 
+from stremiosrv.pins import guess_file_idx
 from stremiosrv.stream.fileserver import content_type_for, wait_and_read
 from stremiosrv.stream.ranges import parse_range
+from stremiosrv.torrent.trackers import sources_to_trackers
 
 router = APIRouter()
 
@@ -93,6 +96,35 @@ def _engine(request: Request):
     return getattr(request.app.state, "engine", None)
 
 
+# How long a request waits for a torrent's metadata before answering 504. Read at call time, so a
+# test can shorten it.
+METADATA_TIMEOUT = 30
+_INFOHASH = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def _handle(eng, info_hash: str, trackers: list[str]):
+    """The running torrent, or a new one -- given the client's trackers either way."""
+    h = eng.get(info_hash)
+    if h is None:
+        h = eng.add(info_hash, trackers=trackers or None)  # lazy create (also injects defaults/env/live)
+    elif trackers:
+        h.add_trackers(trackers)  # already running: fold in any newly-supplied trackers
+    return h
+
+
+def _await_metadata(h) -> bool:
+    """Wait up to METADATA_TIMEOUT for the torrent's file list; False when it never came."""
+    deadline = time.time() + METADATA_TIMEOUT
+    while not h.has_metadata() and time.time() < deadline:
+        time.sleep(0.2)
+    return h.has_metadata()
+
+
+def _guess(h, want: dict | None) -> int:
+    """pins.guess_file_idx over this torrent's files. Needs the metadata."""
+    return guess_file_idx([(p, h.file_size(i)) for i, p in enumerate(h.file_paths())], want)
+
+
 @router.get("/active.json")
 def active_streams(request: Request) -> list:
     """Torrents currently loaded — the owner's own activity on their own box, for the appliance
@@ -133,23 +165,66 @@ def remove(info_hash: str, request: Request) -> dict:
     return {"ok": True}
 
 
+@router.api_route("/{info_hash}/create", methods=["GET", "POST"])
+def create(info_hash: str, request: Request, body: dict | None = Body(None)):
+    """Start a torrent and say which of its files to play -- the player's call before streaming.
+
+    stremio-video makes it whenever an addon's stream carries `sources` or no `fileIdx`, then plays
+    /<ih>/<guessedFileIdx>?tr=<each source>; any non-2xx answer is fatal to that playback. Until
+    1.6.4 there was no such route (404 here, 405 through nginx), so every such stream failed to
+    start. stremio-core also calls it, without a guess, for a magnet opened in the app.
+
+    The contract of server.js `router.all("/:infoHash/create")`: the body carries the trackers
+    (`peerSearch.sources`) and, as `guessFileIdx`, whether to choose a file -- `{}` or
+    `{season, episode}` to ask, `false` when the client holds its own index. The answer is the
+    torrent's stats once its metadata is here, plus `guessedFileIdx` when one was asked for.
+    """
+    if not _INFOHASH.match(info_hash):
+        return Response(status_code=400, content=b"invalid info hash")
+    eng = _engine(request)
+    if eng is None:
+        return Response(status_code=503, content=b"engine unavailable")
+    body = body or {}
+    peer_search = body.get("peerSearch")
+    sources = peer_search.get("sources") if isinstance(peer_search, dict) else None
+    h = _handle(eng, info_hash.lower(), sources_to_trackers(sources))
+    if not _await_metadata(h):
+        return Response(status_code=504, content=b"metadata timeout")
+    stats = serialize_stats(h)
+    want = body.get("guessFileIdx")
+    if isinstance(want, dict):  # `{}` asks too: the client tests the field for truth, not keys
+        stats["guessedFileIdx"] = _guess(h, want)
+    return stats
+
+
+@router.api_route("/{info_hash}/-1", methods=["GET", "HEAD"])
+def serve_guessed(info_hash: str, request: Request):
+    """The byte-range stream of the file this torrent would be played for.
+
+    stremio-core writes -1 as the index of a stream that has none, in the URLs it builds for
+    external players and downloads, and server.js reads it as "choose for me": GuessFileIdx with no
+    episode, i.e. the largest media file. Starlette's int convertor takes no sign, so it takes this
+    literal route to catch it; without one the request 404'd here and got index.html via nginx.
+    """
+    return serve(info_hash, -1, request)
+
+
 @router.api_route("/{info_hash}/{idx:int}", methods=["GET", "HEAD"])
 def serve(info_hash: str, idx: int, request: Request):
     """Byte-range file streaming with lazy engine create + deadline-driven playhead focus."""
     eng = _engine(request)
     if eng is None:
         return Response(status_code=503, content=b"engine unavailable")
-    trackers = request.query_params.getlist("tr")  # client-supplied (Stremio passes magnet trackers)
-    h = eng.get(info_hash)
-    if h is None:
-        h = eng.add(info_hash, trackers=trackers or None)  # lazy create (also injects defaults/env/live)
-    elif trackers:
-        h.add_trackers(trackers)  # already running: fold in any newly-supplied trackers
-    deadline = time.time() + 30
-    while not h.has_metadata() and time.time() < deadline:
-        time.sleep(0.2)
-    if not h.has_metadata():
+    # Client-supplied: after create, Stremio repeats an addon's `sources` here in their peer-search
+    # form (tracker:<url>, dht:<ih>), which sources_to_trackers turns back into announce URLs.
+    trackers = sources_to_trackers(request.query_params.getlist("tr"))
+    h = _handle(eng, info_hash, trackers)
+    if not _await_metadata(h):
         return Response(status_code=504, content=b"metadata timeout")
+    if idx < 0:  # /<ih>/-1, see serve_guessed
+        idx = _guess(h, {})
+        if idx < 0:
+            return Response(status_code=404, content=b"no media file in this torrent")
 
     # Concurrent-stream cap: count distinct torrents being watched. A new connection to an
     # already-playing torrent (e.g. a seek) doesn't count against the limit.
