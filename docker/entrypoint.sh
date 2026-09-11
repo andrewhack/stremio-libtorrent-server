@@ -45,6 +45,11 @@ SEED_SRC="/srv/stremio-server/localStorage.json"
 SEED_DST="/srv/stremio-server/build/localStorage.json"
 if [ -f "$SEED_SRC" ]; then
     cp "$SEED_SRC" "$SEED_DST"
+    # The player's loader.js HEADs server_url.env and applies the server URL seeded below only when
+    # that answers 2xx; otherwise it ignores SERVER_URL and uses the page's own origin. The file was
+    # never shipped -- the HEAD succeeded only because nginx used to answer every unknown path with
+    # index.html. Written here so the seed no longer rides on that fallback. Its content is unused.
+    : > /srv/stremio-server/build/server_url.env
     if [ -n "${SERVER_URL}" ]; then
         case "$SERVER_URL" in */) ;; *) SERVER_URL="$SERVER_URL/" ;; esac
         sed -i "s|http://127.0.0.1:11470/|${SERVER_URL}|g" "$SEED_DST"
