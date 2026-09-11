@@ -131,6 +131,44 @@ def _real_size(st) -> int:
     return st.st_size if blocks is None else min(st.st_size, blocks * 512)
 
 
+def data_bytes(path: str, st) -> int:
+    """Bytes of a file that have ARRIVED: its length less its holes.
+
+    `_real_size` answers a different question -- how much disk a file occupies -- and a compressing
+    filesystem shrinks that below the length of a file that is complete: on a ZFS box a finished
+    1.7 GB video (every piece present in libtorrent's resume record, and no holes) allocated 3.5 MB
+    less than its length, so it read as 99.8% and the addon would not offer it. A sparse download
+    leaves its missing pieces as holes whatever the filesystem does with the data around them, so
+    the holes are what is missing. Where they cannot be asked about (no SEEK_HOLE -- Windows, where
+    nothing is sparse anyway) the allocation is the fallback, as it always was.
+
+    One caveat, measured on the same pool: with compression on, ZFS also stores an all-zero block as
+    a hole, so a finished file carrying long runs of zeros reads a hair short -- a complete
+    multi-gigabyte file, every piece present, measured 99.965%. That is far smaller than the
+    allocation's error and inside the addon's 0.1% `is_complete` tolerance; a download's missing
+    pieces are still counted exactly.
+    """
+    seek_hole, seek_data = getattr(os, "SEEK_HOLE", None), getattr(os, "SEEK_DATA", None)
+    if seek_hole is None or seek_data is None:
+        return _real_size(st)
+    size, missing, off = st.st_size, 0, 0
+    try:
+        with open(path, "rb") as fh:
+            fd = fh.fileno()
+            while off < size:
+                hole = os.lseek(fd, off, seek_hole)
+                if hole >= size:
+                    break
+                try:
+                    off = os.lseek(fd, hole, seek_data)
+                except OSError:  # ENXIO: nothing but hole from here to the end
+                    off = size
+                missing += off - hole
+    except OSError:
+        return _real_size(st)
+    return size - missing
+
+
 def _stat_tree(path: str) -> tuple[int, float]:
     """(total size in bytes, newest mtime) for a file or directory tree."""
     if os.path.isfile(path):

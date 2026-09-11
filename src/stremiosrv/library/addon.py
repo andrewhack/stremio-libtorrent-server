@@ -17,6 +17,7 @@ from importlib.metadata import version as _pkg_version
 
 from fastapi import APIRouter, HTTPException, Request
 
+from stremiosrv import metrics
 from stremiosrv.library import addon_model as model
 from stremiosrv.library import labels as labelsmod
 from stremiosrv.library import netguard
@@ -171,17 +172,31 @@ def subtitles(token: str, type_: str, video_id: str, request: Request, extra: st
     not `tt…`, no size yet) returns before the state build, which walks the whole cache.
     """
     _guard(request, token)
-    if not video_id.startswith("tt") or not extra:
-        return {"subtitles": []}
-    report = model.parse_extra(_raw_extra(request, extra))
+    report = (model.parse_extra(_raw_extra(request, extra))
+              if extra and video_id.startswith("tt") else {})
     if not (report.get("videoSize") or "").isdecimal():
+        metrics.record_library_subtitles(reported=False, learned=0)
         return {"subtitles": []}
     cache_root = _settings(request).cache_root
     learned = model.learn_labels(_state(request), type_, video_id, report)
     for ih, label in learned:
         labelsmod.put(cache_root, ih, label)
+    metrics.record_library_subtitles(reported=True, learned=len(learned))
     if learned:
-        # A count only: labels.json is the owner's library and never goes into a log.
-        log.info("library addon: learned the title of %d cached torrent(s) from playback",
-                 len(learned))
+        _announce(len(learned))
     return {"subtitles": []}
+
+
+def _announce(count: int) -> None:
+    """Put a count of learned labels in the container log.
+
+    uvicorn surfaces only its own loggers, so without a handler of its own this line never reached
+    `docker logs` -- the evictor and the transcoder attach theirs the same way. A count only:
+    labels.json is the owner's library and never goes into a log.
+    """
+    if not log.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s [library] %(message)s"))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+    log.info("addon learned the title of %d cached torrent(s) from playback", count)

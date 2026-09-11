@@ -227,3 +227,39 @@ def test_a_label_the_page_wrote_survives_a_playback(tmp_path):
     t = sessionmod.ensure_addon_token(str(tmp_path))
     _subs(c, t, "tt0000030:3:6", f"videoSize={size}&filename={fname}")
     assert labelsmod.load(str(tmp_path))[IH]["metaId"] == "tt0000077"
+
+
+# --- seeing it work from outside -----------------------------------------------------------------
+
+
+def test_the_route_counts_what_it_was_asked_and_what_it_learned(tmp_path):
+    """Nothing about these requests is logged -- the names are the owner's library -- so counts in
+    /stats.json are the only way to tell, from outside, whether the app is calling at all, whether
+    it reports a file, and whether that file matched."""
+    from stremiosrv import metrics
+
+    metrics.reset()
+    fname, size = _on_disk(tmp_path)
+    c = _client(tmp_path)
+    t = sessionmod.ensure_addon_token(str(tmp_path))
+    c.get(f"/library/addon/{t}/subtitles/series/tt0000030:3:6.json", headers=LAN)  # no report yet
+    _subs(c, t, "tt0000030:3:6", f"videoSize={size}&filename={fname}")
+    _subs(c, t, "tt0000030:3:6", f"videoSize={size}&filename={fname}")  # labelled by now
+    s = c.get("/stats.json").json()["playback"]
+    assert (s["librarySubtitlesAsks"], s["librarySubtitlesReports"],
+            s["libraryLabelsLearned"]) == (3, 2, 1)
+    metrics.reset()
+
+
+def test_a_learned_title_is_counted_in_the_container_log(tmp_path):
+    """uvicorn surfaces only its own loggers. Without a handler of its own the count never reached
+    `docker logs` -- zero lines on a live box right after a label was learned."""
+    import logging
+
+    fname, size = _on_disk(tmp_path)
+    c = _client(tmp_path)
+    t = sessionmod.ensure_addon_token(str(tmp_path))
+    _subs(c, t, "tt0000030:3:6", f"videoSize={size}&filename={fname}")
+    log = logging.getLogger("stremiosrv.library.addon")
+    assert log.handlers, "no handler: uvicorn will not print this logger's INFO lines"
+    assert log.getEffectiveLevel() <= logging.INFO

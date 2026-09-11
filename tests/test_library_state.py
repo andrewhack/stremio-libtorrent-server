@@ -35,6 +35,20 @@ def test_unlabelled_entry_is_still_reported(tmp_path):
     assert entries[0]["size"] > 0
 
 
+def test_a_disk_file_counts_what_has_arrived_not_what_it_occupies(tmp_path, monkeypatch):
+    """A compressing filesystem stores a finished file in less space than its length: on a ZFS box
+    a complete episode read as 99.8%, and the addon would not offer it. Arrival is measured by the
+    file's holes (cache.data_bytes), never by its allocation."""
+    d = tmp_path / "Sample.Film.2020"
+    d.mkdir()
+    (d / "Sample.Film.2020.mkv").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(cachemod, "_real_size", lambda st: 400)  # what compression reports
+    monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: st.st_size, raising=False)
+    [f] = statemod._disk_files(str(tmp_path), "Sample.Film.2020")
+    assert f["downloaded"] == 1000
+    assert f["progress"] == 1.0
+
+
 def test_label_is_attached_by_infohash(tmp_path):
     _seed_cache(tmp_path, "some-download")
     labels.put(str(tmp_path), "aabb", {"name": "Placeholder", "type": "movie"})

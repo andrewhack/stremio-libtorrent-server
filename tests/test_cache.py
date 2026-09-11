@@ -236,6 +236,73 @@ def test_scan_cache_reports_allocated_not_apparent(tmp_path):
     assert size < 8 * 1024 * 1024, f"sparse file charged {size} bytes of its 64 MiB apparent size"
 
 
+# What has ARRIVED is a different question from what the disk holds. A compressing filesystem
+# stores a finished file in less space than its length: on a ZFS box a complete 1.7 GB video --
+# every piece present in libtorrent's resume record, and no holes -- allocated 3.5 MB less than its
+# length, so it read as 99.8% and the addon would not offer it. A sparse download's missing pieces
+# are holes, whatever the filesystem does with the data around them.
+
+
+def test_data_bytes_counts_a_file_with_no_holes_as_whole(tmp_path):
+    from stremiosrv.cache import data_bytes
+
+    f = tmp_path / "full.mkv"
+    f.write_bytes(b"x" * 300_000)
+    assert data_bytes(str(f), os.stat(f)) == 300_000
+
+
+def test_data_bytes_is_not_fooled_by_an_allocation_below_the_length(tmp_path):
+    """The ZFS case, with the stat a compressing filesystem returns for a complete file."""
+    import pytest
+
+    from stremiosrv.cache import data_bytes
+
+    if not hasattr(os, "SEEK_HOLE"):
+        pytest.skip("no SEEK_HOLE on this platform (Windows); the fallback is covered below")
+    f = tmp_path / "compressed.mkv"
+    f.write_bytes(b"x" * 300_000)
+
+    class St:
+        st_size = 300_000
+        st_blocks = 200_000 // 512
+
+    assert data_bytes(str(f), St()) == 300_000
+
+
+def test_data_bytes_leaves_out_the_holes_of_a_sparse_download(tmp_path):
+    import pytest
+
+    from stremiosrv.cache import data_bytes
+
+    if not hasattr(os, "SEEK_HOLE"):
+        pytest.skip("no SEEK_HOLE on this platform (Windows); the fallback is covered below")
+    f = tmp_path / "partial.mkv"
+    with open(f, "wb") as fh:
+        fh.truncate(64 * 1024 * 1024)
+        fh.seek(0)
+        fh.write(b"x" * (1024 * 1024))  # the first MiB has arrived; the rest is a hole
+    got = data_bytes(str(f), os.stat(f))
+    if got == 64 * 1024 * 1024:
+        pytest.skip("this filesystem reports no holes in a sparse file")
+    assert 1024 * 1024 <= got < 8 * 1024 * 1024
+
+
+def test_data_bytes_falls_back_to_the_allocation_where_holes_cannot_be_asked(tmp_path,
+                                                                              monkeypatch):
+    """Windows has no SEEK_HOLE -- and nothing there is sparse anyway."""
+    from stremiosrv import cache
+
+    monkeypatch.delattr(cache.os, "SEEK_HOLE", raising=False)
+    f = tmp_path / "x.mkv"
+    f.write_bytes(b"x" * 1000)
+
+    class St:
+        st_size = 1000
+        st_blocks = 1  # 512 bytes allocated
+
+    assert cache.data_bytes(str(f), St()) == 512
+
+
 # Transcode output lives under <cache_root>/transcode, which scan_cache skips because "transcode" is
 # in PROTECTED. That made a disk fill invisible: segments accumulated while cacheUsed still read
 # under budget and nothing in /stats.json accounted for the gap.

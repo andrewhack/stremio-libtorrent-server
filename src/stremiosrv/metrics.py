@@ -2,9 +2,10 @@
 
 Counts re-buffer **stalls** (a read that had to wait for a not-yet-downloaded piece), piece
 **timeouts** (a piece that never arrived within the read timeout), next-episode **prefetch**
-arms (how often the opt-in prefetch fired, and how many bytes it asked for), and **hlsv2 jobs**
-split by whether ffmpeg re-encoded anything. Exposed via GET /stats.json and consumed by the
-appliance's config-web advisor to suggest raising the download rate limit when playback is starved.
+arms (how often the opt-in prefetch fired, and how many bytes it asked for), **hlsv2 jobs**
+split by whether ffmpeg re-encoded anything, and the library addon's **subtitles** route (asked,
+reported a file, learned a title). Exposed via GET /stats.json and consumed by the appliance's
+config-web advisor to suggest raising the download rate limit when playback is starved.
 Process-local counters (the server is single-process); reset on restart.
 """
 from __future__ import annotations
@@ -20,6 +21,9 @@ _prefetch_bytes = 0
 _subtitle_signature_asks = 0
 _hls_sessions = 0
 _hls_reencodes = 0
+_library_subtitles_asks = 0
+_library_subtitles_reports = 0
+_library_labels_learned = 0
 
 
 def record_stall(seconds: float) -> None:
@@ -59,6 +63,21 @@ def record_subtitle_signature() -> None:
         _subtitle_signature_asks += 1
 
 
+def record_library_subtitles(reported: bool, learned: int) -> None:
+    """The library addon's subtitles route answered a request (see library/addon.py).
+
+    Three numbers, because together they locate a failure without a single name leaving the box:
+    asked at all (the app holds the manifest that declares the route, and is playing something),
+    asked WITH a file size (a report the route can match), and how many torrents a report labelled.
+    The requests themselves are never logged -- their file names are the owner's library."""
+    global _library_subtitles_asks, _library_subtitles_reports, _library_labels_learned
+    with _lock:
+        _library_subtitles_asks += 1
+        if reported:
+            _library_subtitles_reports += 1
+        _library_labels_learned += learned
+
+
 def record_hls_session(decision: dict) -> None:
     """A NEW hlsv2 job was started. Recorded behind `Converter.ensure_job`'s live-job check, so it
     follows jobs rather than requests — a player re-fetches `master.m3u8` several times per
@@ -95,6 +114,9 @@ def playback_stats() -> dict:
             "prefetches": _prefetches, "prefetchBytes": _prefetch_bytes,
             "subtitleSignatureAsks": _subtitle_signature_asks,
             "hlsSessions": _hls_sessions, "hlsReencodes": _hls_reencodes,
+            "librarySubtitlesAsks": _library_subtitles_asks,
+            "librarySubtitlesReports": _library_subtitles_reports,
+            "libraryLabelsLearned": _library_labels_learned,
         }
 
 
@@ -102,8 +124,10 @@ def reset() -> None:
     """Test helper — zero the counters."""
     global _stalls, _stall_seconds, _timeouts, _prefetches, _prefetch_bytes
     global _subtitle_signature_asks, _hls_sessions, _hls_reencodes
+    global _library_subtitles_asks, _library_subtitles_reports, _library_labels_learned
     with _lock:
         _stalls, _stall_seconds, _timeouts = 0, 0.0, 0
         _prefetches, _prefetch_bytes = 0, 0
         _subtitle_signature_asks = 0
         _hls_sessions, _hls_reencodes = 0, 0
+        _library_subtitles_asks, _library_subtitles_reports, _library_labels_learned = 0, 0, 0

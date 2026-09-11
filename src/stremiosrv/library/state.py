@@ -54,9 +54,10 @@ def _disk_files(cache_root: str, name: str) -> list[dict]:
     directory's size, which says nothing about which episode is actually there. Restarting is not
     an unusual state: changing any setting on the appliance restarts the container.
 
-    The files are on the disk either way. `cache._real_size` is what makes this honest -- libtorrent
-    allocates the whole torrent sparsely, so `st_size` reports what a file WILL be while the blocks
-    say what has arrived, and the difference between them is the file's real progress.
+    The files are on the disk either way. `cache.data_bytes` is what makes this honest --
+    libtorrent allocates the whole torrent sparsely, so `st_size` reports what a file WILL be while
+    its holes say what has not arrived yet. Not the allocation: a compressing filesystem stores a
+    finished file in less space than its length, and a complete episode read as 99.8%.
     """
     base = os.path.join(cache_root, name)
     if not os.path.isdir(base):
@@ -66,11 +67,12 @@ def _disk_files(cache_root: str, name: str) -> list[dict]:
         for fn in sorted(files):
             if not fn.lower().endswith(pinsmod.VIDEO_EXT):
                 continue
+            path = os.path.join(dirpath, fn)
             try:
-                st = os.stat(os.path.join(dirpath, fn))
+                st = os.stat(path)
             except OSError:
                 continue
-            got = cachemod._real_size(st)
+            got = cachemod.data_bytes(path, st)
             out.append({
                 # No index: a directory listing cannot know the torrent's own file order, and
                 # inventing one would let a release's fileIdx match the wrong episode.
