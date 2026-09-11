@@ -8,7 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from stremiosrv import health, unmatched
 from stremiosrv.api import cache as cache_api
-from stremiosrv.api import casting, handshake, hls, netcheck, pins, playback, subs
+from stremiosrv.api import casting, handshake, hls, netcheck, pins, playback, proxy, subs
 from stremiosrv.config import Settings
 from stremiosrv.library import addon as library_addon
 from stremiosrv.library import api as library_api
@@ -148,6 +148,8 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     app.include_router(handshake.router)
     app.include_router(pins.router)
     app.include_router(netcheck.router)
+    # Before playback: its /{info_hash}/... templates would otherwise also match /proxy/<n>.
+    app.include_router(proxy.router)
     app.include_router(playback.router)
     app.include_router(cache_api.router)
     app.include_router(hls.router)

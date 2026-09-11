@@ -41,6 +41,10 @@ location ^~ /hlsv2/            { proxy_pass http://127.0.0.1:11470; }
 # `create` is the POST the player sends before streaming a stream with `sources` or no fileIdx,
 # and -1 the index stremio-core writes for the latter; both used to land on index.html (405/200).
 location ~ "^/[0-9a-fA-F]{40}/(-1|[0-9]+|stats\.json|remove|create)" { proxy_pass http://127.0.0.1:11470; }
+# The stock proxy for addon HTTP streams that need request headers (stremio-video routes a stream
+# through it when the addon sets behaviorHints.proxyHeaders). A bare proxy_pass forwards the URI as
+# sent: the destination rides percent-encoded in the path and must reach the app still encoded.
+location ^~ /proxy/            { proxy_pass http://127.0.0.1:11470; }
 # Library download UI (opt-in, off unless STREMIOSRV_LIBRARY_UI). Prefix, not exact: the page AND
 # its API both live under here, and uvicorn 404s the whole tree when the flag is off — so this
 # line is inert rather than wrong on a server that has not enabled it. It must come before the

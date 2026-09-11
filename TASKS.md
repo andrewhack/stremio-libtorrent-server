@@ -38,6 +38,20 @@ what "done" looks like, so it can be picked up without context.
   regexes run under a time bound as the stock server's `safeStatelessRegex` does, since an addon
   writes them.
 
+- [x] **`/proxy` is served (1.6.7).** stremio-video routes a stream through it whenever the addon
+  sets `behaviorHints.proxyHeaders`; without the route nginx answered with the web player's page
+  and those streams never played. A client on the home network may proxy anywhere, a client from
+  the internet only to public addresses.
+
+- [ ] **Other stock routes clients reach are still missing.** A client census (stremio-core,
+  stremio-video, stremio-web, the desktop shell) found, besides the file selectors above:
+  `POST /settings` (saving Settings → Streaming answers 405); the download link
+  `/:infoHash/:idx?external=1&download=1` (stock redirects to `/:infoHash/<file name>` and serves
+  it as an attachment); archive and usenet sources (`/{rar,zip,7zip,tar,tgz,nzb}/create`, `/ftp/`);
+  `/yt/:id` for trailers played through the server; and casting (`/casting` lists nothing).
+  *Done =* each answers as `server.reference.js` does, or is recorded here as deliberately out of
+  scope. `unmatchedRoutes` in `/stats.json` shows which of them real clients actually ask for.
+
 ## Library UI
 
 - [x] **A title the player streamed can be kept, not only removed.** The library UI used to pin

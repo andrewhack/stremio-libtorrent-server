@@ -4,7 +4,9 @@ Authoritative route surface that an unmodified Stremio client (TV apps, web play
 "streaming server". **Extracted directly from the reference bundle** `server.js` **v4.21.1**
 (`docs/server-url.txt` → `https://dl.strem.io/server/v4.21.1/desktop/server.js`) via the route
 registrations (`.get/.post/.use("/…")`). Line numbers are offsets in that minified bundle for
-follow-up handler reading.
+follow-up handler reading. **The first pass missed every route registered with `.all`** — twelve,
+among them `/:infoHash/create` (issue #3), `/create`, `/proxy/:opts/:pathname` and each archive
+family's `/create` — so check `.all` too when re-reading the bundle.
 
 > Status legend per endpoint:
 > - **route ✓** = registration confirmed in server.js (this pass).
@@ -70,8 +72,17 @@ Query params observed on hlsv2 requests (from live logs): `mediaURL`, `videoCode
 | GET | `/status` | 75852 | status |
 | GET | `/heartbeat` | 46790 | keepalive |
 | use | `/casting/` | 46691 | casting sub-router (SSDP/DLNA) |
-| use | `/proxy` | 46837 | **proxy external streams** (non-torrent / debrid HTTP) |
+| ALL | `/proxy/:opts/:pathname` | 71022 | **proxy an addon's HTTP stream with the headers it needs** — served since 1.6.7 (GET/HEAD); see the note below |
 | use | `/local-addon` | 46798 | local addon sub-router |
+
+> `/proxy` (served since 1.6.7): `<opts>` is a query string read from the raw path — `d` the
+> destination origin, `h` a request header `Name:value` (repeatable), `r` a response header
+> (repeatable). stremio-video builds it for any stream whose addon sets
+> `behaviorHints.proxyHeaders`; stremio-core builds it for external players. Redirects are
+> followed as stock does (Location against the origin, `h` re-applied, the fifth is an error) and
+> `.m3u`/`.m3u8` playlists are rewritten to come back through the proxy. Our addition, because
+> this server may face the internet: a client on a private network may proxy anywhere, a client
+> from the internet only to public addresses.
 
 ## 4. Subtitles
 
@@ -169,9 +180,8 @@ The shapes this section once listed as outstanding (`/settings`, `/network-info`
 the Range response headers of `/:hash/:idx`) were captured and are recorded below. They became the
 conformance fixtures, which now live in the `stremio-loop` repo and gate every release.
 
-What is genuinely still unmapped is narrower: the `/proxy` route for non-torrent/debrid streams
-(§3), and the built-in addon / archive / cast families (§5–§7), which are listed above as
-confirm-need-then-likely-skip rather than as work in progress.
+What is genuinely still unmapped is narrower: the built-in addon / archive / cast families
+(§5–§7), which are listed above as confirm-need-then-likely-skip rather than as work in progress.
 
 ---
 

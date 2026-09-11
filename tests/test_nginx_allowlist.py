@@ -190,3 +190,12 @@ def test_unmatched_paths_get_a_counted_404_not_the_web_player():
     assert "proxy_pass http://127.0.0.1:11470;" in named
     assert "X-Original-Method $request_method" in named
     assert "X-Original-URI $request_uri" in named
+
+
+def test_the_proxy_route_reaches_the_app_with_its_raw_path():
+    """stremio-video's /proxy URLs carry the destination percent-encoded in the path. A prefix
+    location with a bare proxy_pass (no URI part) forwards the request URI as the client sent it."""
+    assert ("^~", "/proxy/") in _proxied_matchers()
+    line = next(ln for ln in _INC.read_text(encoding="utf-8").splitlines()
+                if ln.lstrip().startswith("location ^~ /proxy/"))
+    assert line.rstrip().endswith("{ proxy_pass http://127.0.0.1:11470; }")
