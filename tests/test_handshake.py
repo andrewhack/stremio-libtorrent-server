@@ -29,7 +29,7 @@ def test_network_and_device_info():
 def test_global_stats_shape():
     c = TestClient(create_app())
     b = c.get("/stats.json").json()
-    assert set(b) >= {"cache", "playback"}
+    assert set(b) >= {"cache", "playback", "unmatchedRoutes"}
     assert set(b["cache"]) >= {"cacheUsed", "cacheSize", "diskFree", "diskTotal"}
     assert set(b["playback"]) >= {"stalls", "stallSeconds", "timeouts"}
 

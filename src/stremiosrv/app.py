@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from stremiosrv import health
+from stremiosrv import health, unmatched
 from stremiosrv.api import cache as cache_api
 from stremiosrv.api import casting, handshake, hls, netcheck, pins, playback, subs
 from stremiosrv.config import Settings
@@ -138,6 +138,9 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
     )
+    # Added after CORS so it wraps it: it has to see the final status of every response, including
+    # the 404 the router produces before any route runs.
+    app.add_middleware(unmatched.CountUnmatched)
     app.state.settings = settings
     app.state.engine = engine
     app.state.converter = converter
@@ -150,6 +153,7 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     app.include_router(hls.router)
     app.include_router(subs.router)
     app.include_router(casting.router)
+    app.include_router(unmatched.router)
     # Opt-in. Registering nothing when off means an unset flag cannot be probed for, and the
     # allowlist test's "flag off -> no route" assertion is about absence, not about a 403.
     if settings.library_ui:

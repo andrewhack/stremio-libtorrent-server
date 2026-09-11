@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request
 
-from stremiosrv import metrics
+from stremiosrv import metrics, unmatched
 from stremiosrv.cache import usage
 
 router = APIRouter()
@@ -62,6 +62,9 @@ def global_stats(request: Request) -> dict:
     return {
         "cache": usage(s.cache_root, s.cache_size),
         "playback": metrics.playback_stats(),
+        # Requests no route answered, by content-neutral shape (see unmatched.py). Empty on a
+        # server that implements everything its clients ask for.
+        "unmatchedRoutes": unmatched.snapshot(),
     }
 
 
