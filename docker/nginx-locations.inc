@@ -14,7 +14,7 @@ proxy_request_buffering off;
 proxy_read_timeout 3600s;
 proxy_send_timeout 3600s;
 
-# --- streaming API -> uvicorn (everything not matched here is served as web static) ---
+# --- streaming API -> uvicorn (anything not matched here: a web-player file or the 404 at the end) ---
 location = /health             { proxy_pass http://127.0.0.1:11470; }
 location = /settings           { proxy_pass http://127.0.0.1:11470; }
 location = /network-info       { proxy_pass http://127.0.0.1:11470; }
@@ -47,5 +47,19 @@ location ~ "^/[0-9a-fA-F]{40}/(-1|[0-9]+|stats\.json|remove|create)" { proxy_pas
 # `location /` fallback, or /library would be served as the web player's index.html.
 location ^~ /library           { proxy_pass http://127.0.0.1:11470; }
 
-# --- web player (static SPA; hash-routed, so / -> index.html) ---
-location / { try_files $uri $uri/ /index.html; }
+# --- the web player's own files; everything else is a counted 404 ---
+# The player is hash-routed: its only page is / (served through `index`). Any other path that is
+# not one of its files goes to /_unmatched, which answers 404 and counts it by shape in /stats.json.
+# It used to get index.html -- 200 for a GET, 405 for a POST -- which is how a missing route stayed
+# invisible for months (issue #3). The allowlist above remains the security boundary: every
+# unmatched path lands on the one fixed route below, so none can reach an origin-only route.
+location / { try_files $uri $uri/ @unmatched; }
+location @unmatched {
+    # Declaring proxy_set_header here drops the inherited ones; /_unmatched reads only these two.
+    proxy_set_header X-Original-Method $request_method;
+    proxy_set_header X-Original-URI $request_uri;
+    # The trailing `?` drops the original query string; /_unmatched takes the request from the
+    # headers above.
+    rewrite ^ /_unmatched? break;
+    proxy_pass http://127.0.0.1:11470;
+}
