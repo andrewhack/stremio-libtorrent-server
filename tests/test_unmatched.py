@@ -30,7 +30,9 @@ def _clean():
     ("GET", "/thumb.jpg", "GET /thumb.jpg"),
     ("GET", "/Some.Title.2009.1080p.mkv", "GET /{x}"),
     ("GET", "/%F0%9F%8E%AC", "GET /{x}"),
-    ("BREW", "/coffee", "OTHER /coffee"),
+    ("GET", "/aB3xR9k2Qz", "GET /{x}"),     # word-shaped, and still possibly somebody's token
+    ("GET", "/wp-login.php", "GET /{x}"),   # a scanner's probe is not a route family
+    ("BREW", "/heartbeat", "OTHER /heartbeat"),
     ("get", "/heartbeat?x=1", "GET /heartbeat"),
 ])
 def test_shape_keeps_the_route_and_drops_every_value(method, path, want):
@@ -45,7 +47,7 @@ def test_shape_never_carries_an_infohash_a_name_or_a_query():
 def test_an_unknown_path_is_404_and_counted():
     c = TestClient(create_app())
     assert c.get("/definitely-not-a-route").status_code == 404
-    assert c.get("/stats.json").json()["unmatchedRoutes"] == {"GET /definitely-not-a-route": 1}
+    assert c.get("/stats.json").json()["unmatchedRoutes"] == {"GET /{x}": 1}
 
 
 def test_an_unimplemented_method_is_counted():
@@ -88,9 +90,9 @@ def test_fallback_headers_from_anyone_but_nginx_are_not_believed():
 
 def test_shapes_are_capped(monkeypatch):
     monkeypatch.setattr(unmatched, "MAX_SHAPES", 2)
-    for p in ("/a", "/b", "/c", "/d"):
+    for p in ("/heartbeat", "/yt", "/rar", "/zip"):
         unmatched.record("GET", p)
-    assert unmatched.snapshot() == {"GET /a": 1, "GET /b": 1, "other": 2}
+    assert unmatched.snapshot() == {"GET /heartbeat": 1, "GET /yt": 1, "other": 2}
 
 
 def test_first_sighting_is_logged_once_without_the_path(caplog):

@@ -26,10 +26,22 @@ router = APIRouter()
 MAX_SHAPES = 64
 _METHODS = ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT")
 _IH = re.compile(r"[0-9a-fA-F]{40}")
-# A route name: one word -- letters, digits, `_` and `-`, starting with a letter or `_` (our own
-# /_unmatched does) -- optionally with a short extension (`stats.json`, `thumb.jpg`). Anything
-# else -- a dotted release name, percent-encoded bytes, a token -- is kept only as `{x}`.
-_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,31}(\.[A-Za-z0-9]{1,5})?")
+# First path segments kept by name: the route families the stock server registers or a Stremio
+# client is known to call (docs/protocol-map.md and the 2026-09-11 client census), plus this
+# server's own. Any other first segment -- a token, a release name, a scanner's probe -- counts as
+# `{x}`, so nothing a client put in a path can reach /stats.json or the log. A new client route
+# shows as `{x}` too: name it with a request log, then add it here.
+KNOWN_FIRST_SEGMENTS = frozenset({
+    # the stock server (server.js v4.21.1) and what the clients build against it
+    "7zip", "casting", "convert", "create", "device-info", "favicon.ico", "ftp", "get-https",
+    "heartbeat", "hlsv2", "hwaccel-profiler", "local-addon", "manifest.json", "network-info",
+    "nzb", "opensubHash", "probe", "proxy", "rar", "removeAll", "settings", "stats.json",
+    "status", "stream", "subtitleSignature", "subtitles.srt", "subtitles.vtt", "subtitlesTracks",
+    "tar", "tgz", "thumb.jpg", "tracks", "transcode", "yt", "zip",
+    # this server's own
+    "_unmatched", "active.json", "cache", "cache.json", "health", "library", "netcheck.json",
+    "pins.json", "transcode.json",
+})
 
 _lock = threading.Lock()
 _counts: dict[str, int] = {}
@@ -49,7 +61,7 @@ def shape(method: str, path: str) -> str:
         if len(segs) > 2:
             out += "/*"
         return f"{verb} {out}"
-    out = "/" + (segs[0] if _WORD.fullmatch(segs[0]) else "{x}")
+    out = "/" + (segs[0] if segs[0] in KNOWN_FIRST_SEGMENTS else "{x}")
     if len(segs) > 1:
         out += "/*"
     return f"{verb} {out}"
