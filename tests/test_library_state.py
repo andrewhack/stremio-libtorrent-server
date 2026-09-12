@@ -4,15 +4,19 @@ from stremiosrv.library import state as statemod
 
 
 class FakeEngine:
-    def __init__(self, pinned=(), names=None):
+    def __init__(self, pinned=(), names=None, live=None):
         self._pinned = list(pinned)
         self._names = names or {}
+        self._live = live or {}
 
     def name_to_hash(self):
         return self._names
 
     def tracked_status(self):
         return self._pinned
+
+    def live_files(self):
+        return self._live
 
 
 def _seed_cache(tmp_path, *names):
@@ -430,3 +434,87 @@ def test_orphan_partfiles_are_marked_as_such(tmp_path):
     orphans = [e for e in out["entries"] if e.get("kind") == "orphan"]
     assert len(orphans) == 1
     assert orphans[0]["infoHash"] == ih
+
+
+def _film_dir(tmp_path, name="Sample.Film.2020", size=4096):
+    d = tmp_path / name
+    d.mkdir()
+    (d / f"{name}.mkv").write_bytes(b"x" * size)
+    return name
+
+
+def test_a_file_the_session_is_writing_is_counted_by_its_handle_not_the_disk(tmp_path,
+                                                                             monkeypatch):
+    """libtorrent writes a downloading file through a memory map, and on ZFS a hole lookup on
+    that file flushes it and waits for the pool -- about half a second a file, on every addon
+    request while the download runs -- and can still answer "no holes" before the file is whole.
+    The session already knows how much has arrived, so the disk must not be asked about it."""
+    name = _film_dir(tmp_path)
+    ih = "f" * 40
+
+    def walked(path, st):
+        raise AssertionError("walked the holes of a file the session is writing")
+
+    monkeypatch.setattr(cachemod, "data_bytes", walked)
+    eng = FakeEngine(names={name: ih}, live={ih: [
+        {"index": 0, "name": f"{name}.mkv", "size": 4096, "downloaded": 1024,
+         "progress": 0.25, "wanted": True}]})
+    e = state.build(str(tmp_path), eng)["entries"][0]
+    [f] = e["files"]
+    assert f["downloaded"] == 1024 and f["progress"] == 0.25
+    # only the number changed source: the listing is still the disk's
+    assert e["filesFrom"] == "disk" and f["index"] is None and f["wanted"] is False
+
+
+def test_a_file_the_session_does_not_report_is_still_measured_on_disk(tmp_path, monkeypatch):
+    """The handle lists what it holds or wants; nothing else in the directory is being written by
+    it, so the disk is cheap and right about those. A same-named file of another size is another
+    file, and must not borrow its count."""
+    name = _film_dir(tmp_path)
+    ih = "f" * 40
+    monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: 777)
+    eng = FakeEngine(names={name: ih}, live={ih: [
+        {"index": 0, "name": f"{name}.mkv", "size": 9999, "downloaded": 1024,
+         "progress": 0.1, "wanted": True}]})
+    [f] = state.build(str(tmp_path), eng)["entries"][0]["files"]
+    assert f["downloaded"] == 777
+
+
+def test_a_failing_live_files_falls_back_to_the_disk(tmp_path, monkeypatch):
+    """The engine may be briefly broken; a listing measured on the disk is still worth serving."""
+    class Broken(FakeEngine):
+        def live_files(self):
+            raise RuntimeError("libtorrent went away")
+
+    name = _film_dir(tmp_path)
+    monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: 777)
+    [f] = state.build(str(tmp_path), Broken(names={name: "f" * 40}))["entries"][0]["files"]
+    assert f["downloaded"] == 777
+
+
+def test_live_files_covers_every_handle_with_metadata_and_skips_a_broken_one():
+    """Tracked or not: a title playback is filling is in the session too, and it is the one being
+    written. A handle without metadata has no files to report, and one handle failing must not
+    hide the others."""
+    import types
+
+    from stremiosrv.torrent.engine import Engine
+
+    class H:
+        def __init__(self, meta, files=None, broken=False):
+            self._meta, self._files, self._broken = meta, files or [], broken
+
+        def has_metadata(self):
+            return self._meta
+
+        def file_stats(self):
+            if self._broken:
+                raise RuntimeError("handle went away")
+            return self._files
+
+    files = [{"index": 0, "name": "a.mkv", "size": 10, "downloaded": 4, "progress": 0.4,
+              "wanted": True}]
+    fake = types.SimpleNamespace(_torrents={"a" * 40: H(True, files),
+                                            "b" * 40: H(False),
+                                            "c" * 40: H(True, broken=True)})
+    assert Engine.live_files(fake) == {"a" * 40: files}

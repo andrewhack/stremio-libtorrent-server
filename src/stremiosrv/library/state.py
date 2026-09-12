@@ -45,8 +45,8 @@ def is_watchable(f: dict) -> bool:
     return bool(f.get("wanted")) or (f.get("downloaded") or 0) >= FRAGMENT_BYTES         or (f.get("progress") or 0) >= FRAGMENT_FRACTION
 
 
-def _disk_files(cache_root: str, name: str) -> list[dict]:
-    """Per-file facts read from the DISK, for a torrent the session is not holding.
+def _disk_files(cache_root: str, name: str, live: list[dict] | None = None) -> list[dict]:
+    """Per-file facts read from the DISK, for a torrent the session is not tracking.
 
     Only pins are re-added to the libtorrent session at startup, so after any restart everything
     else -- which is most of the cache -- has no handle, and per-file facts came only from a
@@ -58,7 +58,15 @@ def _disk_files(cache_root: str, name: str) -> list[dict]:
     libtorrent allocates the whole torrent sparsely, so `st_size` reports what a file WILL be while
     its holes say what has not arrived yet. Not the allocation: a compressing filesystem stores a
     finished file in less space than its length, and a complete episode read as 99.8%.
+
+    `live` is the session's own list for this torrent when it holds the torrent without tracking
+    it -- playback filling a title is the usual case (Engine.live_files). A file on that list may
+    be being written right now, and its holes are the one thing the disk cannot be asked about
+    cheaply or reliably while it is, so its byte count comes from the handle instead. Only that
+    number changes source: the listing is still the disk's, with no index and nothing wanted.
+    Matched on name AND size, because a handle names a file by its last path segment only.
     """
+    arrived = {(f.get("name"), f.get("size")): f.get("downloaded") or 0 for f in live or []}
     base = os.path.join(cache_root, name)
     if not os.path.isdir(base):
         return []
@@ -72,7 +80,8 @@ def _disk_files(cache_root: str, name: str) -> list[dict]:
                 st = os.stat(path)
             except OSError:
                 continue
-            got = cachemod.data_bytes(path, st)
+            key = (fn, st.st_size)
+            got = arrived[key] if key in arrived else cachemod.data_bytes(path, st)
             out.append({
                 # No index: a directory listing cannot know the torrent's own file order, and
                 # inventing one would let a release's fileIdx match the wrong episode.
@@ -87,11 +96,12 @@ def _disk_files(cache_root: str, name: str) -> list[dict]:
     return out
 
 
-def _engine_view(engine) -> tuple[dict, dict]:
-    """(name -> infohash, infohash -> pin status). Never raises: the engine is allowed to be absent
-    or briefly broken, and a listing of the disk is still worth serving when it is."""
+def _engine_view(engine) -> tuple[dict, dict, dict]:
+    """(name -> infohash, infohash -> tracked status, infohash -> live per-file list). Never
+    raises: the engine is allowed to be absent or briefly broken, and a listing of the disk is
+    still worth serving when it is."""
     if engine is None:
-        return {}, {}
+        return {}, {}, {}
     try:
         names = {n: h.lower() for n, h in (engine.name_to_hash() or {}).items()}
     except Exception as e:  # noqa: BLE001 — degrade to a disk-only listing
@@ -105,11 +115,18 @@ def _engine_view(engine) -> tuple[dict, dict]:
     except Exception as e:  # noqa: BLE001 — degrade to a disk-only listing
         log.warning("library: pinned_status failed: %s: %s", type(e).__name__, e)
         pins = {}
-    return names, pins
+    try:
+        # Every torrent in the session, tracked or not: the files playback is filling are the
+        # ones being written, and their byte counts must come from here (see _disk_files).
+        live = {ih.lower(): files for ih, files in (engine.live_files() or {}).items()}
+    except Exception as e:  # noqa: BLE001 — degrade to measuring them on the disk
+        log.warning("library: live_files failed: %s: %s", type(e).__name__, e)
+        live = {}
+    return names, pins, live
 
 
 def build(cache_root: str, engine, budget: int = 0) -> dict:
-    names, pins = _engine_view(engine)
+    names, pins, live = _engine_view(engine)
     idle = cachemod.load_name_index(cache_root)
     all_labels = labelsmod.load(cache_root)
     entries: list[dict] = []
@@ -133,7 +150,7 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         # The engine's own list when it has one; the disk when it does not. Not both: a handle
         # knows what is wanted as well as what is present, so it is always the better answer.
         engine_files = pin.get("files") or []
-        disk_files = [] if engine_files else _disk_files(cache_root, name)
+        disk_files = [] if engine_files else _disk_files(cache_root, name, live.get(ih))
         entries.append({
             "name": name,
             "infoHash": ih or None,

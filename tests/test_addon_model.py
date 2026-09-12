@@ -215,19 +215,24 @@ def test_a_single_file_entry_without_an_index_still_plays_as_index_zero():
 
 
 class _FakeEngine:
-    """The exact two methods state.build calls on an engine -- see state._engine_view, which is the
-    only place `build` ever touches its `engine` argument. Nothing else is implemented on purpose:
-    a test double growing extra methods is how a fake quietly stops matching the real contract."""
+    """The exact three methods state.build calls on an engine -- see state._engine_view, which is
+    the only place `build` ever touches its `engine` argument. Nothing else is implemented on
+    purpose: a test double growing extra methods is how a fake quietly stops matching the real
+    contract."""
 
-    def __init__(self, names: dict, statuses: list[dict]) -> None:
+    def __init__(self, names: dict, statuses: list[dict], live: dict | None = None) -> None:
         self._names = names
         self._statuses = statuses
+        self._live = live or {}
 
     def name_to_hash(self) -> dict:
         return self._names
 
     def tracked_status(self) -> list[dict]:
         return self._statuses
+
+    def live_files(self) -> dict:
+        return self._live
 
 
 def test_a_real_state_build_feeds_playable_index_a_pack_where_the_wanted_file_is_not_the_biggest(
@@ -481,3 +486,30 @@ def test_find_entry_matches_case_insensitively_and_misses_cleanly():
     state = {"entries": [_entry()]}
     assert am.find_entry(state, IH.upper())["infoHash"] == IH
     assert am.find_entry(state, "b" * 40) is None
+
+
+def test_a_file_still_downloading_gets_no_row_even_when_the_disk_says_it_is_whole(
+        tmp_path, monkeypatch):
+    """On ZFS a hole lookup on a file libtorrent is writing can answer "no holes" -- the whole
+    file present -- while it is still arriving, and a row offered on that answer plays a file
+    that is not there yet. The session's handle counts what has actually arrived, and the row
+    goes by that: none while it arrives, one as soon as the handle says the file is whole."""
+    from stremiosrv import cache as cachemod
+    from stremiosrv.library import labels
+
+    ih, name = "e" * 40, "Show.S01E05.1080p"
+    d = tmp_path / name
+    d.mkdir()
+    (d / f"{name}.mkv").write_bytes(b"x" * 4096)
+    monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: st.st_size)  # "no holes"
+    labels.put(str(tmp_path), ih, {"metaId": "tt0000011", "type": "series", "season": 1,
+                                   "episode": 5})
+    arriving = {"index": 0, "name": f"{name}.mkv", "size": 4096, "downloaded": 1024,
+                "progress": 0.25, "wanted": True}
+
+    state = statemod.build(str(tmp_path), _FakeEngine({name: ih}, [], live={ih: [arriving]}))
+    assert am.streams_for_meta_id(state, "tt0000011:1:5", ORIGIN) == []
+
+    whole = dict(arriving, downloaded=4096, progress=1.0)
+    state = statemod.build(str(tmp_path), _FakeEngine({name: ih}, [], live={ih: [whole]}))
+    assert len(am.streams_for_meta_id(state, "tt0000011:1:5", ORIGIN)) == 1

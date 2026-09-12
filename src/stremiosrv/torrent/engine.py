@@ -1024,6 +1024,25 @@ class Engine:
         """Only the kept titles -- what /pins.json has always meant."""
         return self._status_for(set(self._pinned))
 
+    def live_files(self) -> dict[str, list[dict]]:
+        """Per-file facts (Handle.file_stats) for EVERY torrent the session holds, by infohash.
+
+        tracked_status covers what someone asked this box to hold. A title playback is filling is
+        in the session too, untracked -- and its files are the ones being written right now,
+        which makes them the files the disk cannot answer for: libtorrent writes through a memory
+        map, and on ZFS a hole lookup on such a file first flushes it and waits for the pool,
+        about half a second a file while a download runs, and can still report no holes in a file
+        that has them. The handle counts the same bytes from its own piece state.
+        """
+        out: dict[str, list[dict]] = {}
+        for ih, h in list(self._torrents.items()):  # a copy: request threads add torrents
+            try:
+                if h.has_metadata():
+                    out[ih] = h.file_stats()
+            except Exception:  # noqa: BLE001 — one broken handle must not hide the others
+                continue
+        return out
+
     def _status_for(self, hashes: set[str]) -> list[dict]:
         out = []
         for ih in hashes:
