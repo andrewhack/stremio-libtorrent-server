@@ -59,7 +59,11 @@ location ^~ /library           { proxy_pass http://127.0.0.1:11470; }
 # unmatched path lands on the one fixed route below, so none can reach an origin-only route.
 location / { try_files $uri $uri/ @unmatched; }
 location @unmatched {
-    # Declaring proxy_set_header here drops the inherited ones; /_unmatched reads only these two.
+    # Declaring proxy_set_header here drops the inherited ones; /_unmatched reads only the two below.
+    # A client's own X-Forwarded-For would then pass through, and uvicorn believes that header from
+    # loopback: the peer would become whatever the client wrote, and /_unmatched would stop trusting
+    # the two headers below. Send none, so the peer stays nginx.
+    proxy_set_header X-Forwarded-For "";
     proxy_set_header X-Original-Method $request_method;
     proxy_set_header X-Original-URI $request_uri;
     # The trailing `?` drops the original query string; /_unmatched takes the request from the

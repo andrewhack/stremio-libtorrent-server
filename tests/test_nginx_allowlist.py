@@ -190,6 +190,7 @@ def test_unmatched_paths_get_a_counted_404_not_the_web_player():
     assert "proxy_pass http://127.0.0.1:11470;" in named
     assert "X-Original-Method $request_method" in named
     assert "X-Original-URI $request_uri" in named
+    assert 'proxy_set_header X-Forwarded-For "";' in named
 
 
 def test_the_proxy_route_reaches_the_app_with_its_raw_path():
