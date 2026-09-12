@@ -1,6 +1,6 @@
 """/proxy end to end against a local upstream: headers in, bytes and status out, playlists
 rewritten within their limits, the destination rule, the stock redirect limit, the concurrency cap
-and the refusal of requests that come back to this server."""
+with its places kept for home, and the refusal of requests that come back to this server."""
 from __future__ import annotations
 
 import gc
@@ -76,6 +76,9 @@ class _Upstream(BaseHTTPRequestHandler):
         elif p.startswith("/gz.m3u8"):
             self._send(200, gzip.compress(SMALL_PLAYLIST), "application/vnd.apple.mpegurl",
                        {"Content-Encoding": "gzip"})
+        elif p.startswith("/xgz.m3u8"):
+            self._send(200, gzip.compress(SMALL_PLAYLIST), "application/vnd.apple.mpegurl",
+                       {"Content-Encoding": "x-gzip"})
         elif p.startswith("/zl.m3u8"):
             self._send(200, zlib.compress(SMALL_PLAYLIST), "application/vnd.apple.mpegurl",
                        {"Content-Encoding": "deflate"})
@@ -85,6 +88,8 @@ class _Upstream(BaseHTTPRequestHandler):
         elif p.startswith("/bad.m3u8"):
             self._send(200, b"not gzip at all", "application/vnd.apple.mpegurl",
                        {"Content-Encoding": "gzip"})
+        elif p.startswith("/badurl.m3u8"):
+            self._send(200, b"#EXTM3U\nhttp://[::1/x\n", "application/vnd.apple.mpegurl")
         elif p.startswith("/hop"):
             n = int(p.removeprefix("/hop"))
             self._send(302, extra={"Location": f"/hop{n + 1}" if n < 9 else "/blob"})
@@ -94,6 +99,9 @@ class _Upstream(BaseHTTPRequestHandler):
             self._send(302, extra={"Location": "http://127.0.0.1:99999/x"})
         elif p.startswith("/m405"):
             self._send(405, b"not here", "text/plain")
+        elif p.startswith("/folded"):
+            # send_header writes the value as given, so this is a real obs-fold on the wire
+            self._send(200, BLOB, "video/mp4\r\n ; x=1")
         elif p.startswith("/echo"):
             self._send(200, b"ok", "text/plain")
         else:
@@ -121,6 +129,14 @@ def _root(srv, *extra: str) -> str:
 
 def _client(peer: tuple[str, int] = HOME, settings: Settings | None = None) -> TestClient:
     return TestClient(create_app(settings=settings), client=peer)
+
+
+def _pools(monkeypatch, total: int, outside: int) -> tuple[threading.BoundedSemaphore, ...]:
+    """Swap in small pools: (every place, the internet clients' share of them)."""
+    pools = threading.BoundedSemaphore(total), threading.BoundedSemaphore(outside)
+    monkeypatch.setattr(proxy_api, "_slots", pools[0])
+    monkeypatch.setattr(proxy_api, "_outside_slots", pools[1])
+    return pools
 
 
 def test_a_range_request_is_relayed_with_the_addons_headers(upstream):
@@ -151,6 +167,27 @@ def test_forced_response_headers_apply_but_never_to_framing(upstream):
     assert r.content == BLOB
 
 
+def test_a_folded_upstream_header_is_unfolded(upstream):
+    """http.client keeps an obs-fold as CR LF; relayed like that, the ASGI server would drop the
+    whole response. RFC 9112 5.2: replace it with a space."""
+    r = _client().get(f"/proxy/{_opts(upstream)}/folded")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "video/mp4 ; x=1"
+    assert r.content == BLOB
+
+
+@pytest.mark.parametrize(("raw", "sent"), [
+    ("video/mp4", "video/mp4"),
+    ("video/mp4\r\n ; x=1", "video/mp4 ; x=1"),
+    ("a\r\n\tb", "a b"),
+    ("a\r\nb", None),
+    ("a\nb", None),
+    ("a\rb", None),
+])
+def test_only_values_without_line_breaks_are_relayed(raw, sent):
+    assert proxy_api._relayable(raw) == sent
+
+
 def test_head_is_relayed_without_a_body(upstream):
     r = _client().head(f"/proxy/{_opts(upstream, TOKEN)}/blob")
     assert r.status_code == 200
@@ -179,7 +216,7 @@ def test_a_playlist_comes_back_rewritten(upstream):
     assert r.headers["accept-ranges"] == "none"
 
 
-@pytest.mark.parametrize("path", ["/gz.m3u8", "/zl.m3u8"])
+@pytest.mark.parametrize("path", ["/gz.m3u8", "/xgz.m3u8", "/zl.m3u8"])
 def test_a_compressed_playlist_is_decoded_then_rewritten(upstream, path):
     r = _client().get(f"/proxy/{_opts(upstream, TOKEN)}{path}")
     assert r.status_code == 200
@@ -197,12 +234,17 @@ def test_a_playlist_that_does_not_decompress_is_refused(upstream):
 
 
 def test_a_playlist_whose_rewrite_passes_the_limit_is_refused(upstream, monkeypatch):
-    monkeypatch.setattr(proxy_api, "MAX_REWRITTEN_CHARS", 200)
+    monkeypatch.setattr(proxy_api, "MAX_REWRITTEN_BYTES", 200)
     assert _client().get(f"/proxy/{_opts(upstream, TOKEN)}/list.m3u8").status_code == 502
 
 
+def test_a_playlist_with_an_unparseable_url_is_a_502_not_a_crash(upstream):
+    assert _client().get(f"/proxy/{_opts(upstream, TOKEN)}/badurl.m3u8").status_code == 502
+
+
 def test_a_forced_mpegurl_type_turns_the_rewrite_on(upstream):
-    """Stock tests the headers after `r` is applied, so an addon can declare a playlist."""
+    """`r` applies before the playlist test, as in stock, so an addon can declare a playlist (stock
+    matches a lowercase `content-type` only; this matches the name in any case)."""
     r = _client().get(f"/proxy/{_opts(upstream, TOKEN, FORCED_MPEGURL)}/list-noext")
     assert r.status_code == 200
     root = _root(upstream, FORCED_MPEGURL)
@@ -283,20 +325,48 @@ def test_a_relayed_405_is_not_counted_as_a_missing_route(upstream):
 
 
 def test_requests_past_the_cap_get_a_503(upstream, monkeypatch):
-    places = threading.BoundedSemaphore(1)
-    monkeypatch.setattr(proxy_api, "_slots", places)
-    assert places.acquire(blocking=False)  # another request holds the only place
+    total, _outside = _pools(monkeypatch, 1, 1)
+    assert total.acquire(blocking=False)  # another request holds the only place
     assert _client().get(f"/proxy/{_opts(upstream, TOKEN)}/blob").status_code == 503
     assert upstream.seen == []
-    places.release()
+    total.release()
     assert _client().get(f"/proxy/{_opts(upstream, TOKEN)}/blob").status_code == 200
 
 
+def test_internet_clients_leave_places_for_home(upstream, monkeypatch):
+    """With the internet clients' share taken, another internet request is turned away while a
+    home one still gets in -- and the refusal is counted as an internet one."""
+    total, outside = _pools(monkeypatch, 2, 1)
+    assert outside.acquire(blocking=False)  # an internet client holds the whole share...
+    assert total.acquire(blocking=False)    # ...and its place among all of them
+    before = proxy_api.refused()
+    url = f"/proxy/{_opts(upstream, TOKEN)}/blob"
+    assert _client(OUTSIDE).get(url).status_code == 503
+    assert _client(HOME).get(url).status_code == 200
+    assert proxy_api.refused() == {**before, "internet": before["internet"] + 1}
+
+
+def test_an_internet_client_turned_away_keeps_no_place(upstream, monkeypatch):
+    """Its share had room but every place was taken: the share's place it took must come back."""
+    total, outside = _pools(monkeypatch, 1, 1)
+    assert total.acquire(blocking=False)
+    assert _client(OUTSIDE).get(f"/proxy/{_opts(upstream, TOKEN)}/blob").status_code == 503
+    assert outside.acquire(blocking=False)
+
+
+def test_refusals_show_in_stats(upstream, monkeypatch):
+    total, _outside = _pools(monkeypatch, 1, 1)
+    assert total.acquire(blocking=False)
+    c = _client()
+    before = c.get("/stats.json").json()["proxyRefused"]
+    assert c.get(f"/proxy/{_opts(upstream, TOKEN)}/blob").status_code == 503
+    assert c.get("/stats.json").json()["proxyRefused"] == {**before, "home": before["home"] + 1}
+
+
 def test_every_answer_gives_its_place_back(upstream, monkeypatch):
-    """One place: a request that kept it would turn the next one into a 503, and a place given
-    back twice would make the BoundedSemaphore raise."""
-    places = threading.BoundedSemaphore(1)
-    monkeypatch.setattr(proxy_api, "_slots", places)
+    """One place in each pool: a request that kept one would turn the next into a 503, and a place
+    given back twice would make a BoundedSemaphore raise."""
+    _pools(monkeypatch, 1, 1)
     c = _client()
     url = f"/proxy/{_opts(upstream, TOKEN)}"
     assert c.get(f"{url}/blob").status_code == 200                  # streamed
@@ -304,6 +374,7 @@ def test_every_answer_gives_its_place_back(upstream, monkeypatch):
     assert c.get(f"{url}/list.m3u8").status_code == 200             # playlist
     assert c.get(f"{url}/bad.m3u8").status_code == 502              # playlist refused
     assert _client(OUTSIDE).get(f"{url}/blob").status_code == 403   # destination refused
+    assert _client(OUTSIDE).get(f"{url}/blob").status_code == 403   # ...both its places came back
     assert c.get(f"{url}/badport").status_code == 502               # malformed redirect
     assert c.get("/proxy/d=http%3A%2F%2F127.0.0.1%3A9/x").status_code == 502  # unreachable
     assert c.get(f"{url}/blob").status_code == 200
@@ -325,14 +396,17 @@ def test_a_body_that_never_starts_still_gives_its_place_back(upstream, monkeypat
     assert places.acquire(blocking=False)
 
 
-def test_a_place_is_given_back_once_however_often_it_is_released():
-    places = threading.BoundedSemaphore(1)
-    assert places.acquire(blocking=False)
-    slot = proxy_api._Slot(places)
+def test_places_are_given_back_once_however_often_released():
+    total, outside = threading.BoundedSemaphore(1), threading.BoundedSemaphore(1)
+    assert outside.acquire(blocking=False)
+    assert total.acquire(blocking=False)
+    slot = proxy_api._Slot((outside, total))
     slot.release()
-    slot.release()  # a second real release would make the BoundedSemaphore raise ValueError
-    assert places.acquire(blocking=False)
-    assert not places.acquire(blocking=False)
+    slot.release()  # a second real release would make the BoundedSemaphores raise ValueError
+    assert outside.acquire(blocking=False)
+    assert total.acquire(blocking=False)
+    assert not outside.acquire(blocking=False)
+    assert not total.acquire(blocking=False)
 
 
 @pytest.mark.parametrize("path", [

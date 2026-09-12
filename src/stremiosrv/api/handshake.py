@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request
 
 from stremiosrv import metrics, unmatched
+from stremiosrv.api import proxy as proxy_api
 from stremiosrv.cache import usage
 
 router = APIRouter()
@@ -65,6 +66,8 @@ def global_stats(request: Request) -> dict:
         # Requests no route answered, by content-neutral shape (see unmatched.py). Empty on a
         # server that implements everything its clients ask for.
         "unmatchedRoutes": unmatched.snapshot(),
+        # /proxy requests turned away because every place was taken, home / internet (api/proxy.py).
+        "proxyRefused": proxy_api.refused(),
     }
 
 

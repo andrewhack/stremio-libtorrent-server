@@ -5,10 +5,13 @@ the same `/proxy/<opts>` the playlist came through; an absolute URL on another o
 `/proxy/` of its own (that origin, the same request headers, no forced response headers); a
 relative line is left alone, because the player resolves it against the playlist's own URL, which
 is already a proxy URL. In a tag line only the first `URI="..."` attribute is rewritten.
+
+The playlist stays bytes and each line is decoded on its own, so what a rewrite holds follows its
+size in bytes: a whole playlist decoded at once is stored four bytes to a character as soon as one
+character in it lies outside the BMP.
 """
 from __future__ import annotations
 
-import io
 import re
 import urllib.parse
 from collections.abc import Iterator
@@ -42,40 +45,45 @@ def _rewrite_url(url: str, root: str, o: ProxyOpts) -> str:
     return url
 
 
+def _rewrite_line(line: str, root: str, o: ProxyOpts) -> str:
+    """One line without its line ending: a tag's first URI attribute, or a URL line."""
+    if line.startswith("#"):
+        m = _URI_ATTR.search(line)
+        if not m:
+            return line
+        return line[:m.start(1)] + _rewrite_url(m.group(1), root, o) + line[m.end(1):]
+    return _rewrite_url(line, root, o) if line else line
+
+
 class TooLarge(Exception):
     """The rewritten playlist would pass the caller's limit."""
 
 
-def _lines(text: str) -> Iterator[str]:
-    """text.split("\n"), one line at a time, so a playlist of many short lines never becomes a
-    list of as many strings."""
+def _lines(body: bytes) -> Iterator[bytes]:
+    """body.split(b"\n"), one line at a time, so a playlist of many short lines never becomes a
+    list of as many objects."""
     start = 0
-    while (end := text.find("\n", start)) >= 0:
-        yield text[start:end]
+    while (end := body.find(b"\n", start)) >= 0:
+        yield body[start:end]
         start = end + 1
-    yield text[start:]
+    yield body[start:]
 
 
-def rewrite(text: str, o: ProxyOpts, limit: int | None = None) -> str:
-    """The playlist with its URLs routed back through /proxy; line endings kept as they came.
+def rewrite(body: bytes, o: ProxyOpts, limit: int | None = None) -> bytes:
+    """The playlist with its URLs routed back through /proxy; line endings, and bytes that are not
+    UTF-8, kept as they came.
 
-    Raises TooLarge as soon as the output would pass `limit` characters: every rewritten line grows
-    by the whole proxy prefix, so a small playlist of many short lines can grow a great deal."""
+    Raises TooLarge as soon as the output would pass `limit` bytes: every rewritten line grows by
+    the whole proxy prefix, so a small playlist of many short lines can grow a great deal. Raises
+    ValueError for a URL that cannot be parsed or written back."""
     root = "/proxy/" + serialize(o)
-    out = io.StringIO()
-    size = 0
-    for i, line in enumerate(_lines(text)):
-        body = line.rstrip("\r")
-        cr = line[len(body):]
-        if body.startswith("#"):
-            m = _URI_ATTR.search(body)
-            if m:
-                body = body[:m.start(1)] + _rewrite_url(m.group(1), root, o) + body[m.end(1):]
-        elif body:
-            body = _rewrite_url(body, root, o)
-        piece = ("\n" if i else "") + body + cr
-        size += len(piece)
-        if limit is not None and size > limit:
+    out = bytearray()
+    for i, raw in enumerate(_lines(body)):
+        line = raw.decode("utf-8", "surrogateescape")
+        text = line.rstrip("\r")
+        piece = ("\n" if i else "") + _rewrite_line(text, root, o) + line[len(text):]
+        encoded = piece.encode("utf-8", "surrogateescape")
+        if limit is not None and len(out) + len(encoded) > limit:
             raise TooLarge
-        out.write(piece)
-    return out.getvalue()
+        out += encoded
+    return bytes(out)

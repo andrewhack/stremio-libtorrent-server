@@ -8,13 +8,15 @@ nginx answered with the web player's index.html and those streams never played.
 
 Limits the stock proxy does not have, because this server may face the internet: at most
 MAX_CONCURRENT proxied requests at once (each holds a worker thread while its upstream is slow, and
-enough of them would stall every other route), and a playlist is read, decompressed and rewritten
-within fixed sizes (a small compressed body, or many short lines, could otherwise grow without
-bound).
+enough of them would stall every other route), of which internet clients may hold only
+MAX_CONCURRENT_OUTSIDE, so the home network always finds a place; and a playlist is read,
+decompressed and rewritten within fixed sizes (a small compressed body, or many short lines, could
+otherwise grow without bound).
 """
 from __future__ import annotations
 
 import http.client
+import re
 import threading
 import weakref
 import zlib
@@ -44,20 +46,31 @@ RELAY_RESPONSE = ("accept-ranges", "content-type", "content-length", "content-ra
                   "last-modified", "etag", "content-encoding")
 # An `r` header may not set these: they describe the bytes on the wire, which the proxy frames.
 _FRAMING = frozenset({"content-length", "transfer-encoding", "connection"})
+# http.client keeps an obs-fold -- a header value continued on the next line -- as CR LF plus the
+# continuation's leading whitespace. The ASGI servers refuse a value with a line break in it and
+# drop the response, so it becomes one space first, as RFC 9112 5.2 says.
+_OBS_FOLD = re.compile(r"\r?\n[ \t]+")
 MAX_PLAYLIST_BYTES = 4 << 20  # read from upstream, and again once decompressed
-MAX_REWRITTEN_CHARS = 16 << 20  # the rewritten playlist
+MAX_REWRITTEN_BYTES = 16 << 20  # the rewritten playlist
 MAX_CONCURRENT = 16
+# Internet clients may hold at most this many of the MAX_CONCURRENT places, so a viewer on the home
+# network always finds one (owner's decision, 2026-09-12).
+MAX_CONCURRENT_OUTSIDE = 12
 CHUNK = 64 << 10
 
 _slots = threading.BoundedSemaphore(MAX_CONCURRENT)
+_outside_slots = threading.BoundedSemaphore(MAX_CONCURRENT_OUTSIDE)
+_refused_lock = threading.Lock()
+_refused = {"home": 0, "internet": 0}
 
 
 class _Slot:
-    """One of the MAX_CONCURRENT places, given back exactly once: by whatever finishes with the
-    upstream, or -- when Starlette drops a streaming body it never started, the client having left
-    first -- by that body's finalizer."""
+    """A proxied request's places -- one of the MAX_CONCURRENT and, for an internet client, one of
+    the MAX_CONCURRENT_OUTSIDE too -- given back exactly once: by whatever finishes with the
+    upstream, or, when Starlette drops a streaming body it never started (the client having left
+    first), by that body's finalizer."""
 
-    def __init__(self, places: threading.BoundedSemaphore) -> None:
+    def __init__(self, places: tuple[threading.BoundedSemaphore, ...]) -> None:
         self._places = places
         self._held = True
         self._lock = threading.Lock()
@@ -67,7 +80,29 @@ class _Slot:
             if not self._held:
                 return
             self._held = False
-        self._places.release()
+        for place in reversed(self._places):
+            place.release()
+
+
+def _admit(home: bool) -> _Slot | None:
+    """This client's places, or None when they are taken -- a refusal counted for /stats.json."""
+    pools = (_slots,) if home else (_outside_slots, _slots)
+    taken: list[threading.BoundedSemaphore] = []
+    for pool in pools:
+        if not pool.acquire(blocking=False):
+            for place in reversed(taken):
+                place.release()
+            with _refused_lock:
+                _refused["home" if home else "internet"] += 1
+            return None
+        taken.append(pool)
+    return _Slot(tuple(taken))
+
+
+def refused() -> dict[str, int]:
+    """For /stats.json: /proxy requests turned away because every place was taken, since start."""
+    with _refused_lock:
+        return dict(_refused)
 
 
 def _abandon(resp: http.client.HTTPResponse, conn: http.client.HTTPConnection,
@@ -117,10 +152,18 @@ def _request_headers(request: Request, o: opts.ProxyOpts) -> dict[str, str]:
     return out
 
 
+def _relayable(value: str) -> str | None:
+    """An upstream header value as it can be sent on: an obs-fold becomes one space; a value with
+    any other line break is dropped."""
+    value = _OBS_FOLD.sub(" ", value)
+    return None if "\r" in value or "\n" in value else value
+
+
 def _response_headers(resp: http.client.HTTPResponse, o: opts.ProxyOpts) -> dict[str, str]:
     out: dict[str, str] = {}
     for name in RELAY_RESPONSE:
-        value = resp.getheader(name)
+        raw = resp.getheader(name)
+        value = _relayable(raw) if raw is not None else None
         if value is not None:
             out[name] = value
     for name, value in o.res_headers:
@@ -136,7 +179,7 @@ def _decoded(body: bytes, encoding: str) -> bytes | None:
     enc = encoding.strip().lower()
     if enc in ("", "identity"):
         return body
-    if enc not in ("gzip", "deflate"):
+    if enc not in ("gzip", "x-gzip", "deflate"):
         return None
     d = zlib.decompressobj(wbits=zlib.MAX_WBITS | 32)  # a gzip or a zlib header, either one
     try:
@@ -161,14 +204,14 @@ def _playlist(resp: http.client.HTTPResponse, headers: dict[str, str],
     if decoded is None:
         return Response(status_code=502, content=b"undecodable playlist")
     try:
-        text = playlist.rewrite(decoded.decode("utf-8", "surrogateescape"), o,
-                                limit=MAX_REWRITTEN_CHARS)
+        rewritten = playlist.rewrite(decoded, o, limit=MAX_REWRITTEN_BYTES)
     except playlist.TooLarge:
         return Response(status_code=502, content=b"playlist too large")
+    except ValueError:  # a URL in it that cannot be parsed or written back
+        return Response(status_code=502, content=b"unusable playlist")
     headers.pop("content-length", None)
     headers["accept-ranges"] = "none"
-    return Response(content=text.encode("utf-8", "surrogateescape"), status_code=resp.status,
-                    headers=headers)
+    return Response(content=rewritten, status_code=resp.status, headers=headers)
 
 
 @router.api_route("/proxy/{rest:path}", methods=["GET", "HEAD"])
@@ -178,25 +221,25 @@ def proxy(rest: str, request: Request) -> Response:
     parsed = opts.parse(raw[len("/proxy/"):]) if raw.startswith("/proxy/") else None
     if parsed is None:
         return Response(status_code=400, content=b"bad proxy options")
-    places = _slots
-    if not places.acquire(blocking=False):
+    home = _home_client(request)
+    slot = _admit(home)
+    if slot is None:
         return Response(status_code=503, content=b"too many proxied requests")
-    slot = _Slot(places)
     try:
-        return _proxied(request, *parsed, slot)
+        return _proxied(request, *parsed, home, slot)
     except BaseException:
         slot.release()
         raise
 
 
-def _proxied(request: Request, o: opts.ProxyOpts, path: str, slot: _Slot) -> Response:
+def _proxied(request: Request, o: opts.ProxyOpts, path: str, home: bool,
+             slot: _Slot) -> Response:
     """Everything after admission. Gives `slot` back on every path except a streamed body, which
     takes it over."""
     query = request.url.query
     url = o.dest + path + (f"?{query}" if query else "")
     try:
-        resp, conn = upstream.open_url(url, request.method, _request_headers(request, o),
-                                       _home_client(request))
+        resp, conn = upstream.open_url(url, request.method, _request_headers(request, o), home)
     except dest.Refused:
         slot.release()
         return Response(status_code=403, content=b"destination not allowed")

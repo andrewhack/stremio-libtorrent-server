@@ -84,8 +84,9 @@ Query params observed on hlsv2 requests (from live logs): `mediaURL`, `videoCode
 > this server may face the internet: a client on the home network (`STREMIOSRV_LIBRARY_ADDON_ALLOW`,
 > by default the private ranges) may proxy anywhere, any other client only to public addresses; a
 > request carrying this server's own proxy marker is refused on every route, so the proxy cannot
-> reach this server itself; at most 16 proxied requests run at once (503 beyond); and a playlist is
-> read, decompressed and rewritten within fixed sizes.
+> reach this server itself; at most 16 proxied requests run at once, of which internet clients may
+> hold 12 (503 beyond, counted in `/stats.json` `proxyRefused`); and a playlist is read,
+> decompressed and rewritten within fixed sizes.
 
 ## 4. Subtitles
 
