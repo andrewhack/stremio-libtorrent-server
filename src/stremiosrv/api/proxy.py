@@ -6,18 +6,20 @@ players. The server fetches `d` + path with those headers and relays the answer;
 rewritten so its segments come back through the proxy too. There was no such route before 1.6.7:
 nginx answered with the web player's index.html and those streams never played.
 
-Limits the stock proxy does not have, because this server may face the internet: at most
-MAX_CONCURRENT proxied requests at once (each holds a worker thread while its upstream is slow, and
-enough of them would stall every other route), of which internet clients may hold only
-MAX_CONCURRENT_OUTSIDE, so the home network always finds a place; and a playlist is read,
-decompressed and rewritten within fixed sizes (a small compressed body, or many short lines, could
-otherwise grow without bound).
+Limits the stock proxy does not have, because this server may face the internet and serves the web
+player on the same origin: every answer is sandboxed, so a page fetched from anywhere cannot run on
+that origin; a web page on another site is judged like an internet client; at most MAX_CONCURRENT
+proxied requests run at once (each holds a worker thread while its upstream is slow, and enough of
+them would stall every other route), of which internet clients may hold only MAX_CONCURRENT_OUTSIDE,
+so the home network always finds a place; and a playlist is read, decompressed and rewritten within
+fixed sizes (a small compressed body, or many short lines, could otherwise grow without bound).
 """
 from __future__ import annotations
 
 import http.client
 import re
 import threading
+import urllib.parse
 import weakref
 import zlib
 from collections.abc import Iterator
@@ -44,8 +46,22 @@ FORWARD_REQUEST = ("accept", "accept-language", "range", "if-range", "user-agent
 # readable.
 RELAY_RESPONSE = ("accept-ranges", "content-type", "content-length", "content-range",
                   "last-modified", "etag", "content-encoding")
-# An `r` header may not set these: they describe the bytes on the wire, which the proxy frames.
-_FRAMING = frozenset({"content-length", "transfer-encoding", "connection"})
+# An `r` header may not set these. The framing ones describe the bytes on the wire, which the proxy
+# frames; the others would act on this origin -- the web player's own -- instead of describing a
+# stream: its cookies, its stored data, the page's policy, a redirect.
+_NOT_SETTABLE = frozenset({"content-length", "transfer-encoding", "connection", "set-cookie",
+                           "content-security-policy", "clear-site-data", "refresh"})
+# Every answer is served from the web player's own origin, where the player keeps the viewer's
+# Stremio sign-in, so a page fetched from anywhere must not run there: sandboxed, it gets an origin
+# of its own and no scripts. Browsers apply the policy to documents only; media, subtitle and
+# fetch/XHR loads -- the player's own -- ignore it (final review of 1.6.7).
+SANDBOX = "sandbox"
+# Web origins of the official Stremio web app. A page on any other origin -- or one that hides its
+# origin ("null") -- is judged like an internet client: every origin can read /proxy answers (CORS
+# is open, as in stock), so without this any website a home viewer opens could read the LAN through
+# the viewer's own server (owner's decision, 2026-09-12). The bundled player's own requests are
+# same-origin and native apps send no Origin, so both keep the home rule.
+STREMIO_WEB_ORIGINS = frozenset({"https://web.stremio.com", "https://app.strem.io"})
 # http.client keeps an obs-fold -- a header value continued on the next line -- as CR LF plus the
 # continuation's leading whitespace. The ASGI servers refuse a value with a line break in it and
 # drop the response, so it becomes one space first, as RFC 9112 5.2 says.
@@ -133,9 +149,25 @@ class RefuseOwnRequests:
         await self.app(scope, receive, send)
 
 
+def _foreign_page(request: Request) -> bool:
+    """Whether a web page on another origin than this server or the Stremio web app sent this."""
+    origin = request.headers.get("origin")
+    if origin is None or origin in STREMIO_WEB_ORIGINS:
+        return False
+    try:
+        u = urllib.parse.urlsplit(origin)
+    except ValueError:
+        return True
+    host = request.headers.get("host", "")
+    return not (host and u.scheme in ("http", "https") and u.netloc.lower() == host.lower())
+
+
 def _home_client(request: Request) -> bool:
-    """Whether this client is on the home network: the same rule, and the same operator setting
-    (STREMIOSRV_LIBRARY_ADDON_ALLOW), that the library addon applies."""
+    """Whether this request gets the home rule: a client on the home network -- the same rule, and
+    the same operator setting (STREMIOSRV_LIBRARY_ADDON_ALLOW), that the library addon applies --
+    and not a web page on another site."""
+    if _foreign_page(request):
+        return False
     peer = request.client.host if request.client else ""
     ip = netguard.client_ip(peer, request.headers.get("x-forwarded-for", ""))
     allow = netguard.parse_allow(request.app.state.settings.library_addon_allow)
@@ -167,8 +199,9 @@ def _response_headers(resp: http.client.HTTPResponse, o: opts.ProxyOpts) -> dict
         if value is not None:
             out[name] = value
     for name, value in o.res_headers:
-        if name.lower() not in _FRAMING:
+        if name.lower() not in _NOT_SETTABLE:
             out[name.lower()] = value
+    out["content-security-policy"] = SANDBOX
     return out
 
 
@@ -214,6 +247,20 @@ def _playlist(resp: http.client.HTTPResponse, headers: dict[str, str],
     return Response(content=rewritten, status_code=resp.status, headers=headers)
 
 
+def _relay(resp: http.client.HTTPResponse, conn: http.client.HTTPConnection,
+           slot: _Slot) -> Iterator[bytes]:
+    """The upstream body, passed on as it arrives: read1 returns whatever is there, so a slow
+    upstream reaches the player at once and the thread is back soon after the viewer leaves --
+    read(n) would wait for all n bytes (final review of 1.6.7)."""
+    try:
+        while chunk := resp.read1(CHUNK):
+            yield chunk
+    except (OSError, http.client.HTTPException):
+        return  # the upstream died mid-body: end the stream; the player re-requests
+    finally:
+        _abandon(resp, conn, slot)
+
+
 @router.api_route("/proxy/{rest:path}", methods=["GET", "HEAD"])
 def proxy(rest: str, request: Request) -> Response:
     """`rest` is the decoded path and unusable here; the options come from the raw path."""
@@ -256,16 +303,6 @@ def _proxied(request: Request, o: opts.ProxyOpts, path: str, home: bool,
             return _playlist(resp, headers, o)
         finally:
             _abandon(resp, conn, slot)
-
-    def relay() -> Iterator[bytes]:
-        try:
-            while chunk := resp.read(CHUNK):
-                yield chunk
-        except (OSError, http.client.HTTPException):
-            return  # the upstream died mid-body: end the stream; the player re-requests
-        finally:
-            _abandon(resp, conn, slot)
-
-    body = relay()
+    body = _relay(resp, conn, slot)
     weakref.finalize(body, _abandon, resp, conn, slot)  # a body Starlette never starts
     return StreamingResponse(body, status_code=resp.status, headers=headers)

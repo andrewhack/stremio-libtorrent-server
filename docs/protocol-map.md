@@ -81,8 +81,12 @@ Query params observed on hlsv2 requests (from live logs): `mediaURL`, `videoCode
 > `behaviorHints.proxyHeaders`; stremio-core builds it for external players. Redirects are
 > followed as stock does (Location against the origin, `h` re-applied, the fifth is an error) and
 > `.m3u`/`.m3u8` playlists are rewritten to come back through the proxy. Our additions, because
-> this server may face the internet: a client on the home network (`STREMIOSRV_LIBRARY_ADDON_ALLOW`,
-> by default the private ranges) may proxy anywhere, any other client only to public addresses; a
+> this server may face the internet and serves the web player on the same origin: a client on the
+> home network (`STREMIOSRV_LIBRARY_ADDON_ALLOW`, by default the private ranges) may proxy anywhere
+> but to link-local addresses, any other client -- or a web page on an origin other than this
+> server's or the Stremio web app's -- only to public addresses; every answer carries
+> `Content-Security-Policy: sandbox`, and `r` may not set cookies, that policy, Clear-Site-Data or
+> Refresh; a
 > request carrying this server's own proxy marker is refused on every route, so the proxy cannot
 > reach this server itself; at most 16 proxied requests run at once, of which internet clients may
 > hold 12 (503 beyond, counted in `/stats.json` `proxyRefused`); and a playlist is read,

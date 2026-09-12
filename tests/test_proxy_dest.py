@@ -21,9 +21,19 @@ def test_internet_clients_may_not_reach_private_loopback_or_special_addresses(ad
     assert not dest.allowed(address, home_client=False)
 
 
-@pytest.mark.parametrize("address", ["127.0.0.1", "192.168.5.1", "8.8.8.8"])
-def test_home_clients_may_reach_anything(address):
+@pytest.mark.parametrize("address", ["127.0.0.1", "192.168.5.1", "10.1.2.3", "8.8.8.8"])
+def test_home_clients_may_reach_anything_but_link_local(address):
     assert dest.allowed(address, home_client=True)
+
+
+@pytest.mark.parametrize("address", [
+    "169.254.169.254", "169.254.1.1", "fe80::1", "fe80::1%2", "::ffff:169.254.169.254",
+])
+@pytest.mark.parametrize("home_client", [True, False])
+def test_nobody_reaches_link_local(address, home_client):
+    """Cloud metadata answers there, no addon stream does, and a client can look local when it is
+    not (owner's decision, 2026-09-12)."""
+    assert not dest.allowed(address, home_client=home_client)
 
 
 def _resolver(monkeypatch, addresses):
@@ -46,3 +56,8 @@ def test_pick_refuses_when_every_answer_is_private(monkeypatch):
 def test_pick_takes_the_first_answer_for_a_home_client(monkeypatch):
     _resolver(monkeypatch, ["10.0.0.5", "93.184.216.34"])
     assert dest.pick("nas.lan", 80, home_client=True) == "10.0.0.5"
+
+
+def test_pick_skips_link_local_even_for_a_home_client(monkeypatch):
+    _resolver(monkeypatch, ["169.254.169.254", "10.0.0.5"])
+    assert dest.pick("metadata.example", 80, home_client=True) == "10.0.0.5"

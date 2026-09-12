@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import gc
 import gzip
+import http.client
 import threading
+import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -104,6 +106,17 @@ class _Upstream(BaseHTTPRequestHandler):
             self._send(200, BLOB, "video/mp4\r\n ; x=1")
         elif p.startswith("/echo"):
             self._send(200, b"ok", "text/plain")
+        elif p.startswith("/page.html"):
+            self._send(200, b"<script>document.title='x'</script>", "text/html")
+        elif p.startswith("/trickle"):
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", "16")
+            self.end_headers()
+            self.wfile.write(b"a" * 8)
+            self.wfile.flush()
+            time.sleep(1.5)
+            self.wfile.write(b"b" * 8)
         else:
             self._send(404, b"nope", "text/plain")
 
@@ -186,6 +199,47 @@ def test_a_folded_upstream_header_is_unfolded(upstream):
 ])
 def test_only_values_without_line_breaks_are_relayed(raw, sent):
     assert proxy_api._relayable(raw) == sent
+
+
+def test_every_answer_is_sandboxed(upstream):
+    """Served from the web player's own origin, a relayed page must not run there -- it could read
+    the viewer's Stremio sign-in (final review of 1.6.7). Media and fetch loads ignore the policy."""
+    page = _client().get(f"/proxy/{_opts(upstream)}/page.html")
+    assert page.status_code == 200
+    assert page.headers["content-security-policy"] == "sandbox"
+    head = _client().head(f"/proxy/{_opts(upstream, TOKEN)}/blob")
+    assert head.headers["content-security-policy"] == "sandbox"
+    listing = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/list.m3u8")
+    assert listing.headers["content-security-policy"] == "sandbox"
+
+
+def test_r_cannot_act_on_this_origin(upstream):
+    """Cookies, stored data, the page's policy and redirects belong to the web player's origin."""
+    forced = ("r=Set-Cookie%3Asid%3Dx", "r=Content-Security-Policy%3Ascript-src%20*",
+              "r=Clear-Site-Data%3A%22storage%22", "r=Refresh%3A0%3Burl%3Dhttps%3A%2F%2Fx.example")
+    r = _client().get(f"/proxy/{_opts(upstream, TOKEN, *forced)}/blob")
+    assert r.status_code == 200
+    assert "set-cookie" not in r.headers
+    assert "clear-site-data" not in r.headers
+    assert "refresh" not in r.headers
+    assert r.headers["content-security-policy"] == "sandbox"
+
+
+def test_the_body_is_relayed_as_it_arrives(upstream):
+    """read(n) would wait for all n bytes: a slow upstream must reach the player at once, and the
+    thread come back soon after the viewer leaves (final review of 1.6.7)."""
+    conn = http.client.HTTPConnection("127.0.0.1", upstream.server_address[1], timeout=10)
+    conn.request("GET", "/trickle")
+    resp = conn.getresponse()
+    body = proxy_api._relay(resp, conn, proxy_api._Slot(()))
+    started = time.monotonic()
+    first = next(body)
+    waited = time.monotonic() - started
+    rest = b"".join(body)
+    assert waited < 1.0
+    assert first
+    assert set(first) == {ord("a")}
+    assert first + rest == b"a" * 8 + b"b" * 8
 
 
 def test_head_is_relayed_without_a_body(upstream):
@@ -285,6 +339,23 @@ def test_the_home_network_is_the_operators_allowlist(upstream):
     assert upstream.seen == []
     widened = _client(OUTSIDE, Settings(library_addon_allow="203.0.113.0/24")).get(url)
     assert widened.status_code == 200
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example", "null", "http://[::1"])
+def test_a_page_on_another_site_is_judged_like_an_internet_client(upstream, origin):
+    """Every origin can read /proxy answers (CORS is open, as in stock), so a web page a home viewer
+    opens must not read the LAN through them (owner's decision, 2026-09-12)."""
+    r = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/blob", headers={"Origin": origin})
+    assert r.status_code == 403
+    assert upstream.seen == []
+
+
+@pytest.mark.parametrize("origin", [
+    "https://web.stremio.com", "https://app.strem.io", "http://testserver",
+])
+def test_the_stremio_web_app_and_this_server_keep_the_home_rule(upstream, origin):
+    r = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/blob", headers={"Origin": origin})
+    assert r.status_code == 200
 
 
 def test_every_redirect_hop_is_checked(upstream, monkeypatch):
