@@ -34,6 +34,16 @@ WEBADMIN_VERSION_FILE = Path(os.getenv("WEBADMIN_VERSION_FILE", "/app/WEBADMIN_V
 WEBADMIN_UPDATE_COMMAND = (
     "git pull origin main && docker compose up -d --build --no-deps webadmin"
 )
+STALE_UPDATE_NOTICE = (
+    "Downloads the official source from <code>andrewhack/stremio-libtorrent-server</code>, "
+    "validates the Web Admin overlay and activates it only after a successful build. Settings, "
+    "pins, cache, certificates and logs are preserved."
+)
+SAFE_UPDATE_NOTICE = (
+    "Server updates are released only from "
+    "<code>emmanique/stremio-libtorrent-server-webadmin</code>. "
+    "Server and WebAdmin versions are managed independently."
+)
 
 
 def _request_text(url: str, timeout: int = 5) -> str | None:
@@ -183,6 +193,9 @@ SCRIPT_TAG = '<script src="/component-versions.js"></script>'
 
 def lifecycle_home():
     text = (legacy.STATIC / "index.html").read_text(encoding="utf-8")
+    # Never render the obsolete upstream-as-update-source message, even if
+    # JavaScript is disabled or fails before the lifecycle panel is enhanced.
+    text = text.replace(STALE_UPDATE_NOTICE, SAFE_UPDATE_NOTICE)
     if SCRIPT_TAG not in text:
         text = text.replace("</body>", f"  {SCRIPT_TAG}\n</body>")
     return HTMLResponse(text)
