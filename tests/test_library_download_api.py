@@ -62,6 +62,9 @@ class FakeEngine:
     def tracked_status(self):
         return []
 
+    def live_files(self):
+        return {}
+
 
 def _signed_in(tmp_path, monkeypatch, engine):
     monkeypatch.setattr(lib.certcheck, "cert_san", lambda p: "DNS:stremio.example.com")

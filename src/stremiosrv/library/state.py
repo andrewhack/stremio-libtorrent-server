@@ -90,7 +90,9 @@ def _disk_files(cache_root: str, name: str, live: list[dict] | None = None) -> l
                 "size": st.st_size,
                 "downloaded": got,
                 "progress": round(got / st.st_size, 4) if st.st_size else 0.0,
-                # Nothing is fetching them: no handle exists to want anything.
+                # Never wanted here: a handle can exist -- playback fills an untracked title --
+                # but its `wanted` is only the file being played, which the page would read as a
+                # download. Only the byte count above is taken from it.
                 "wanted": False,
             })
     return out
@@ -147,8 +149,10 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         pin = pins.get(ih, {})
         if ih:
             seen.add(ih)
-        # The engine's own list when it has one; the disk when it does not. Not both: a handle
-        # knows what is wanted as well as what is present, so it is always the better answer.
+        # A tracked torrent (kept or downloading) lists its files from the engine: what is wanted
+        # as well as what is present. Anything else lists the disk -- even with a live handle,
+        # whose `wanted` is only playback's focus -- and takes byte counts from that handle where
+        # it reports the file (see _disk_files). Not both.
         engine_files = pin.get("files") or []
         disk_files = [] if engine_files else _disk_files(cache_root, name, live.get(ih))
         entries.append({

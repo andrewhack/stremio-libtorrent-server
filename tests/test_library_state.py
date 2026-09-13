@@ -306,6 +306,9 @@ def test_a_pack_holding_several_episodes_lists_them(tmp_path):
                 ],
             }]
 
+        def live_files(self):
+            return {}
+
     d = tmp_path / "Some.Pack"
     d.mkdir()
     (d / "payload").write_bytes(b"x" * 32)
@@ -332,6 +335,9 @@ def test_a_single_file_torrent_is_not_split(tmp_path):
                      "name": "One.Film",
                      "files": [{"index": 0, "name": "One.Film.mkv", "size": 5, "downloaded": 5,
                                 "progress": 1.0, "wanted": True}]}]
+
+        def live_files(self):
+            return {}
 
     d = tmp_path / "One.Film"
     d.mkdir()
@@ -368,6 +374,9 @@ def test_boundary_spill_is_summarised_not_listed_as_episodes(tmp_path):
                          f(7, "Show.S01E08.mkv", 192_000),         # boundary spill
                      ]}]
 
+        def live_files(self):
+            return {}
+
     d = tmp_path / "Pack"
     d.mkdir()
     (d / "payload").write_bytes(b"x" * 8)
@@ -397,6 +406,9 @@ def test_a_download_just_started_is_never_called_a_scrap(tmp_path):
                           "downloaded": 900_000, "progress": 0.0002, "wanted": True},
                      ]}]
 
+        def live_files(self):
+            return {}
+
     d = tmp_path / "Pack"
     d.mkdir()
     (d / "payload").write_bytes(b"x" * 8)
@@ -420,6 +432,9 @@ def test_the_budget_reports_what_downloads_have_already_claimed(tmp_path):
                      "state": "downloading", "name": "One", "remaining": 2_500_000_000},
                     {"infoHash": "b" * 40, "pinned": True, "progress": 1.0,
                      "state": "seeding", "name": "Two", "remaining": 0}]
+
+        def live_files(self):
+            return {}
 
     out = st.build(str(tmp_path), Eng(), budget=1)
     assert out["budget"]["committed"] == 2_500_000_000
@@ -480,32 +495,52 @@ def test_a_file_the_session_does_not_report_is_still_measured_on_disk(tmp_path, 
     assert f["downloaded"] == 777
 
 
+def test_a_session_file_of_the_same_size_but_another_name_lends_no_count(tmp_path, monkeypatch):
+    """The match is on name AND size: two episodes of one pack can be the same size to the byte,
+    and one must not borrow the other's count."""
+    name = _film_dir(tmp_path)
+    ih = "f" * 40
+    monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: 777)
+    eng = FakeEngine(names={name: ih}, live={ih: [
+        {"index": 1, "name": "Other.Episode.mkv", "size": 4096, "downloaded": 1024,
+         "progress": 0.25, "wanted": True}]})
+    [f] = state.build(str(tmp_path), eng)["entries"][0]["files"]
+    assert f["downloaded"] == 777
+
+
 def test_a_failing_live_files_falls_back_to_the_disk(tmp_path, monkeypatch):
-    """The engine may be briefly broken; a listing measured on the disk is still worth serving."""
+    """The engine may be briefly broken; a listing measured on the disk is still worth serving,
+    and what the engine did answer -- the title's infohash and its keep flag -- still shows."""
     class Broken(FakeEngine):
         def live_files(self):
             raise RuntimeError("libtorrent went away")
 
     name = _film_dir(tmp_path)
+    ih = "f" * 40
     monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: 777)
-    [f] = state.build(str(tmp_path), Broken(names={name: "f" * 40}))["entries"][0]["files"]
+    eng = Broken(names={name: ih}, pinned=[{"infoHash": ih, "pinned": True, "progress": 0.5,
+                                            "state": "downloading", "name": name}])
+    e = state.build(str(tmp_path), eng)["entries"][0]
+    assert e["infoHash"] == ih and e["pinned"] is True
+    [f] = e["files"]
     assert f["downloaded"] == 777
 
 
-def test_live_files_covers_every_handle_with_metadata_and_skips_a_broken_one():
-    """Tracked or not: a title playback is filling is in the session too, and it is the one being
-    written. A handle without metadata has no files to report, and one handle failing must not
-    hide the others."""
+def test_live_files_covers_untracked_handles_and_skips_a_broken_one():
+    """A title playback is filling is in the session, untracked, and it is the one being written.
+    Tracked torrents are left out -- build lists their files from tracked_status -- and one handle
+    failing must not hide the others. No has_metadata() call: it costs a full status(), and
+    file_stats() already answers [] for a handle without metadata."""
     import types
 
     from stremiosrv.torrent.engine import Engine
 
     class H:
-        def __init__(self, meta, files=None, broken=False):
-            self._meta, self._files, self._broken = meta, files or [], broken
+        def __init__(self, files=None, broken=False):
+            self._files, self._broken = files or [], broken
 
         def has_metadata(self):
-            return self._meta
+            raise AssertionError("has_metadata costs a full status(); file_stats needs none")
 
         def file_stats(self):
             if self._broken:
@@ -514,7 +549,8 @@ def test_live_files_covers_every_handle_with_metadata_and_skips_a_broken_one():
 
     files = [{"index": 0, "name": "a.mkv", "size": 10, "downloaded": 4, "progress": 0.4,
               "wanted": True}]
-    fake = types.SimpleNamespace(_torrents={"a" * 40: H(True, files),
-                                            "b" * 40: H(False),
-                                            "c" * 40: H(True, broken=True)})
-    assert Engine.live_files(fake) == {"a" * 40: files}
+    fake = types.SimpleNamespace(
+        _torrents={"a" * 40: H(files), "b" * 40: H(), "c" * 40: H(broken=True),
+                   "d" * 40: H(files), "e" * 40: H(files)},
+        _pinned={"d" * 40}, _wanted={"e" * 40})
+    assert Engine.live_files(fake) == {"a" * 40: files, "b" * 40: []}
