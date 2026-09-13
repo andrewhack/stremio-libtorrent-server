@@ -40,8 +40,9 @@ what "done" looks like, so it can be picked up without context.
 
 - [x] **`/proxy` is served (1.6.7).** stremio-video routes a stream through it whenever the addon
   sets `behaviorHints.proxyHeaders`; without the route nginx answered with the web player's page
-  and those streams never played. A client on the home network may proxy anywhere, a client from
-  the internet only to public addresses.
+  and those streams never played.
+  A client on the home network may proxy anywhere but to link-local and cloud-metadata addresses;
+  a client from the internet, or a web page on another site, only to public addresses.
 
 - [ ] **Other stock routes clients reach are still missing.** A client census (stremio-core,
   stremio-video, stremio-web, the desktop shell) found, besides the file selectors above:
