@@ -26,11 +26,14 @@ jobs:
           test -f VERSIONING.md
           test -f compose.yaml
           test -f compose.dns.yaml
+          test -f compose.vaapi.yaml
           test -f Dockerfile
           test -f docker/webadmin_entrypoint.py
+          test -f docker/ffmpeg_wrapper.py
           test -f webadmin/app.py
           test -f webadmin/fork_update.py
           test -f webadmin/version_lifecycle.py
+          test -f webadmin/transcoding_config.py
           test -f webadmin/static/component-versions.js
 
           cmp -s SERVER_VERSION FORK_VERSION || {
@@ -43,14 +46,17 @@ jobs:
           grep -q '172.30.0.53' compose.yaml
           grep -q 'https://github.com/emmanique/stremio-libtorrent-server-webadmin' compose.yaml
           grep -q 'STREMIO_UPDATE_HEALTH_TIMEOUT' compose.yaml
+          grep -q 'TRANSCODING_MODE' compose.yaml
           grep -q 'SERVER_VERSION' Dockerfile
           grep -q 'FORK_VERSION' Dockerfile
-          grep -q 'version_lifecycle:app' webadmin/Dockerfile
+          grep -q 'ffmpeg_wrapper.py' Dockerfile
+          grep -q 'transcoding_config:app' webadmin/Dockerfile
+          grep -q 'version_lifecycle import app' webadmin/transcoding_config.py
           grep -q 'WEBADMIN_VERSION' webadmin/Dockerfile
 
           if grep -R --line-number --fixed-strings \
             'https://github.com/andrewhack/stremio-libtorrent-server' \
-            webadmin compose.yaml Dockerfile docker/webadmin_entrypoint.py; then
+            webadmin compose.yaml Dockerfile docker/webadmin_entrypoint.py docker/ffmpeg_wrapper.py; then
             echo 'Runtime/update paths must not use the upstream repository as their source.'
             exit 1
           fi
@@ -106,8 +112,11 @@ jobs:
       - name: Validate LAN DNS override
         run: docker compose -f compose.yaml -f compose.dns.yaml config --quiet
 
+      - name: Validate VAAPI override
+        run: docker compose -f compose.yaml -f compose.vaapi.yaml config --quiet
+
       - name: Compile WebAdmin integration code
-        run: python -m compileall -q webadmin docker/webadmin_entrypoint.py
+        run: python -m compileall -q webadmin docker/webadmin_entrypoint.py docker/ffmpeg_wrapper.py
 
       - name: Validate WebAdmin lifecycle JavaScript
         run: node --check webadmin/static/component-versions.js

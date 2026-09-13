@@ -3,6 +3,7 @@
 Dockerfile
 compose.yaml
 compose.dns.yaml
+compose.vaapi.yaml
 .env.example
 SERVER_VERSION
 FORK_VERSION
@@ -11,6 +12,7 @@ QUICKSTART.md
 INSTALL-SEPARATED-V2.md
 webadmin
 docker/webadmin_entrypoint.py
+docker/ffmpeg_wrapper.py
 .github/workflows/upstream-sync.yml
 .github/workflows/fork-guard.yml
 .github/upstream-protected-paths.txt
