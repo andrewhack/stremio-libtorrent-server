@@ -1,0 +1,155 @@
+name: Sync upstream for review
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/andrewhack/stremio-libtorrent-server.git
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM_URL" || git remote set-url upstream "$UPSTREAM_URL"
+          git fetch --prune upstream main
+
+      - name: Determine upstream range
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="$(tr -d '[:space:]' < .github/UPSTREAM_BASE)"
+          TARGET="$(git rev-parse upstream/main)"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          if [ "$BASE" = "$TARGET" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Fork already tracks upstream $TARGET"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare protected-path report
+        if: steps.upstream.outputs.changed == 'true'
+        id: protected
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.upstream.outputs.base }}"
+          TARGET="${{ steps.upstream.outputs.target }}"
+          git cat-file -e "$BASE^{commit}" 2>/dev/null || git fetch upstream "$BASE"
+          : > /tmp/protected-changes.txt
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            case "$path" in \#*) continue ;; esac
+            if ! git diff --quiet "$BASE" "$TARGET" -- "$path"; then
+              echo "- \`$path\`" >> /tmp/protected-changes.txt
+            fi
+          done < .github/upstream-protected-paths.txt
+          if [ -s /tmp/protected-changes.txt ]; then
+            echo "Upstream changed protected paths since the previous sync:"
+            cat /tmp/protected-changes.txt
+          else
+            echo "No upstream changes touched protected fork paths."
+          fi
+
+      - name: Merge upstream into review branch
+        if: steps.upstream.outputs.changed == 'true'
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ steps.upstream.outputs.target }}"
+          SHORT="${TARGET:0:12}"
+          BRANCH="upstream-sync/$SHORT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          git checkout -B "$BRANCH" origin/main
+
+          set +e
+          git merge --no-commit --no-ff "$TARGET"
+          MERGE_RC=$?
+          set -e
+
+          # Fork-owned integration paths are never accepted from upstream.
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            case "$path" in \#*) continue ;; esac
+            git rm -r -q --ignore-unmatch -- "$path" 2>/dev/null || true
+            git checkout HEAD -- "$path" 2>/dev/null || true
+          done < .github/upstream-protected-paths.txt
+
+          UNMERGED="$(git diff --name-only --diff-filter=U)"
+          if [ -n "$UNMERGED" ]; then
+            echo "Upstream sync stopped: unresolved conflicts remain outside protected paths:"
+            echo "$UNMERGED"
+            exit 1
+          fi
+
+          if [ "$MERGE_RC" -ne 0 ]; then
+            echo "Protected conflicts were resolved by keeping the fork versions."
+          fi
+
+          echo "$TARGET" > .github/UPSTREAM_BASE
+          git add -A
+          git commit -m "Sync upstream $SHORT for review"
+          git push --force-with-lease origin "$BRANCH"
+
+      - name: Open or update review PR
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.merge.outputs.branch }}"
+          BASE="${{ steps.upstream.outputs.base }}"
+          TARGET="${{ steps.upstream.outputs.target }}"
+          SHORT="${TARGET:0:12}"
+          PROTECTED="$(cat /tmp/protected-changes.txt 2>/dev/null || true)"
+          if [ -z "$PROTECTED" ]; then
+            PROTECTED="- None"
+          fi
+
+          cat > /tmp/pr-body.md <<EOF
+          ## Controlled upstream sync
+
+          This PR imports core changes from \`andrewhack/stremio-libtorrent-server\` for review.
+
+          - Previous upstream baseline: \`$BASE\`
+          - New upstream target: \`$TARGET\`
+          - Fork-owned WebAdmin/Pi-hole integration paths were restored from \`main\` before this PR was created.
+          - This workflow never merges the PR automatically.
+
+          ### Protected paths changed by upstream in this range
+          $PROTECTED
+
+          Review core/API/configuration changes for compatibility with WebAdmin before merging.
+          EOF
+
+          EXISTING="$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --title "Sync upstream $SHORT" --body-file /tmp/pr-body.md
+            echo "Updated PR #$EXISTING"
+          else
+            gh pr create --base main --head "$BRANCH" --title "Sync upstream $SHORT" --body-file /tmp/pr-body.md
+          fi

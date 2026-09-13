@@ -1,0 +1,15 @@
+# Optional override for exposing Pi-hole DNS on the Docker host/LAN.
+# The default compose.yaml does not bind host port 53, so `docker compose up -d`
+# works on hosts where systemd-resolved or another DNS service already owns it.
+#
+# Enable LAN DNS exposure with:
+#   docker compose -f compose.yaml -f compose.dns.yaml up -d
+#
+# If port 53 is already occupied, free it first or bind PIHOLE_DNS_BIND_IP to a
+# dedicated host address.
+
+services:
+  pihole:
+    ports:
+      - "${PIHOLE_DNS_BIND_IP:-0.0.0.0}:${PIHOLE_DNS_PORT:-53}:53/tcp"
+      - "${PIHOLE_DNS_BIND_IP:-0.0.0.0}:${PIHOLE_DNS_PORT:-53}:53/udp"
