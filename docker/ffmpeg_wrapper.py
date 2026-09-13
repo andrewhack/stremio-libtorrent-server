@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Fork-owned FFmpeg policy wrapper.
+"""Fork-owned FFmpeg execution-profile wrapper.
 
-The Stremio core keeps invoking ``ffmpeg`` normally. This wrapper sits earlier
-in PATH, reads the WebAdmin configuration, and only changes explicit stream
-copy decisions when policy requires transcoding. Existing upstream transcode
-commands are left untouched.
+The Stremio core still decides whether a stream needs transcoding. This wrapper
+only replaces the *video encoder* when the operator selected one explicit
+execution profile. Copy remains copy; no hidden codec choice and no silent
+software fallback are introduced by the wrapper.
 """
 from __future__ import annotations
 
@@ -14,123 +14,49 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
-
-DEFAULTS: dict[str, Any] = {
-    "transcoding_mode": "auto",
-    "transcoding_hwaccel": "vaapi",
-    "transcoding_vaapi_device": "/dev/dri/renderD128",
-    "transcoding_video_codec": "h264_vaapi",
-    "transcoding_video_quality": 22,
-    "transcoding_audio_codec": "aac",
-    "transcoding_audio_bitrate": "192k",
-    "transcoding_copy_video": True,
-    "transcoding_copy_audio": True,
-    "transcoding_direct_video_codecs": "h264",
-    "transcoding_direct_audio_codecs": "aac,mp3,ac3",
-    "transcoding_fallback_codec": "libx264",
-    "transcoding_hw_decode": True,
-}
-
-ENV_MAP = {
-    "transcoding_mode": "TRANSCODING_MODE",
-    "transcoding_hwaccel": "TRANSCODING_HWACCEL",
-    "transcoding_vaapi_device": "VAAPI_DEVICE",
-    "transcoding_video_codec": "TRANSCODING_VIDEO_CODEC",
-    "transcoding_video_quality": "TRANSCODING_VIDEO_QUALITY",
-    "transcoding_audio_codec": "TRANSCODING_AUDIO_CODEC",
-    "transcoding_audio_bitrate": "TRANSCODING_AUDIO_BITRATE",
-    "transcoding_copy_video": "TRANSCODING_COPY_VIDEO",
-    "transcoding_copy_audio": "TRANSCODING_COPY_AUDIO",
-    "transcoding_direct_video_codecs": "TRANSCODING_DIRECT_VIDEO_CODECS",
-    "transcoding_direct_audio_codecs": "TRANSCODING_DIRECT_AUDIO_CODECS",
-    "transcoding_fallback_codec": "TRANSCODING_FALLBACK_CODEC",
-    "transcoding_hw_decode": "TRANSCODING_HW_DECODE",
-}
 
 REAL_FFMPEG = os.getenv("FFMPEG_REAL", "/usr/local/libexec/stremio/ffmpeg-real")
-REAL_FFPROBE = os.getenv("FFPROBE_REAL", "/usr/local/libexec/stremio/ffprobe-real")
 CONFIG_FILE = os.getenv("STREMIOSRV_EXTERNAL_CONFIG", "/config/admin-settings.json")
+VAAPI_DEVICE_DEFAULT = "/dev/dri/renderD128"
+
+PROFILES = {
+    "preserve": {"encoder": None, "engine": "core", "label": "Preserve Stremio decision"},
+    "vaapi-h264": {"encoder": "h264_vaapi", "engine": "vaapi", "label": "H.264 VAAPI"},
+    "vaapi-hevc": {"encoder": "hevc_vaapi", "engine": "vaapi", "label": "HEVC VAAPI"},
+    "nvenc-h264": {"encoder": "h264_nvenc", "engine": "nvenc", "label": "H.264 NVENC"},
+    "nvenc-hevc": {"encoder": "hevc_nvenc", "engine": "nvenc", "label": "HEVC NVENC"},
+    "cpu-h264": {"encoder": "libx264", "engine": "cpu", "label": "H.264 CPU"},
+    "cpu-hevc": {"encoder": "libx265", "engine": "cpu", "label": "HEVC CPU"},
+}
 
 
-def _bool(value: object, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
-
-
-def _normalise_setting(name: str, value: object) -> object:
-    if name in {"transcoding_copy_video", "transcoding_copy_audio", "transcoding_hw_decode"}:
-        return _bool(value, bool(DEFAULTS[name]))
-    if name == "transcoding_video_quality":
-        try:
-            return max(0, min(51, int(value)))
-        except (TypeError, ValueError):
-            return DEFAULTS[name]
-    return str(value).strip() if value is not None else DEFAULTS[name]
-
-
-def load_settings() -> dict[str, object]:
-    """Load built-ins, then Compose/.env, then persisted WebAdmin settings.
-
-    Persisted WebAdmin values intentionally win over environment defaults so a
-    setting changed in the UI remains effective after a container restart.
-    """
-    settings = dict(DEFAULTS)
-    for name, env_name in ENV_MAP.items():
-        if env_name in os.environ:
-            settings[name] = _normalise_setting(name, os.environ[env_name])
-
+def _read_config() -> dict[str, object]:
     try:
-        raw = json.loads(Path(CONFIG_FILE).read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            for name in DEFAULTS:
-                if name in raw:
-                    settings[name] = _normalise_setting(name, raw[name])
+        data = json.loads(Path(CONFIG_FILE).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError, TypeError):
-        pass
-    return settings
+        return {}
 
 
-def _csv(value: object) -> set[str]:
-    return {x.strip().lower() for x in str(value or "").split(",") if x.strip()}
+def _profile(config: dict[str, object]) -> str | None:
+    value = str(config.get("transcoding_profile") or "").strip().lower()
+    return value if value in PROFILES else None
 
 
-def _input_from_args(args: list[str]) -> str | None:
-    for index, arg in enumerate(args[:-1]):
-        if arg == "-i":
-            return args[index + 1]
-    return None
+def _vaapi_device(config: dict[str, object]) -> str:
+    return str(config.get("transcoding_vaapi_device") or os.getenv("VAAPI_DEVICE") or VAAPI_DEVICE_DEFAULT)
 
 
-def probe_media(media_url: str) -> dict[str, str | None] | None:
-    cmd = [
-        REAL_FFPROBE,
-        "-v", "error",
-        "-show_entries", "stream=codec_type,codec_name",
-        "-of", "json",
-        media_url,
-    ]
+def _quality(config: dict[str, object]) -> int:
     try:
-        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=8, check=True)
-        payload = json.loads(completed.stdout or "{}")
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
-
-    result: dict[str, str | None] = {"video": None, "audio": None}
-    for stream in payload.get("streams", []):
-        kind = str(stream.get("codec_type", "")).lower()
-        codec = str(stream.get("codec_name", "")).lower() or None
-        if kind in result and result[kind] is None:
-            result[kind] = codec
-    return result
+        return max(0, min(51, int(config.get("transcoding_video_quality", 22))))
+    except (TypeError, ValueError):
+        return 22
 
 
-def available_encoders() -> set[str]:
+def _available_encoders() -> set[str]:
     try:
-        completed = subprocess.run(
+        result = subprocess.run(
             [REAL_FFMPEG, "-hide_banner", "-encoders"],
             capture_output=True,
             text=True,
@@ -139,145 +65,152 @@ def available_encoders() -> set[str]:
         )
     except (OSError, subprocess.SubprocessError):
         return set()
-    return set(re.findall(r"^\s*[VAS\.]{6}\s+([\w-]+)", completed.stdout, re.MULTILINE))
+    return set(re.findall(r"^\s*[VAS][^\s]{5}\s+([^\s]+)", result.stdout, re.MULTILINE))
 
 
-def _has_copy(args: list[str], media_type: str) -> bool:
-    flags = {"video": {"-c:v", "-codec:v"}, "audio": {"-c:a", "-codec:a"}}[media_type]
-    return any(arg in flags and i + 1 < len(args) and args[i + 1] == "copy" for i, arg in enumerate(args))
+def _video_codec(args: list[str]) -> tuple[int | None, str | None]:
+    for index, token in enumerate(args[:-1]):
+        if token in {"-c:v", "-codec:v"}:
+            return index, args[index + 1]
+    return None, None
 
 
-def _replace_copy_codec(args: list[str], media_type: str, codec: str, extras: list[str]) -> list[str]:
-    flags = {"video": {"-c:v", "-codec:v"}, "audio": {"-c:a", "-codec:a"}}[media_type]
+def _remove_option(args: list[str], names: set[str]) -> list[str]:
     out: list[str] = []
-    i = 0
-    while i < len(args):
-        if args[i] in flags and i + 1 < len(args) and args[i + 1] == "copy":
-            out.extend([args[i], codec, *extras])
-            i += 2
-        else:
-            out.append(args[i])
-            i += 1
+    index = 0
+    while index < len(args):
+        if args[index] in names and index + 1 < len(args):
+            index += 2
+            continue
+        out.append(args[index])
+        index += 1
     return out
 
 
-def _insert_before_first_input(args: list[str], extra: list[str]) -> list[str]:
-    if not extra or "-hwaccel" in args:
+def _replace_option(args: list[str], names: set[str], value: str) -> list[str]:
+    out = list(args)
+    for index, token in enumerate(out[:-1]):
+        if token in names:
+            out[index + 1] = value
+            return out
+    return out
+
+
+def _insert_before_input(args: list[str], extra: list[str]) -> list[str]:
+    if not extra:
         return args
     try:
-        idx = args.index("-i")
+        index = args.index("-i")
     except ValueError:
         return args
-    return [*args[:idx], *extra, *args[idx:]]
+    return [*args[:index], *extra, *args[index:]]
 
 
-def _encoder_for_mode(settings: dict[str, object], encoders: set[str], device_exists=os.path.exists) -> tuple[str, str]:
-    """Return (encoder, hw kind). hw kind is vaapi, nvenc, or cpu."""
-    mode = str(settings["transcoding_mode"]).lower()
-    hw = str(settings["transcoding_hwaccel"]).lower()
-    preferred = str(settings["transcoding_video_codec"]).lower()
-    fallback = str(settings["transcoding_fallback_codec"]).lower() or "libx264"
-    vaapi_device = str(settings["transcoding_vaapi_device"])
+def _extract_scale(filter_value: str | None) -> str | None:
+    if not filter_value:
+        return None
+    match = re.search(r"(?:scale|scale_vaapi)(?:=w=|=)(\d+)", filter_value)
+    return match.group(1) if match else None
 
-    if hw == "auto":
-        if device_exists(vaapi_device):
-            hw = "vaapi"
-        elif any(x in encoders for x in ("h264_nvenc", "hevc_nvenc")):
-            hw = "nvenc"
-        else:
-            hw = "cpu"
 
-    if mode == "software" or hw == "cpu":
-        target = "libx265" if mode == "hevc" else fallback
-        return (target if not encoders or target in encoders else "libx264", "cpu")
+def _existing_filter(args: list[str]) -> str | None:
+    for index, token in enumerate(args[:-1]):
+        if token in {"-vf", "-filter:v"}:
+            return args[index + 1]
+    return None
 
-    if mode == "hevc":
-        target = "hevc_vaapi" if hw == "vaapi" else "hevc_nvenc" if hw == "nvenc" else "libx265"
-    elif mode == "h264":
-        target = "h264_vaapi" if hw == "vaapi" else "h264_nvenc" if hw == "nvenc" else fallback
+
+def _normalise_filter_for_software_frames(args: list[str]) -> tuple[list[str], str | None]:
+    """Remove old hardware filters and preserve only an explicit scale width.
+
+    Profiles intentionally assume nothing about decoder support. VAAPI/NVENC
+    profiles therefore use normal software-decoded frames and hardware encode.
+    """
+    old_filter = _existing_filter(args)
+    width = _extract_scale(old_filter)
+    result = _remove_option(args, {"-vf", "-filter:v"})
+    base = f"scale={width}:-2:flags=lanczos" if width else None
+    return result, base
+
+
+def _strip_encoder_tuning(args: list[str]) -> list[str]:
+    return _remove_option(
+        args,
+        {
+            "-preset", "-tune", "-crf", "-cq", "-qp", "-global_quality",
+            "-rc", "-profile:v", "-level:v",
+        },
+    )
+
+
+def _strip_hw_decode(args: list[str]) -> list[str]:
+    return _remove_option(
+        args,
+        {"-hwaccel", "-hwaccel_device", "-hwaccel_output_format", "-vaapi_device"},
+    )
+
+
+def _apply_profile(args: list[str], profile_name: str, config: dict[str, object]) -> tuple[list[str], str]:
+    profile = PROFILES[profile_name]
+    target = profile["encoder"]
+    if target is None:
+        return args, "profile=preserve; core decision unchanged"
+
+    codec_index, current = _video_codec(args)
+    if codec_index is None or current is None:
+        return args, f"profile={profile_name}; no video codec option found"
+
+    # Stremio's Direct Stream decision remains authoritative. Profiles only
+    # replace an actual transcode encoder, preventing unnecessary re-encoding.
+    if current == "copy":
+        return args, f"profile={profile_name}; video=copy preserved"
+
+    encoders = _available_encoders()
+    if target not in encoders:
+        return args, f"profile={profile_name}; unavailable encoder {target}; core encoder {current} preserved"
+
+    device = _vaapi_device(config)
+    if profile["engine"] == "vaapi" and not os.path.exists(device):
+        return args, f"profile={profile_name}; VAAPI device {device} unavailable; core encoder {current} preserved"
+
+    quality = _quality(config)
+    result = _strip_encoder_tuning(_strip_hw_decode(args))
+    result, software_filter = _normalise_filter_for_software_frames(result)
+    result = _replace_option(result, {"-c:v", "-codec:v"}, str(target))
+
+    if profile["engine"] == "vaapi":
+        # Decode stays software by design. This avoids pretending every source
+        # codec has a working VAAPI decoder while still moving the expensive
+        # encode stage to the GPU.
+        result = _insert_before_input(result, ["-vaapi_device", device])
+        vf = f"{software_filter},format=nv12,hwupload" if software_filter else "format=nv12,hwupload"
+        result = _insert_before_output_codec_options(result, ["-vf", vf, "-qp", str(quality)])
+    elif profile["engine"] == "nvenc":
+        if software_filter:
+            result = _insert_before_output_codec_options(result, ["-vf", software_filter])
+        result = _insert_before_output_codec_options(result, ["-preset", "p4", "-cq", str(quality)])
     else:
-        target = preferred
-        if hw == "nvenc" and preferred.endswith("_vaapi"):
-            target = "h264_nvenc" if preferred.startswith("h264") else "hevc_nvenc"
-        elif hw == "vaapi" and preferred.endswith("_nvenc"):
-            target = "h264_vaapi" if preferred.startswith("h264") else "hevc_vaapi"
+        if software_filter:
+            result = _insert_before_output_codec_options(result, ["-vf", software_filter])
+        result = _insert_before_output_codec_options(result, ["-preset", "veryfast", "-crf", str(quality)])
 
-    if target.endswith("_vaapi") and not device_exists(vaapi_device):
-        return (fallback if not encoders or fallback in encoders else "libx264", "cpu")
-    if encoders and target not in encoders:
-        return (fallback if fallback in encoders else "libx264", "cpu")
-    return target, "vaapi" if target.endswith("_vaapi") else "nvenc" if target.endswith("_nvenc") else "cpu"
+    return result, f"profile={profile_name}; video={current}->{target}; decode=software"
 
 
-def _video_extras(encoder: str, quality: int) -> list[str]:
-    if encoder.endswith("_vaapi"):
-        # Normalise 10-bit/other VAAPI surfaces to NV12 for broad H.264 compatibility.
-        return ["-vf", "scale_vaapi=format=nv12", "-qp", str(quality)]
-    if encoder.endswith("_nvenc"):
-        return ["-preset", "p4", "-cq", str(quality)]
-    if encoder in {"libx264", "libx265"}:
-        return ["-preset", "veryfast", "-crf", str(quality)]
-    return []
+def _insert_before_output_codec_options(args: list[str], extra: list[str]) -> list[str]:
+    """Insert tuning/filter options immediately before -c:v."""
+    for index, token in enumerate(args):
+        if token in {"-c:v", "-codec:v"}:
+            return [*args[:index], *extra, *args[index:]]
+    return args
 
 
-def transform_args(
-    args: list[str],
-    settings: dict[str, object],
-    media: dict[str, str | None] | None,
-    encoders: set[str] | None = None,
-    device_exists=os.path.exists,
-) -> tuple[list[str], str]:
-    """Apply policy to copy decisions and return (args, human-readable decision)."""
-    mode = str(settings.get("transcoding_mode", "auto")).lower()
-    if mode in {"off", "copy", "passthrough", "disabled"}:
-        return args, "passthrough"
-    if mode not in {"auto", "h264", "hevc", "software"}:
-        return args, f"unknown-mode:{mode}; passthrough"
-    if media is None:
-        return args, "probe-failed; passthrough"
-
-    result = list(args)
-    decisions: list[str] = []
-    encoders = encoders if encoders is not None else available_encoders()
-    direct_video = _csv(settings.get("transcoding_direct_video_codecs"))
-    direct_audio = _csv(settings.get("transcoding_direct_audio_codecs"))
-    video_codec = (media.get("video") or "").lower()
-    audio_codec = (media.get("audio") or "").lower()
-
-    force_video = mode in {"h264", "hevc", "software"}
-    video_copy_allowed = _bool(settings.get("transcoding_copy_video"), True)
-    if _has_copy(result, "video") and video_codec:
-        if not force_video and video_copy_allowed and video_codec in direct_video:
-            decisions.append(f"video={video_codec}->copy")
-        else:
-            encoder, hw = _encoder_for_mode(settings, encoders, device_exists=device_exists)
-            quality = int(settings.get("transcoding_video_quality", 22))
-            result = _replace_copy_codec(result, "video", encoder, _video_extras(encoder, quality))
-            if _bool(settings.get("transcoding_hw_decode"), True):
-                if hw == "vaapi":
-                    result = _insert_before_first_input(
-                        result,
-                        ["-hwaccel", "vaapi", "-hwaccel_device", str(settings["transcoding_vaapi_device"]),
-                         "-hwaccel_output_format", "vaapi"],
-                    )
-                elif hw == "nvenc":
-                    result = _insert_before_first_input(result, ["-hwaccel", "cuda"])
-            decisions.append(f"video={video_codec}->{encoder}")
-
-    audio_copy_allowed = _bool(settings.get("transcoding_copy_audio"), True)
-    if _has_copy(result, "audio") and audio_codec:
-        if audio_copy_allowed and audio_codec in direct_audio:
-            decisions.append(f"audio={audio_codec}->copy")
-        else:
-            audio_encoder = str(settings.get("transcoding_audio_codec", "aac")) or "aac"
-            bitrate = str(settings.get("transcoding_audio_bitrate", "192k")) or "192k"
-            extras = ["-b:a", bitrate]
-            if audio_encoder == "aac":
-                extras += ["-ac", "2"]
-            result = _replace_copy_codec(result, "audio", audio_encoder, extras)
-            decisions.append(f"audio={audio_codec}->{audio_encoder}")
-
-    return result, ", ".join(decisions) if decisions else "upstream-transcode/passthrough"
+def _legacy_passthrough(args: list[str], config: dict[str, object]) -> tuple[list[str], str]:
+    """No new guess for installations that have not selected a profile yet."""
+    legacy_mode = str(config.get("transcoding_mode") or "").strip().lower()
+    if legacy_mode:
+        return args, f"legacy settings detected ({legacy_mode}); select an explicit profile in WebAdmin"
+    return args, "no explicit profile; core decision unchanged"
 
 
 def main() -> int:
@@ -286,18 +219,17 @@ def main() -> int:
         print(f"[ffmpeg-policy] real ffmpeg not found: {REAL_FFMPEG}", file=sys.stderr)
         return 127
 
-    settings = load_settings()
-    media_url = _input_from_args(args)
-    # Introspection commands (ffmpeg -version/-encoders/etc.) have no input and
-    # must remain completely transparent.
-    if not media_url:
+    if "-i" not in args:
         os.execv(REAL_FFMPEG, [REAL_FFMPEG, *args])
 
-    needs_probe = _has_copy(args, "video") or _has_copy(args, "audio")
-    media = probe_media(media_url) if needs_probe else {"video": None, "audio": None}
-    transformed, decision = transform_args(args, settings, media)
-    if needs_probe:
-        print(f"[ffmpeg-policy] mode={settings['transcoding_mode']} {decision}", file=sys.stderr)
+    config = _read_config()
+    selected = _profile(config)
+    if selected is None:
+        transformed, decision = _legacy_passthrough(args, config)
+    else:
+        transformed, decision = _apply_profile(args, selected, config)
+
+    print(f"[ffmpeg-policy] {decision}", file=sys.stderr)
     os.execv(REAL_FFMPEG, [REAL_FFMPEG, *transformed])
     return 0
 
