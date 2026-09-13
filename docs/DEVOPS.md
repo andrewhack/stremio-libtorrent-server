@@ -86,7 +86,7 @@ Sizes and rates accept units (`64GiB`, `512MiB`) as well as plain byte counts. `
 | `STREMIOSRV_RESUME_RETENTION_DAYS` | `365` | days an *unclaimed* fast-resume record is kept (0 = forever) |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | libtorrent connection cap |
 | `STREMIOSRV_TRANSCODE_PROFILE` | autodetect | force a HW profile |
-| `STREMIOSRV_LIBRARY_ADDON_ALLOW` | *(unset)* | CIDRs that count as the home network: they may reach the library addon, and `/proxy` fetches any non-link-local address for them but only public ones for anyone else, or for a web page on another site (default: private ranges + CGNAT). Behind a reverse proxy, or when Docker forwards IPv6 clients into an IPv4-only container, clients arrive from a local address — list your LAN ranges explicitly |
+| `STREMIOSRV_LIBRARY_ADDON_ALLOW` | *(unset)* | CIDRs that count as the home network: they may reach the library addon, and `/proxy` fetches any address but a link-local or cloud-metadata one for them, and only public ones for anyone else or for a web page on another site — a page whose address is in these ranges, or whose host is the server's or `SERVER_URL`'s, counts as the server's own (default: private ranges + CGNAT). Behind a reverse proxy, or when Docker forwards IPv6 clients into an IPv4-only container, clients arrive from a local address — list your LAN ranges explicitly |
 
 ### Web player (all-in-one)
 The image bundles the Stremio **web player** and serves it on the same origin as the streaming API
@@ -94,7 +94,8 @@ The image bundles the Stremio **web player** and serves it on the same origin as
 Stremio UI playing through our engine — no separate client needed.
 - Open **`http://<host>:8080`** (LAN, no cert) or **`https://<host>:12470`** (cert).
 - Set **`SERVER_URL`** to the origin clients use (e.g. `https://<host>:12470`) so the player targets
-  the right streaming server. TLS options: see [`cert-guide.md`](cert-guide.md) (self-signed default /
+  the right streaming server; `/proxy` also counts a web page on that host, at any port, as the
+  server's own. TLS options: see [`cert-guide.md`](cert-guide.md) (self-signed default /
   bring-your-own / Let's Encrypt).
 - **Login & addons** are handled by the web player against Stremio's cloud — not by this server.
 
