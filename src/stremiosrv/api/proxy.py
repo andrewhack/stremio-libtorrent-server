@@ -57,11 +57,12 @@ _NOT_SETTABLE = frozenset({"content-length", "transfer-encoding", "connection", 
 # of its own and no scripts. Browsers apply the policy to documents only; media, subtitle and
 # fetch/XHR loads -- the player's own -- ignore it (final review of 1.6.7).
 SANDBOX = "sandbox"
-# Web origins of the official Stremio web app. A page on any other origin -- or one that hides its
+# Web origins of the official Stremio web app. A page on another site -- or one that hides its
 # origin ("null") -- is judged like an internet client: every origin can read /proxy answers (CORS
 # is open, as in stock), so without this any website a home viewer opens could read the LAN through
-# the viewer's own server (owner's decision, 2026-09-12). The bundled player's own requests are
-# same-origin and native apps send no Origin, so both keep the home rule.
+# the viewer's own server (owner's decision, 2026-09-12). Which pages count as this server's own,
+# not another site, is _foreign_page's rule (1.6.9). The bundled player's same-origin requests and
+# native apps send no Origin, so both keep the home rule.
 STREMIO_WEB_ORIGINS = frozenset({"https://web.stremio.com", "https://app.strem.io"})
 # http.client keeps an obs-fold -- a header value continued on the next line -- as CR LF plus the
 # continuation's leading whitespace. The ASGI servers refuse a value with a line break in it and
@@ -178,7 +179,7 @@ def _foreign_page(request: Request) -> bool:
         return True
     settings = request.app.state.settings
     own = {_host_of("//" + request.headers.get("host", "")), _host_of(settings.server_url)}
-    if host in own - {""}:
+    if host in own:
         return False
     return not netguard.is_allowed(host, netguard.parse_allow(settings.library_addon_allow))
 
@@ -334,7 +335,7 @@ def _proxied(request: Request, o: opts.ProxyOpts, path: str, home: bool,
             answer = _playlist(resp, headers, o)
         finally:
             _abandon(resp, conn, slot)
-        return answer if deadline.stop() else _too_slow()  # a playlist cut short is never served
+        return answer if deadline.stop() else _too_slow()  # a playlist the deadline cut short is never served
     deadline.stop()  # the headers are in: the body is the viewer's, for as long as it runs
     body = _relay(resp, conn, slot)
     weakref.finalize(body, _abandon, resp, conn, slot)  # a body Starlette never starts

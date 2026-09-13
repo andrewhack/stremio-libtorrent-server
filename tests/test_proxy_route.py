@@ -444,6 +444,27 @@ def test_a_pages_address_is_judged_by_the_home_networks_setting(upstream):
         url, headers={"Origin": "http://10.0.0.5:8080"}).status_code == 403
 
 
+def test_rule_a_matches_a_host_header_that_carries_a_port(upstream):
+    """Behind nginx the Host header is the client's own, port included ($http_host): a player on
+    http://<name>:8080 streaming from https://<name>:12470 is the production shape (1.6.9)."""
+    r = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/blob",
+                      headers={"Host": "stremio.example.com:12470",
+                               "Origin": "http://stremio.example.com:8080"})
+    assert r.status_code == 200
+
+
+def test_an_origin_never_grants_the_home_rule(upstream):
+    """The Origin rule can only take the home rule away: a client outside the home networks gets
+    the internet rule whatever page it names -- directly, or behind our nginx (1.6.9)."""
+    url = f"/proxy/{_opts(upstream, TOKEN)}/blob"
+    direct = _client(OUTSIDE).get(url, headers={"Origin": "http://192.168.1.50:8080"})
+    assert direct.status_code == 403
+    behind_nginx = _client(NGINX).get(url, headers={"X-Forwarded-For": "203.0.113.9",
+                                                    "Origin": "http://testserver:8080"})
+    assert behind_nginx.status_code == 403
+    assert upstream.seen == []
+
+
 def test_every_redirect_hop_is_checked(upstream, monkeypatch):
     """The first hop passes (allowed for the test); the redirect must be judged again."""
     calls = []
@@ -608,6 +629,7 @@ def test_a_tls_handshake_that_never_finishes_gets_a_504(quick):
         started = time.monotonic()
         r = _client().get(f"/proxy/d=https%3A%2F%2F127.0.0.1%3A{port}/x")
         assert r.status_code == 504
+        assert r.content == b"upstream too slow"
         assert time.monotonic() - started < 2.5
     finally:
         silent.close()
@@ -623,7 +645,7 @@ def test_a_body_that_trickles_past_the_deadline_is_relayed_whole(upstream, quick
 def test_a_playlist_that_arrives_in_time_is_still_rewritten(upstream, quick):
     r = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/list.m3u8")
     assert r.status_code == 200
-    assert r.text.startswith("#EXTM3U")
+    assert f"{_root(upstream)}/root.ts" in r.text.splitlines()
 
 
 def test_a_504_gives_its_place_back(upstream, quick, monkeypatch):

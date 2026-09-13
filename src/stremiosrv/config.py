@@ -3,7 +3,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration. Overridable via STREMIOSRV_* env vars.
+    """Runtime configuration. Overridable via STREMIOSRV_* env vars, except `server_url`, which reads
+    the container's unprefixed SERVER_URL.
 
     Every size and rate below is a `ByteSize`, so it accepts a plain byte count (what every existing
     compose file and the appliance image already pass — those keep working unchanged) or a suffixed

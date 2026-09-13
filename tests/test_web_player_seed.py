@@ -35,9 +35,9 @@ def test_server_url_env_is_written_whether_or_not_server_url_is_set():
 
 def test_the_app_gets_the_server_url_the_player_is_seeded_with():
     """/proxy counts a page on SERVER_URL's host as the server's own (1.6.9). The IPADDRESS branch
-    sets SERVER_URL inside this script, and a variable set there reaches uvicorn only if exported
-    -- after the seed block, which may append a slash."""
+    sets SERVER_URL inside this script, and a variable set there reaches uvicorn only if it is
+    exported before uvicorn starts (the export survives any later reassignment)."""
     text = _ENTRYPOINT.read_text(encoding="utf-8")
-    assert "export SERVER_URL\n" in text
-    export = text.index("export SERVER_URL\n")
-    assert text.index('if [ -f "$SEED_SRC" ]; then') < export < text.index("uvicorn stremiosrv.app")
+    m = re.search(r"^export SERVER_URL$", text, re.M)
+    assert m, "the entrypoint no longer exports SERVER_URL"
+    assert m.start() < text.index("uvicorn stremiosrv.app")

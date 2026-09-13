@@ -67,6 +67,7 @@ def test_after_stop_a_step_gets_its_own_full_timeout(pair):
     time.sleep(0.1)
     b.sendall(b"x")
     assert d.run(a, 5.0, a.recv, 1) == b"x"
+    assert a.gettimeout() == 5.0
     d.check()  # no longer raises
 
 
@@ -77,3 +78,23 @@ def test_stop_gives_the_same_answer_every_time():
         d.check()
     assert d.stop() is False
     assert d.stop() is False
+
+
+def test_an_https_read_waits_no_longer_than_the_time_left():
+    """Every TLS socket from the proxy's context reads through the deadline. Without that wiring an
+    HTTPS upstream dripping its headers would get the plain 60 s per-read timeout, and the deadline
+    would silently stop covering most proxy-header streams (final review of 1.6.9)."""
+    a, b = socket.socketpair()
+    a.settimeout(2.0)
+    tls = upstream._TLS.wrap_socket(a, server_hostname="example.test",
+                                    do_handshake_on_connect=False)
+    try:
+        assert type(tls) is upstream._BudgetedTLS
+        tls.deadline = upstream.Deadline(0.3)
+        started = time.monotonic()
+        with pytest.raises(upstream.DeadlinePassed):
+            tls.recv_into(bytearray(1))  # the peer never answers the handshake this read starts
+        assert time.monotonic() - started < 1.0
+    finally:
+        tls.close()
+        b.close()
