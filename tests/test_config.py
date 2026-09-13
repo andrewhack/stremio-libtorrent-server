@@ -120,3 +120,13 @@ def test_defaults_are_unchanged_by_the_type_switch():
     assert s.prefetch_next_max_bytes == 134_217_728
     assert s.idle_download_rate_limit == 1_048_576
     assert s.download_rate_limit == 0 and s.upload_rate_limit == 0
+
+
+def test_server_url_is_the_containers_own_unprefixed_setting(monkeypatch):
+    """The container already takes SERVER_URL for the web player; /proxy reads the same value to
+    know the server's own name (1.6.9)."""
+    monkeypatch.delenv("SERVER_URL", raising=False)
+    assert Settings().server_url == ""
+    monkeypatch.setenv("SERVER_URL", "https://stremio.example.com:12470/")
+    assert Settings().server_url == "https://stremio.example.com:12470/"
+    assert Settings(server_url="https://other.example.com/").server_url == "https://other.example.com/"

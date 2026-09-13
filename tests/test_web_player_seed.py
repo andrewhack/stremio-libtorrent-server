@@ -31,3 +31,13 @@ def test_server_url_env_is_written_whether_or_not_server_url_is_set():
     install without SERVER_URL sees."""
     block = _seed_block()
     assert block.index(_WRITE) < block.index('if [ -n "${SERVER_URL}" ]; then')
+
+
+def test_the_app_gets_the_server_url_the_player_is_seeded_with():
+    """/proxy counts a page on SERVER_URL's host as the server's own (1.6.9). The IPADDRESS branch
+    sets SERVER_URL inside this script, and a variable set there reaches uvicorn only if exported
+    -- after the seed block, which may append a slash."""
+    text = _ENTRYPOINT.read_text(encoding="utf-8")
+    assert "export SERVER_URL\n" in text
+    export = text.index("export SERVER_URL\n")
+    assert text.index('if [ -f "$SEED_SRC" ]; then') < export < text.index("uvicorn stremiosrv.app")

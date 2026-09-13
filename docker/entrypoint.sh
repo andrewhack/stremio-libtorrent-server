@@ -63,6 +63,10 @@ if [ -f "$SEED_SRC" ]; then
     fi
 fi
 
+# /proxy counts a web page on SERVER_URL's host as this server's own (1.6.9). The IPADDRESS branch
+# sets SERVER_URL inside this script, and uvicorn sees only what is exported.
+export SERVER_URL
+
 # 3) Run uvicorn (API, internal :11470) + nginx (web player + API proxy on :8080 and :12470).
 mkdir -p /tmp/nx-proxy /tmp/nx-body
 # Render the cert path into the nginx config (honors a custom STREMIOSRV_CACHE_ROOT).

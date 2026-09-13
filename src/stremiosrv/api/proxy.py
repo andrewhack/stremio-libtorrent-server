@@ -150,17 +150,37 @@ class RefuseOwnRequests:
         await self.app(scope, receive, send)
 
 
+def _host_of(url: str) -> str:
+    """The host a URL names, lowercase; "" when it names none or cannot be parsed."""
+    try:
+        return urllib.parse.urlsplit(url).hostname or ""
+    except ValueError:
+        return ""
+
+
 def _foreign_page(request: Request) -> bool:
-    """Whether a web page on another origin than this server or the Stremio web app sent this."""
+    """Whether a web page on another site than this server or the Stremio web app sent this.
+
+    A page is the server's own when its host -- at any port, over either scheme -- is the host the
+    request was sent to, the host SERVER_URL names, or an address on the home network
+    (STREMIOSRV_LIBRARY_ADDON_ALLOW). The bundled player is often opened on another address than
+    the one it streams from -- `http://<home address>:8080` pointed at SERVER_URL's
+    `https://<name>:12470` -- and a cross-origin request carries its page's Origin (1.6.9)."""
     origin = request.headers.get("origin")
     if origin is None or origin in STREMIO_WEB_ORIGINS:
         return False
     try:
         u = urllib.parse.urlsplit(origin)
+        host = u.hostname or ""
     except ValueError:
         return True
-    host = request.headers.get("host", "")
-    return not (host and u.scheme in ("http", "https") and u.netloc.lower() == host.lower())
+    if u.scheme not in ("http", "https") or not host:
+        return True
+    settings = request.app.state.settings
+    own = {_host_of("//" + request.headers.get("host", "")), _host_of(settings.server_url)}
+    if host in own - {""}:
+        return False
+    return not netguard.is_allowed(host, netguard.parse_allow(settings.library_addon_allow))
 
 
 def _home_client(request: Request) -> bool:

@@ -353,7 +353,12 @@ def test_the_home_network_is_the_operators_allowlist(upstream):
     assert widened.status_code == 200
 
 
-@pytest.mark.parametrize("origin", ["https://evil.example", "null", "http://[::1"])
+@pytest.mark.parametrize("origin", [
+    "https://evil.example", "null", "http://[::1",
+    "http://203.0.113.7:8080",       # a public address is not the home network
+    "ftp://192.168.1.50",            # not a web page
+    "http://elsewhere.example:8080", # another name, and no SERVER_URL naming it
+])
 def test_a_page_on_another_site_is_judged_like_an_internet_client(upstream, origin):
     """Every origin can read /proxy answers (CORS is open, as in stock), so a web page a home viewer
     opens must not read the LAN through them (owner's decision, 2026-09-12)."""
@@ -364,10 +369,46 @@ def test_a_page_on_another_site_is_judged_like_an_internet_client(upstream, orig
 
 @pytest.mark.parametrize("origin", [
     "https://web.stremio.com", "https://app.strem.io", "http://testserver",
+    "http://testserver:8080",        # this server's host on another port (1.6.9)
+    "https://testserver:12470",      # ...or scheme
+    "http://192.168.1.50:8080",      # a player opened on a home-network address
+    "http://100.101.102.103:8080",   # ...over a mesh VPN (carrier-grade NAT space)
+    "http://[fd00::5]:8080",         # ...or an IPv6 unique-local address
 ])
-def test_the_stremio_web_app_and_this_server_keep_the_home_rule(upstream, origin):
+def test_the_stremio_web_app_and_this_servers_own_pages_keep_the_home_rule(upstream, origin):
+    """The bundled player is often opened on another address than the one it streams from --
+    `http://<home address>:8080` pointed at `https://<name>:12470` -- and a cross-origin request
+    carries its page's Origin (1.6.9)."""
     r = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/blob", headers={"Origin": origin})
     assert r.status_code == 200
+
+
+def test_a_page_on_server_urls_host_keeps_the_home_rule(upstream):
+    """`http://<name>:8080` streaming from SERVER_URL's `https://<name>:12470` (1.6.9)."""
+    s = Settings(server_url="https://stremio.example.com:12470/")
+    url = f"/proxy/{_opts(upstream, TOKEN)}/blob"
+    assert _client(settings=s).get(
+        url, headers={"Origin": "http://stremio.example.com:8080"}).status_code == 200
+    assert _client(settings=s).get(
+        url, headers={"Origin": "http://elsewhere.example"}).status_code == 403
+
+
+def test_an_unparseable_server_url_names_no_page(upstream):
+    s = Settings(server_url="http://[::1")
+    r = _client(settings=s).get(f"/proxy/{_opts(upstream, TOKEN)}/blob",
+                                headers={"Origin": "http://stremio.example.com"})
+    assert r.status_code == 403
+
+
+def test_a_pages_address_is_judged_by_the_home_networks_setting(upstream):
+    """STREMIOSRV_LIBRARY_ADDON_ALLOW decides which page addresses are home, as it does for
+    clients (1.6.9)."""
+    s = Settings(library_addon_allow="192.168.0.0/16")
+    url = f"/proxy/{_opts(upstream, TOKEN)}/blob"
+    assert _client(settings=s).get(
+        url, headers={"Origin": "http://192.168.7.7:8080"}).status_code == 200
+    assert _client(settings=s).get(
+        url, headers={"Origin": "http://10.0.0.5:8080"}).status_code == 403
 
 
 def test_every_redirect_hop_is_checked(upstream, monkeypatch):

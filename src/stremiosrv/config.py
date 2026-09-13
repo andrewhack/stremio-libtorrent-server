@@ -1,4 +1,4 @@
-from pydantic import ByteSize
+from pydantic import AliasChoices, ByteSize, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -128,3 +128,7 @@ class Settings(BaseSettings):
     # IPv6 ULA and CGNAT (a private mesh-VPN tunnel is not RFC1918 and must still work).
     # Comma-separated CIDRs to replace that list outright.
     library_addon_allow: str = ""
+    # The URL clients reach this server on: the same SERVER_URL the container takes for the web
+    # player, read here unprefixed. /proxy counts a web page on its host as the server's own
+    # (1.6.9). Empty, or unparseable: no page is.
+    server_url: str = Field("", validation_alias=AliasChoices("server_url", "SERVER_URL"))
