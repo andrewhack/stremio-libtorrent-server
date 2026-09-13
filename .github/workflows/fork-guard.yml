@@ -20,20 +20,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -s SERVER_VERSION
           test -s FORK_VERSION
+          test -s webadmin/WEBADMIN_VERSION
+          test -f VERSIONING.md
           test -f compose.yaml
           test -f compose.dns.yaml
           test -f Dockerfile
           test -f docker/webadmin_entrypoint.py
           test -f webadmin/app.py
           test -f webadmin/fork_update.py
+          test -f webadmin/version_lifecycle.py
+          test -f webadmin/static/component-versions.js
+
+          # FORK_VERSION is compatibility-only and must never drift from the
+          # authoritative independent server release identifier.
+          cmp -s SERVER_VERSION FORK_VERSION || {
+            echo 'SERVER_VERSION and FORK_VERSION must contain the same value.'
+            exit 1
+          }
 
           grep -q '^  webadmin:' compose.yaml
           grep -q '^  pihole:' compose.yaml
           grep -q '172.30.0.53' compose.yaml
           grep -q 'https://github.com/emmanique/stremio-libtorrent-server-webadmin' compose.yaml
           grep -q 'STREMIO_UPDATE_HEALTH_TIMEOUT' compose.yaml
+          grep -q 'SERVER_VERSION' Dockerfile
           grep -q 'FORK_VERSION' Dockerfile
+          grep -q 'version_lifecycle:app' webadmin/Dockerfile
+          grep -q 'WEBADMIN_VERSION' webadmin/Dockerfile
 
           if grep -R --line-number --fixed-strings \
             'https://github.com/andrewhack/stremio-libtorrent-server' \
@@ -55,6 +70,21 @@ jobs:
           grep -q 'coreVersion' webadmin/fork_update.py
           grep -q 'forkVersion' webadmin/fork_update.py
 
+      - name: Validate independent component lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'SERVER_VERSION_URL' webadmin/version_lifecycle.py
+          grep -q 'WEBADMIN_VERSION_URL' webadmin/version_lifecycle.py
+          grep -q '/api/component-versions' webadmin/version_lifecycle.py
+          grep -q 'guarded_server_update_worker' webadmin/version_lifecycle.py
+          grep -q 'docker compose up -d --build --no-deps webadmin' webadmin/version_lifecycle.py
+          grep -q 'Server installed' webadmin/static/component-versions.js
+          grep -q 'WebAdmin installed' webadmin/static/component-versions.js
+          grep -q 'Core installed' webadmin/static/component-versions.js
+          grep -q 'Update Server' webadmin/static/component-versions.js
+          grep -q 'Independent release lifecycles' webadmin/static/component-versions.js
+
       - name: Validate default Docker Compose
         run: docker compose config --quiet
 
@@ -63,3 +93,6 @@ jobs:
 
       - name: Compile WebAdmin integration code
         run: python -m compileall -q webadmin docker/webadmin_entrypoint.py
+
+      - name: Validate WebAdmin lifecycle JavaScript
+        run: node --check webadmin/static/component-versions.js
