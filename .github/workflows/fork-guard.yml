@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate fork-owned files
         shell: bash
@@ -34,8 +36,10 @@ jobs:
           test -f webadmin/fork_update.py
           test -f webadmin/version_lifecycle.py
           test -f webadmin/transcoding_config.py
+          test -f webadmin/transcoding_runtime_fix.py
           test -f webadmin/static/component-versions.js
           test -f webadmin/static/transcoding-dashboard.js
+          test -f webadmin/static/transcoding-runtime-fix.js
 
           cmp -s SERVER_VERSION FORK_VERSION || {
             echo 'SERVER_VERSION and FORK_VERSION must contain the same value.'
@@ -51,11 +55,15 @@ jobs:
           grep -q 'SERVER_VERSION' Dockerfile
           grep -q 'FORK_VERSION' Dockerfile
           grep -q 'ffmpeg_wrapper.py' Dockerfile
-          grep -q 'transcoding_config:app' webadmin/Dockerfile
+          grep -q 'transcoding_runtime_fix:app' webadmin/Dockerfile
           grep -q 'import version_lifecycle as lifecycle' webadmin/transcoding_config.py
           grep -q '/api/transcoding/status' webadmin/transcoding_config.py
           grep -q 'transcoding-dashboard.js' webadmin/transcoding_config.py
+          grep -q 'import transcoding_config as base' webadmin/transcoding_runtime_fix.py
+          grep -q 'TARGET_SERVER_VERSION' webadmin/transcoding_runtime_fix.py
+          grep -q 'transcoding-runtime-fix.js' webadmin/transcoding_runtime_fix.py
           grep -q 'Transcoding policy & hardware' webadmin/static/transcoding-dashboard.js
+          grep -q 'Streaming-server runtime update required' webadmin/static/transcoding-runtime-fix.js
           grep -q 'WEBADMIN_VERSION' webadmin/Dockerfile
 
           if grep -R --line-number --fixed-strings \
@@ -63,6 +71,27 @@ jobs:
             webadmin compose.yaml Dockerfile docker/webadmin_entrypoint.py docker/ffmpeg_wrapper.py; then
             echo 'Runtime/update paths must not use the upstream repository as their source.'
             exit 1
+          fi
+
+      - name: Enforce fork runtime version bumps
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          if printf '%s\n' "$changed" | grep -Eq '^(Dockerfile|docker/ffmpeg_wrapper\.py|docker/webadmin_entrypoint\.py)$'; then
+            if git diff --quiet "$BASE_SHA"...HEAD -- SERVER_VERSION FORK_VERSION; then
+              echo 'Server runtime integration changed without a SERVER_VERSION/FORK_VERSION bump.'
+              exit 1
+            fi
+          fi
+          if printf '%s\n' "$changed" | grep -Eq '^webadmin/'; then
+            if git diff --quiet "$BASE_SHA"...HEAD -- webadmin/WEBADMIN_VERSION; then
+              echo 'WebAdmin changed without a WEBADMIN_VERSION bump.'
+              exit 1
+            fi
           fi
 
       - name: Validate transactional updater guardrails
@@ -126,3 +155,4 @@ jobs:
         run: |
           node --check webadmin/static/component-versions.js
           node --check webadmin/static/transcoding-dashboard.js
+          node --check webadmin/static/transcoding-runtime-fix.js
