@@ -1,0 +1,7 @@
+# VAAPI-only overlay. Use this on Linux hosts that expose /dev/dri but do not
+# need the NVIDIA container runtime:
+#   docker compose -f compose.yaml -f compose.vaapi.yaml up -d
+services:
+  stremio-libtorrent-server:
+    devices:
+      - /dev/dri:/dev/dri

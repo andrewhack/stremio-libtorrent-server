@@ -1,46 +1,123 @@
-# Stremio libtorrent streaming server — production compose (CPU/VAAPI-safe base).
-# This base starts on ANY host (no hard GPU requirement). For NVIDIA NVENC, add the overlay:
-#   docker compose -f compose.yaml -f compose.gpu.yaml up -d
-# (Or use ./docker/launch.sh, which auto-detects GPU and degrades gracefully.)
+name: stremio-platform
+
 services:
   stremio-libtorrent-server:
-    build: .
-    image: stremio-libtorrent-server:latest
+    build:
+      context: .
+    pull_policy: build
+    image: stremio-libtorrent-server-webadmin:local
     container_name: stremio-libtorrent-server
     restart: unless-stopped
     environment:
-      # BitTorrent peer port. Override by exporting STREMIOSRV_BT_LISTEN_PORT (or setting it in .env);
-      # the published port below follows it automatically, so the listen and forwarded ports match.
       STREMIOSRV_BT_LISTEN_PORT: "${STREMIOSRV_BT_LISTEN_PORT:-6881}"
       STREMIOSRV_CACHE_ROOT: /root/.stremio-server
-      CERT_FILE: certificates.pem    # full-chain+key PEM in the cache dir; auto self-signed if absent
-      # Set IPADDRESS to your server's LAN IP for a TRUSTED, TV-compatible cert (Let's Encrypt via
-      # *.stremio.rocks). Leave empty to use a bring-your-own cert or self-signed.
-      IPADDRESS: ${IPADDRESS:-}
-      SERVER_URL: ${SERVER_URL:-}    # web-player target; auto-set to the stremio.rocks URL when IPADDRESS is set
+      STREMIOSRV_EXTERNAL_CONFIG: /config/admin-settings.json
+      CERT_FILE: "${CERT_FILE:-certificates.pem}"
+      IPADDRESS: "${IPADDRESS:-}"
+      SERVER_URL: "${SERVER_URL:-}"
+      # Fork-owned FFmpeg policy. Values saved in WebAdmin take precedence over
+      # these environment defaults after they are persisted to admin-settings.json.
+      TRANSCODING_MODE: "${TRANSCODING_MODE:-auto}"
+      TRANSCODING_HWACCEL: "${TRANSCODING_HWACCEL:-vaapi}"
+      VAAPI_DEVICE: "${VAAPI_DEVICE:-/dev/dri/renderD128}"
+      TRANSCODING_VIDEO_CODEC: "${TRANSCODING_VIDEO_CODEC:-h264_vaapi}"
+      TRANSCODING_VIDEO_QUALITY: "${TRANSCODING_VIDEO_QUALITY:-22}"
+      TRANSCODING_AUDIO_CODEC: "${TRANSCODING_AUDIO_CODEC:-aac}"
+      TRANSCODING_AUDIO_BITRATE: "${TRANSCODING_AUDIO_BITRATE:-192k}"
+      TRANSCODING_COPY_VIDEO: "${TRANSCODING_COPY_VIDEO:-true}"
+      TRANSCODING_COPY_AUDIO: "${TRANSCODING_COPY_AUDIO:-true}"
+      TRANSCODING_DIRECT_VIDEO_CODECS: "${TRANSCODING_DIRECT_VIDEO_CODECS:-h264}"
+      TRANSCODING_DIRECT_AUDIO_CODECS: "${TRANSCODING_DIRECT_AUDIO_CODECS:-aac,mp3,ac3}"
+      TRANSCODING_FALLBACK_CODEC: "${TRANSCODING_FALLBACK_CODEC:-libx264}"
+      TRANSCODING_HW_DECODE: "${TRANSCODING_HW_DECODE:-true}"
+    dns:
+      - 172.30.0.53
     ports:
-      - "8080:8080"                  # web player + API (HTTP/LAN)
-      - "11470:11470"              # streaming-server HTTP API
-      - "12470:12470"              # HTTPS (nginx TLS, when a cert is present)
-      # BitTorrent peer port (this server accepts INBOUND peers) — follows STREMIOSRV_BT_LISTEN_PORT
-      # so the forwarded port and the in-container listen port stay in sync. TCP + UDP (DHT / uTP).
-      - "${STREMIOSRV_BT_LISTEN_PORT:-6881}:${STREMIOSRV_BT_LISTEN_PORT:-6881}/tcp"
-      - "${STREMIOSRV_BT_LISTEN_PORT:-6881}:${STREMIOSRV_BT_LISTEN_PORT:-6881}/udp"
+      - "${IPADDRESS:-0.0.0.0}:8080:8080"
+      - "${IPADDRESS:-0.0.0.0}:11470:11470"
+      - "${IPADDRESS:-0.0.0.0}:12470:12470"
+      - "${IPADDRESS:-0.0.0.0}:${STREMIOSRV_BT_LISTEN_PORT:-6881}:${STREMIOSRV_BT_LISTEN_PORT:-6881}/tcp"
+      - "${IPADDRESS:-0.0.0.0}:${STREMIOSRV_BT_LISTEN_PORT:-6881}:${STREMIOSRV_BT_LISTEN_PORT:-6881}/udp"
     volumes:
-      # Set STREMIO_DATA_DIR to a host path (with certificates.pem) to reuse an existing cache+cert;
-      # otherwise a named volume is used.
       - ${STREMIO_DATA_DIR:-stremio-cache}:/root/.stremio-server
+      - stremio-config:/config:ro
+    networks:
+      stremio-internal:
+        ipv4_address: 172.30.0.10
+    depends_on:
+      pihole:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:11470/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-    labels:
-      # Auto-discovery by the Application Health Monitor (AHM).
-      monitor.enabled: "true"
-      monitor.name: "stremio-libtorrent-server"
-      monitor.health.path: "/health"
-      monitor.health.port: "11470"
+
+  webadmin:
+    build:
+      context: ./webadmin
+    pull_policy: build
+    image: stremio-webadmin:separated-v2
+    container_name: stremio-webadmin
+    restart: unless-stopped
+    environment:
+      WEBADMIN_STATE: /data
+      STREMIO_CONFIG_FILE: /config/admin-settings.json
+      STREMIO_URL: http://stremio-libtorrent-server:11470
+      STREMIO_CONTAINER: stremio-libtorrent-server
+      STREMIO_IMAGE: stremio-libtorrent-server-webadmin:local
+      STREMIO_SOURCE_REPO: https://github.com/emmanique/stremio-libtorrent-server-webadmin
+      STREMIO_SOURCE_BRANCH: main
+      STREMIO_UPDATE_HEALTH_TIMEOUT: "${STREMIO_UPDATE_HEALTH_TIMEOUT:-180}"
+      IPADDRESS: "${IPADDRESS:-localhost}"
+      WEB_PLAYER_URL: "http://${IPADDRESS:-localhost}:8080"
+      SERVER_URL: "http://${IPADDRESS:-localhost}:11470"
+    ports:
+      - "${IPADDRESS:-0.0.0.0}:8090:8090"
+    volumes:
+      - webadmin-data:/data
+      - stremio-config:/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - stremio-internal
+    depends_on:
+      stremio-libtorrent-server:
+        condition: service_healthy
+
+  pihole:
+    image: pihole/pihole:latest
+    container_name: stremio-pihole
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ:-Africa/Luanda}"
+      FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD:-}"
+      FTLCONF_dns_listeningMode: all
+      FTLCONF_dns_upstreams: "${PIHOLE_UPSTREAM_DNS:-1.1.1.1;1.0.0.1}"
+    # DNS stays available to Stremio on the internal Docker network without
+    # occupying host port 53. Use compose.dns.yaml when Pi-hole must also be
+    # exposed as the DNS server for the LAN.
+    expose:
+      - "53/tcp"
+      - "53/udp"
+    ports:
+      - "${PIHOLE_WEB_BIND_IP:-0.0.0.0}:${PIHOLE_WEB_PORT:-8053}:80/tcp"
+    volumes:
+      - pihole-etc:/etc/pihole
+      - pihole-dnsmasq:/etc/dnsmasq.d
+    networks:
+      stremio-internal:
+        ipv4_address: 172.30.0.53
+
+networks:
+  stremio-internal:
+    name: stremio-internal
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 volumes:
   stremio-cache:
+  stremio-config:
+  webadmin-data:
+  pihole-etc:
+  pihole-dnsmasq:
