@@ -1,36 +1,38 @@
 # Runtime image: the libtorrent streaming server on the dual-GPU base
 # (jellyfin-ffmpeg with NVENC/VAAPI, nginx, GPU runtime). The base provides ffmpeg/ffprobe;
 # uv manages its own Python 3.12 venv (the system python on the 22.04 base is 3.10).
-# Base is published to Docker Hub so a clean from-scratch build works on any host (built from the
-# companion fork andrewhack/stremio-docker, Dockerfile.nvidia).
 FROM androshack/stremio-docker-dual:latest
 
-# uv (standalone binary; brings its own Python toolchain)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /srv/app
-# Dependency metadata first (better layer caching), then source.
-# LICENSE is not optional here: pyproject declares `license-files = ["LICENSE"]`, so uv sync fails
-# with "glob `LICENSE` did not match any files" if it is missing from the context. Copying it also
-# means the image ships the licence alongside the software it grants rights to, which is the point.
-COPY pyproject.toml uv.lock README.md LICENSE ./
+# SERVER_VERSION is the authoritative release identifier for the server image.
+# FORK_VERSION remains as a compatibility alias for older WebAdmin installations.
+COPY pyproject.toml uv.lock README.md LICENSE SERVER_VERSION FORK_VERSION ./
 COPY src ./src
 COPY docker ./docker
-# Pin Python 3.12: libtorrent 2.0.11 only publishes cp312/cp313 wheels (no 3.14).
-RUN uv sync --no-dev --python 3.12 && chmod +x docker/entrypoint.sh
+RUN set -eux; \
+    mkdir -p /usr/local/libexec/stremio; \
+    ln -sf "$(readlink -f "$(command -v ffmpeg)")" /usr/local/libexec/stremio/ffmpeg-real; \
+    ln -sf "$(readlink -f "$(command -v ffprobe)")" /usr/local/libexec/stremio/ffprobe-real; \
+    uv sync --no-dev --python 3.12; \
+    chmod +x docker/entrypoint.sh docker/webadmin_entrypoint.py; \
+    install -m 0755 docker/ffmpeg_wrapper.py /usr/local/bin/ffmpeg
 
 ENV STREMIOSRV_CACHE_ROOT=/root/.stremio-server
 ENV PATH="/srv/app/.venv/bin:${PATH}"
+ENV STREMIO_SERVER_VERSION_FILE=/srv/app/SERVER_VERSION
+ENV STREMIO_FORK_VERSION_FILE=/srv/app/FORK_VERSION
+ENV FFMPEG_REAL=/usr/local/libexec/stremio/ffmpeg-real
+ENV FFPROBE_REAL=/usr/local/libexec/stremio/ffprobe-real
 
-# 8080 = web player + API (HTTP/LAN); 11470 = direct API; 12470 = web player + API (HTTPS);
-# 6881 = BitTorrent peer port.
 EXPOSE 8080 11470 12470 6881
 VOLUME ["/root/.stremio-server"]
 
-# Container health: the streaming API's /health (uvicorn on :11470). Baked into the image so any run
-# — bare `docker run`, compose, etc. — reports healthy/unhealthy in `docker ps` with no extra flags.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:11470/health || exit 1
 
-# Entrypoint runs uvicorn (http) + nginx TLS (https, when a cert is present).
-CMD ["/srv/app/docker/entrypoint.sh"]
+# Keep WebAdmin integration outside the upstream Python source. The wrapper loads
+# /config/admin-settings.json into STREMIOSRV_* variables and then executes the
+# stock server entrypoint from this fork.
+CMD ["python3", "/srv/app/docker/webadmin_entrypoint.py"]

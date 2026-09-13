@@ -1,0 +1,168 @@
+name: Fork integration guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate fork-owned files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s SERVER_VERSION
+          test -s FORK_VERSION
+          test -s webadmin/WEBADMIN_VERSION
+          test -f VERSIONING.md
+          test -f compose.yaml
+          test -f compose.dns.yaml
+          test -f compose.vaapi.yaml
+          test -f Dockerfile
+          test -f docker/webadmin_entrypoint.py
+          test -f docker/ffmpeg_wrapper.py
+          test -f webadmin/app.py
+          test -f webadmin/fork_update.py
+          test -f webadmin/version_lifecycle.py
+          test -f webadmin/transcoding_config.py
+          test -f webadmin/transcoding_runtime_fix.py
+          test -f webadmin/transcoding_profiles.py
+          test -f webadmin/static/component-versions.js
+          test -f webadmin/static/transcoding-dashboard.js
+          test -f webadmin/static/transcoding-runtime-fix.js
+          test -f webadmin/static/transcoding-simple-config.js
+
+          cmp -s SERVER_VERSION FORK_VERSION || {
+            echo 'SERVER_VERSION and FORK_VERSION must contain the same value.'
+            exit 1
+          }
+
+          grep -q '^  webadmin:' compose.yaml
+          grep -q '^  pihole:' compose.yaml
+          grep -q '172.30.0.53' compose.yaml
+          grep -q 'https://github.com/emmanique/stremio-libtorrent-server-webadmin' compose.yaml
+          grep -q 'STREMIO_UPDATE_HEALTH_TIMEOUT' compose.yaml
+          grep -q 'SERVER_VERSION' Dockerfile
+          grep -q 'FORK_VERSION' Dockerfile
+          grep -q 'ffmpeg_wrapper.py' Dockerfile
+          grep -q 'transcoding_profiles:app' webadmin/Dockerfile
+          grep -q '/api/transcoding/status' webadmin/transcoding_config.py
+          grep -q 'import transcoding_config as base' webadmin/transcoding_runtime_fix.py
+          grep -q 'import transcoding_runtime_fix as base' webadmin/transcoding_profiles.py
+          grep -q '/api/transcoding/profiles' webadmin/transcoding_profiles.py
+          grep -q 'one-frame encoder self-test' webadmin/transcoding_profiles.py
+          grep -q 'Only runtime-verified encoders' webadmin/static/transcoding-simple-config.js
+          grep -q 'WEBADMIN_VERSION' webadmin/Dockerfile
+
+          if grep -R --line-number --fixed-strings \
+            'https://github.com/andrewhack/stremio-libtorrent-server' \
+            webadmin compose.yaml Dockerfile docker/webadmin_entrypoint.py docker/ffmpeg_wrapper.py; then
+            echo 'Runtime/update paths must not use the upstream repository as their source.'
+            exit 1
+          fi
+
+      - name: Enforce fork runtime version bumps
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          if printf '%s\n' "$changed" | grep -Eq '^(Dockerfile|docker/ffmpeg_wrapper\.py|docker/webadmin_entrypoint\.py)$'; then
+            if git diff --quiet "$BASE_SHA"...HEAD -- SERVER_VERSION FORK_VERSION; then
+              echo 'Server runtime integration changed without a SERVER_VERSION/FORK_VERSION bump.'
+              exit 1
+            fi
+          fi
+          if printf '%s\n' "$changed" | grep -Eq '^webadmin/'; then
+            if git diff --quiet "$BASE_SHA"...HEAD -- webadmin/WEBADMIN_VERSION; then
+              echo 'WebAdmin changed without a WEBADMIN_VERSION bump.'
+              exit 1
+            fi
+          fi
+
+      - name: Validate transactional updater guardrails
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'update-checkpoint.json' webadmin/fork_update.py
+          grep -q 'rollback' webadmin/fork_update.py
+          grep -q '_wait_healthy' webadmin/fork_update.py
+          grep -q '_restore_old_container' webadmin/fork_update.py
+          grep -q 'create_container' webadmin/fork_update.py
+          grep -q 'previousImageId' webadmin/fork_update.py
+          grep -q 'coreVersion' webadmin/fork_update.py
+          grep -q 'forkVersion' webadmin/fork_update.py
+
+      - name: Validate independent component lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'SERVER_VERSION_URL' webadmin/version_lifecycle.py
+          grep -q 'WEBADMIN_VERSION_URL' webadmin/version_lifecycle.py
+          grep -q '/api/component-versions' webadmin/version_lifecycle.py
+          grep -q 'guarded_server_update_worker' webadmin/version_lifecycle.py
+          grep -q '_replace_route("/api/update")' webadmin/version_lifecycle.py
+          grep -q 'docker compose up -d --build --no-deps webadmin' webadmin/version_lifecycle.py
+
+      - name: Validate trusted connection URL integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'httpsCert.json' webadmin/version_lifecycle.py
+          grep -q 'stremio\\.rocks' webadmin/version_lifecycle.py
+          grep -q -- '--development --webui-url=' webadmin/version_lifecycle.py
+          grep -q '_replace_route("/api/status")' webadmin/version_lifecycle.py
+          grep -q '_replace_route("/api/qr.svg")' webadmin/version_lifecycle.py
+
+      - name: Validate default Docker Compose
+        run: docker compose config --quiet
+
+      - name: Validate LAN DNS override
+        run: docker compose -f compose.yaml -f compose.dns.yaml config --quiet
+
+      - name: Validate VAAPI override
+        run: docker compose -f compose.yaml -f compose.vaapi.yaml config --quiet
+
+      - name: Compile integration code
+        run: python -m compileall -q webadmin docker/webadmin_entrypoint.py docker/ffmpeg_wrapper.py
+
+      - name: Test explicit FFmpeg profile policy
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location('ffmpeg_wrapper', 'docker/ffmpeg_wrapper.py')
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          mod._available_encoders = lambda: {'hevc_vaapi', 'libx265'}
+          mod.os.path.exists = lambda path: True
+          args = ['-i', 'input', '-c:v', 'libx265', '-preset', 'veryfast', '-f', 'hls', 'out.m3u8']
+          out, decision = mod._apply_profile(args, 'vaapi-hevc', {'transcoding_video_quality': 22})
+          assert 'hevc_vaapi' in out, (out, decision)
+          assert 'libx265' not in out, (out, decision)
+          assert '-vaapi_device' in out, (out, decision)
+          assert any('hwupload' in value for value in out), (out, decision)
+          copy_args = ['-i', 'input', '-c:v', 'copy', '-f', 'hls', 'out.m3u8']
+          copy_out, copy_decision = mod._apply_profile(copy_args, 'vaapi-hevc', {})
+          assert copy_out == copy_args, (copy_out, copy_decision)
+          PY
+
+      - name: Validate WebAdmin JavaScript
+        run: |
+          node --check webadmin/static/component-versions.js
+          node --check webadmin/static/transcoding-dashboard.js
+          node --check webadmin/static/transcoding-runtime-fix.js
+          node --check webadmin/static/transcoding-simple-config.js
