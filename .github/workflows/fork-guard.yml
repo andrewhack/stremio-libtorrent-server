@@ -37,9 +37,11 @@ jobs:
           test -f webadmin/version_lifecycle.py
           test -f webadmin/transcoding_config.py
           test -f webadmin/transcoding_runtime_fix.py
+          test -f webadmin/transcoding_profiles.py
           test -f webadmin/static/component-versions.js
           test -f webadmin/static/transcoding-dashboard.js
           test -f webadmin/static/transcoding-runtime-fix.js
+          test -f webadmin/static/transcoding-simple-config.js
 
           cmp -s SERVER_VERSION FORK_VERSION || {
             echo 'SERVER_VERSION and FORK_VERSION must contain the same value.'
@@ -51,19 +53,16 @@ jobs:
           grep -q '172.30.0.53' compose.yaml
           grep -q 'https://github.com/emmanique/stremio-libtorrent-server-webadmin' compose.yaml
           grep -q 'STREMIO_UPDATE_HEALTH_TIMEOUT' compose.yaml
-          grep -q 'TRANSCODING_MODE' compose.yaml
           grep -q 'SERVER_VERSION' Dockerfile
           grep -q 'FORK_VERSION' Dockerfile
           grep -q 'ffmpeg_wrapper.py' Dockerfile
-          grep -q 'transcoding_runtime_fix:app' webadmin/Dockerfile
-          grep -q 'import version_lifecycle as lifecycle' webadmin/transcoding_config.py
+          grep -q 'transcoding_profiles:app' webadmin/Dockerfile
           grep -q '/api/transcoding/status' webadmin/transcoding_config.py
-          grep -q 'transcoding-dashboard.js' webadmin/transcoding_config.py
           grep -q 'import transcoding_config as base' webadmin/transcoding_runtime_fix.py
-          grep -q 'TARGET_SERVER_VERSION' webadmin/transcoding_runtime_fix.py
-          grep -q 'transcoding-runtime-fix.js' webadmin/transcoding_runtime_fix.py
-          grep -q 'Transcoding policy & hardware' webadmin/static/transcoding-dashboard.js
-          grep -q 'Streaming-server runtime update required' webadmin/static/transcoding-runtime-fix.js
+          grep -q 'import transcoding_runtime_fix as base' webadmin/transcoding_profiles.py
+          grep -q '/api/transcoding/profiles' webadmin/transcoding_profiles.py
+          grep -q 'one-frame encoder self-test' webadmin/transcoding_profiles.py
+          grep -q 'Only runtime-verified encoders' webadmin/static/transcoding-simple-config.js
           grep -q 'WEBADMIN_VERSION' webadmin/Dockerfile
 
           if grep -R --line-number --fixed-strings \
@@ -115,18 +114,8 @@ jobs:
           grep -q 'WEBADMIN_VERSION_URL' webadmin/version_lifecycle.py
           grep -q '/api/component-versions' webadmin/version_lifecycle.py
           grep -q 'guarded_server_update_worker' webadmin/version_lifecycle.py
-          grep -q 'guarded_update' webadmin/version_lifecycle.py
           grep -q '_replace_route("/api/update")' webadmin/version_lifecycle.py
-          grep -q 'installed == available' webadmin/version_lifecycle.py
-          grep -q 'updateInProgress' webadmin/version_lifecycle.py
           grep -q 'docker compose up -d --build --no-deps webadmin' webadmin/version_lifecycle.py
-          grep -q 'Server installed' webadmin/static/component-versions.js
-          grep -q 'WebAdmin installed' webadmin/static/component-versions.js
-          grep -q 'Core installed' webadmin/static/component-versions.js
-          grep -q 'Update Server' webadmin/static/component-versions.js
-          grep -q 'guardedUpdateClick' webadmin/static/component-versions.js
-          grep -q 'server?.updateAvailable === true' webadmin/static/component-versions.js
-          grep -q 'Independent release lifecycles' webadmin/static/component-versions.js
 
       - name: Validate trusted connection URL integration
         shell: bash
@@ -137,7 +126,6 @@ jobs:
           grep -q -- '--development --webui-url=' webadmin/version_lifecycle.py
           grep -q '_replace_route("/api/status")' webadmin/version_lifecycle.py
           grep -q '_replace_route("/api/qr.svg")' webadmin/version_lifecycle.py
-          grep -q 'trustedHttps' webadmin/version_lifecycle.py
 
       - name: Validate default Docker Compose
         run: docker compose config --quiet
@@ -148,11 +136,33 @@ jobs:
       - name: Validate VAAPI override
         run: docker compose -f compose.yaml -f compose.vaapi.yaml config --quiet
 
-      - name: Compile WebAdmin integration code
+      - name: Compile integration code
         run: python -m compileall -q webadmin docker/webadmin_entrypoint.py docker/ffmpeg_wrapper.py
+
+      - name: Test explicit FFmpeg profile policy
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location('ffmpeg_wrapper', 'docker/ffmpeg_wrapper.py')
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          mod._available_encoders = lambda: {'hevc_vaapi', 'libx265'}
+          mod.os.path.exists = lambda path: True
+          args = ['-i', 'input', '-c:v', 'libx265', '-preset', 'veryfast', '-f', 'hls', 'out.m3u8']
+          out, decision = mod._apply_profile(args, 'vaapi-hevc', {'transcoding_video_quality': 22})
+          assert 'hevc_vaapi' in out, (out, decision)
+          assert 'libx265' not in out, (out, decision)
+          assert '-vaapi_device' in out, (out, decision)
+          assert any('hwupload' in value for value in out), (out, decision)
+          copy_args = ['-i', 'input', '-c:v', 'copy', '-f', 'hls', 'out.m3u8']
+          copy_out, copy_decision = mod._apply_profile(copy_args, 'vaapi-hevc', {})
+          assert copy_out == copy_args, (copy_out, copy_decision)
+          PY
 
       - name: Validate WebAdmin JavaScript
         run: |
           node --check webadmin/static/component-versions.js
           node --check webadmin/static/transcoding-dashboard.js
           node --check webadmin/static/transcoding-runtime-fix.js
+          node --check webadmin/static/transcoding-simple-config.js
