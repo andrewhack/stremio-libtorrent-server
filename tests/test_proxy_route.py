@@ -6,6 +6,7 @@ from __future__ import annotations
 import gc
 import gzip
 import http.client
+import socket
 import threading
 import time
 import zlib
@@ -21,6 +22,7 @@ from stremiosrv.api import proxy as proxy_api
 from stremiosrv.app import create_app
 from stremiosrv.config import Settings
 from stremiosrv.proxy import dest
+from stremiosrv.proxy import upstream as upstream_mod
 
 BLOB = bytes(range(256)) * 64            # 16 KiB; byte N is N % 256
 HOME = ("192.168.1.20", 50000)            # a client on the home network
@@ -52,6 +54,24 @@ class _Upstream(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         self.do_GET()
+
+    def _late(self, seconds: float, answer) -> None:
+        """Answer after `seconds`, if the proxy is still there to hear it."""
+        time.sleep(seconds)
+        try:
+            answer()
+        except OSError:  # the proxy gave up first and hung up
+            pass
+
+    def _drip(self, head: bytes, piece: bytes, times: int, gap: float) -> None:
+        """Send `head`, then `piece` every `gap` seconds, `times` times."""
+        try:
+            self.wfile.write(head)
+            for _ in range(times):
+                time.sleep(gap)
+                self.wfile.write(piece)
+        except OSError:
+            pass
 
     def do_GET(self) -> None:
         self.server.seen.append((self.command, self.path, self.headers))
@@ -119,6 +139,19 @@ class _Upstream(BaseHTTPRequestHandler):
             self.wfile.write(b"b" * 8)
         elif p.startswith("/bare301"):
             self._send(301, b"", "text/plain")  # a redirect that names no Location
+        elif p.startswith("/stall"):
+            self._late(1.5, lambda: self._send(200, b"late", "text/plain"))
+        elif p.startswith("/drip-headers"):
+            # a status line, then one header line that never ends, a byte every 0.1 s
+            self._drip(b"HTTP/1.1 200 OK\r\n", b"x", 15, 0.1)
+        elif p.startswith("/drip.m3u8"):
+            # no Content-Length: the playlist ends when the connection does
+            self._drip(b"HTTP/1.0 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\n\r\n"
+                       b"#EXTM3U\n", b"/seg.ts\n", 8, 0.2)
+        elif p.startswith("/slowhop"):
+            n = int(p.removeprefix("/slowhop"))
+            self._late(0.3, lambda: self._send(302, extra={
+                "Location": f"/slowhop{n + 1}" if n < 3 else "/blob"}))
         else:
             self._send(404, b"nope", "text/plain")
 
@@ -543,3 +576,58 @@ def test_malformed_options_are_a_400(path):
 
 def test_an_unreachable_upstream_is_a_502():
     assert _client().get("/proxy/d=http%3A%2F%2F127.0.0.1%3A9/x").status_code == 502
+
+
+@pytest.fixture()
+def quick(monkeypatch):
+    """Half a second instead of the real 30."""
+    monkeypatch.setattr(upstream_mod, "DEADLINE", 0.5)
+
+
+@pytest.mark.parametrize("path", [
+    "/stall",         # accepts, then says nothing
+    "/drip-headers",  # a header line that never ends, a byte at a time
+    "/drip.m3u8",     # a playlist that keeps arriving, with no length to end it
+    "/slowhop0",      # redirects that each answer in time, but not all of them together
+])
+def test_an_upstream_that_does_not_answer_in_time_gets_a_504(upstream, quick, path):
+    """A per-read timeout never fires on an upstream that sends a byte now and then; the deadline
+    bounds the whole answer, and a playlist cut short is never served (1.6.9)."""
+    started = time.monotonic()
+    r = _client().get(f"/proxy/{_opts(upstream, TOKEN)}{path}")
+    assert r.status_code == 504
+    assert r.content == b"upstream too slow"
+    assert time.monotonic() - started < 2.5
+
+
+def test_a_tls_handshake_that_never_finishes_gets_a_504(quick):
+    """Inside wrap_socket the handshake would be out of the deadline's reach."""
+    silent = socket.create_server(("127.0.0.1", 0))  # connects, never answers a ClientHello
+    try:
+        port = silent.getsockname()[1]
+        started = time.monotonic()
+        r = _client().get(f"/proxy/d=https%3A%2F%2F127.0.0.1%3A{port}/x")
+        assert r.status_code == 504
+        assert time.monotonic() - started < 2.5
+    finally:
+        silent.close()
+
+
+def test_a_body_that_trickles_past_the_deadline_is_relayed_whole(upstream, quick):
+    """The deadline ends with the headers: a film streams for as long as it lasts."""
+    r = _client().get(f"/proxy/{_opts(upstream)}/trickle")  # 8 bytes, 1.5 s, 8 more
+    assert r.status_code == 200
+    assert r.content == b"a" * 8 + b"b" * 8
+
+
+def test_a_playlist_that_arrives_in_time_is_still_rewritten(upstream, quick):
+    r = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/list.m3u8")
+    assert r.status_code == 200
+    assert r.text.startswith("#EXTM3U")
+
+
+def test_a_504_gives_its_place_back(upstream, quick, monkeypatch):
+    _pools(monkeypatch, 1, 1)
+    c = _client()
+    assert c.get(f"/proxy/{_opts(upstream, TOKEN)}/stall").status_code == 504
+    assert c.get(f"/proxy/{_opts(upstream, TOKEN)}/blob").status_code == 200

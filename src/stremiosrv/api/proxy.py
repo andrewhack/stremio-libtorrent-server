@@ -300,20 +300,30 @@ def proxy(rest: str, request: Request) -> Response:
         raise
 
 
+def _too_slow() -> Response:
+    """The upstream did not answer within upstream.DEADLINE."""
+    return Response(status_code=504, content=b"upstream too slow")
+
+
 def _proxied(request: Request, o: opts.ProxyOpts, path: str, home: bool,
              slot: _Slot) -> Response:
     """Everything after admission. Gives `slot` back on every path except a streamed body, which
-    takes it over."""
+    takes it over. The upstream gets upstream.DEADLINE to answer, and to deliver a playlist whole;
+    past it the answer is 504 (owner's decision, 2026-09-13)."""
     query = request.url.query
     url = o.dest + path + (f"?{query}" if query else "")
+    deadline = upstream.Deadline(upstream.DEADLINE)
     try:
-        resp, conn = upstream.open_url(url, request.method, _request_headers(request, o), home)
+        resp, conn = upstream.open_url(url, request.method, _request_headers(request, o), home,
+                                       deadline)
     except dest.Refused:
         slot.release()
         return Response(status_code=403, content=b"destination not allowed")
     except (OSError, http.client.HTTPException, upstream.TooManyRedirects,
-            upstream.BadUpstream):
+            upstream.BadUpstream):  # DeadlinePassed is a TimeoutError, so among the OSErrors
         slot.release()
+        if not deadline.stop():
+            return _too_slow()
         return Response(status_code=502, content=b"upstream unreachable")
     headers = _response_headers(resp, o)
     if request.method == "HEAD":
@@ -321,9 +331,11 @@ def _proxied(request: Request, o: opts.ProxyOpts, path: str, home: bool,
         return Response(status_code=resp.status, headers=headers)
     if playlist.is_playlist(path, headers.get("content-type", "")):
         try:
-            return _playlist(resp, headers, o)
+            answer = _playlist(resp, headers, o)
         finally:
             _abandon(resp, conn, slot)
+        return answer if deadline.stop() else _too_slow()  # a playlist cut short is never served
+    deadline.stop()  # the headers are in: the body is the viewer's, for as long as it runs
     body = _relay(resp, conn, slot)
     weakref.finalize(body, _abandon, resp, conn, slot)  # a body Starlette never starts
     return StreamingResponse(body, status_code=resp.status, headers=headers)
