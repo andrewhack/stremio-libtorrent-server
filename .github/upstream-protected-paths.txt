@@ -5,6 +5,8 @@ compose.yaml
 compose.dns.yaml
 .env.example
 FORK_VERSION
+QUICKSTART.md
+INSTALL-SEPARATED-V2.md
 webadmin
 docker/webadmin_entrypoint.py
 .github/workflows/upstream-sync.yml
