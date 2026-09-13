@@ -53,6 +53,7 @@ services:
       STREMIO_IMAGE: stremio-libtorrent-server-webadmin:local
       STREMIO_SOURCE_REPO: https://github.com/emmanique/stremio-libtorrent-server-webadmin
       STREMIO_SOURCE_BRANCH: main
+      STREMIO_UPDATE_HEALTH_TIMEOUT: "${STREMIO_UPDATE_HEALTH_TIMEOUT:-180}"
       IPADDRESS: "${IPADDRESS:-localhost}"
       WEB_PLAYER_URL: "http://${IPADDRESS:-localhost}:8080"
       SERVER_URL: "http://${IPADDRESS:-localhost}:11470"

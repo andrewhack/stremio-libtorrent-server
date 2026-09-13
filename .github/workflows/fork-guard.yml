@@ -32,6 +32,8 @@ jobs:
           grep -q '^  pihole:' compose.yaml
           grep -q '172.30.0.53' compose.yaml
           grep -q 'https://github.com/emmanique/stremio-libtorrent-server-webadmin' compose.yaml
+          grep -q 'STREMIO_UPDATE_HEALTH_TIMEOUT' compose.yaml
+          grep -q 'FORK_VERSION' Dockerfile
 
           if grep -R --line-number --fixed-strings \
             'https://github.com/andrewhack/stremio-libtorrent-server' \
@@ -39,6 +41,19 @@ jobs:
             echo 'Runtime/update paths must not use the upstream repository as their source.'
             exit 1
           fi
+
+      - name: Validate transactional updater guardrails
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'update-checkpoint.json' webadmin/fork_update.py
+          grep -q 'rollback' webadmin/fork_update.py
+          grep -q '_wait_healthy' webadmin/fork_update.py
+          grep -q '_restore_old_container' webadmin/fork_update.py
+          grep -q 'create_container' webadmin/fork_update.py
+          grep -q 'previousImageId' webadmin/fork_update.py
+          grep -q 'coreVersion' webadmin/fork_update.py
+          grep -q 'forkVersion' webadmin/fork_update.py
 
       - name: Validate default Docker Compose
         run: docker compose config --quiet
