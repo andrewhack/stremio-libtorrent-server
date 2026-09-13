@@ -117,6 +117,8 @@ class _Upstream(BaseHTTPRequestHandler):
             self.wfile.flush()
             time.sleep(1.5)
             self.wfile.write(b"b" * 8)
+        elif p.startswith("/bare301"):
+            self._send(301, b"", "text/plain")  # a redirect that names no Location
         else:
             self._send(404, b"nope", "text/plain")
 
@@ -223,6 +225,16 @@ def test_r_cannot_act_on_this_origin(upstream):
     assert "clear-site-data" not in r.headers
     assert "refresh" not in r.headers
     assert r.headers["content-security-policy"] == "sandbox"
+
+
+def test_r_cannot_turn_a_relayed_3xx_into_a_redirect(upstream):
+    """open_url follows every redirect that names a Location, so a 3xx comes back only when it
+    names none. Set by `r`, one would send the viewer from this origin to anywhere (1.6.7
+    re-review, N2)."""
+    forced = "r=Location%3Ahttps%3A%2F%2Fx.example%2F"
+    r = _client().get(f"/proxy/{_opts(upstream, forced)}/bare301", follow_redirects=False)
+    assert r.status_code == 301
+    assert "location" not in r.headers
 
 
 def test_the_body_is_relayed_as_it_arrives(upstream):

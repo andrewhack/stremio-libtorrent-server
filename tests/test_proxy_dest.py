@@ -21,8 +21,10 @@ def test_internet_clients_may_not_reach_private_loopback_or_special_addresses(ad
     assert not dest.allowed(address, home_client=False)
 
 
-@pytest.mark.parametrize("address", ["127.0.0.1", "192.168.5.1", "10.1.2.3", "8.8.8.8"])
-def test_home_clients_may_reach_anything_but_link_local(address):
+@pytest.mark.parametrize("address", [
+    "127.0.0.1", "192.168.5.1", "10.1.2.3", "8.8.8.8", "100.100.100.201", "fd00:ec2::253",
+])
+def test_home_clients_may_reach_anything_but_link_local_and_metadata(address):
     assert dest.allowed(address, home_client=True)
 
 
@@ -33,6 +35,17 @@ def test_home_clients_may_reach_anything_but_link_local(address):
 def test_nobody_reaches_link_local(address, home_client):
     """Cloud metadata answers there, no addon stream does, and a client can look local when it is
     not (owner's decision, 2026-09-12)."""
+    assert not dest.allowed(address, home_client=home_client)
+
+
+@pytest.mark.parametrize("address", [
+    "100.100.100.200", "::ffff:100.100.100.200", "fd00:ec2::254", "fd00:ec2::254%2",
+])
+@pytest.mark.parametrize("home_client", [True, False])
+def test_nobody_reaches_a_cloud_metadata_address_outside_link_local(address, home_client):
+    """Alibaba Cloud answers on 100.100.100.200 (carrier-grade NAT space) and AWS on
+    fd00:ec2::254 (unique-local). Neither is global, so internet clients never reached them; a
+    home client could, until 1.6.9 (1.6.7 re-review, N4)."""
     assert not dest.allowed(address, home_client=home_client)
 
 

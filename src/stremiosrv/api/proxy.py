@@ -48,9 +48,10 @@ RELAY_RESPONSE = ("accept-ranges", "content-type", "content-length", "content-ra
                   "last-modified", "etag", "content-encoding")
 # An `r` header may not set these. The framing ones describe the bytes on the wire, which the proxy
 # frames; the others would act on this origin -- the web player's own -- instead of describing a
-# stream: its cookies, its stored data, the page's policy, a redirect.
+# stream: its cookies, its stored data, the page's policy, a redirect (Refresh, or a Location on a
+# relayed 3xx, which comes back only when the upstream named none -- 1.6.7 re-review, N2).
 _NOT_SETTABLE = frozenset({"content-length", "transfer-encoding", "connection", "set-cookie",
-                           "content-security-policy", "clear-site-data", "refresh"})
+                           "content-security-policy", "clear-site-data", "refresh", "location"})
 # Every answer is served from the web player's own origin, where the player keeps the viewer's
 # Stremio sign-in, so a page fetched from anywhere must not run there: sandboxed, it gets an origin
 # of its own and no scripts. Browsers apply the policy to documents only; media, subtitle and
