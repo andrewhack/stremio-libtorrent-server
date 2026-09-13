@@ -1,6 +1,6 @@
 """Independent Server/WebAdmin release lifecycle layer.
 
-This module sits on top of the transactional server updater.  The streaming
+This module sits on top of the transactional server updater. The streaming
 server and WebAdmin deliberately have different release identifiers and update
 paths:
 
@@ -14,11 +14,15 @@ The upstream repository is never used as a runtime update authority.
 from __future__ import annotations
 
 import os
+import re
+import threading
 import urllib.request
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import HTTPException
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import fork_update as transactional
 
@@ -44,6 +48,9 @@ SAFE_UPDATE_NOTICE = (
     "<code>emmanique/stremio-libtorrent-server-webadmin</code>. "
     "Server and WebAdmin versions are managed independently."
 )
+STREMIO_ROCKS_RE = re.compile(
+    r"([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.stremio\.rocks)", re.IGNORECASE
+)
 
 
 def _request_text(url: str, timeout: int = 5) -> str | None:
@@ -56,8 +63,6 @@ def _request_text(url: str, timeout: int = 5) -> str | None:
 
 
 def _remote_server_version() -> str | None:
-    # SERVER_VERSION is authoritative. FORK_VERSION is a compatibility fallback
-    # for installations created before the lifecycle split.
     return _request_text(SERVER_VERSION_URL) or _request_text(FORK_VERSION_URL)
 
 
@@ -96,6 +101,68 @@ def _core_version() -> str | None:
     return None
 
 
+def _container_env(container) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in (container.attrs.get("Config", {}).get("Env") or []):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        result[key] = value
+    return result
+
+
+def _normalise_url(value: str) -> str:
+    value = value.strip()
+    if value and not value.endswith("/"):
+        value += "/"
+    return value
+
+
+def _connection_urls() -> dict[str, object]:
+    """Return the connection URLs actually configured by the running server."""
+    ip = os.getenv("IPADDRESS", "localhost") or "localhost"
+    explicit_server_url = ""
+    trusted_url = ""
+
+    try:
+        container = legacy.client().containers.get(legacy.CONTAINER)
+        container.reload()
+        env = _container_env(container)
+        ip = env.get("IPADDRESS") or ip
+        explicit_server_url = _normalise_url(env.get("SERVER_URL", ""))
+
+        if explicit_server_url.startswith("https://"):
+            trusted_url = explicit_server_url
+        elif not explicit_server_url:
+            cache_root = (env.get("STREMIOSRV_CACHE_ROOT") or "/root/.stremio-server").rstrip("/")
+            cert_info = container.exec_run(["cat", f"{cache_root}/httpsCert.json"])
+            if cert_info.exit_code == 0:
+                text = cert_info.output.decode("utf-8", errors="replace")
+                match = STREMIO_ROCKS_RE.search(text)
+                if match:
+                    trusted_url = f"https://{match.group(1)}:12470/"
+    except Exception:
+        pass
+
+    if trusted_url:
+        return {
+            "ip": ip,
+            "webPlayer": trusted_url,
+            "streamingServer": trusted_url,
+            "desktopFlag": f"--development --webui-url={trusted_url}",
+            "trustedHttps": True,
+        }
+
+    streaming_server = explicit_server_url or f"http://{ip}:11470/"
+    return {
+        "ip": ip,
+        "webPlayer": f"http://{ip}:8080/",
+        "streamingServer": streaming_server,
+        "desktopFlag": f"--server={streaming_server.rstrip('/')}",
+        "trustedHttps": False,
+    }
+
+
 def _component(installed: str | None, available: str | None, **extra) -> dict:
     if installed and available:
         update_available: bool | None = installed != available
@@ -128,6 +195,7 @@ def component_versions():
             server_available,
             updateMode="transactional",
             updateEndpoint="/api/update",
+            updateInProgress=legacy.UPDATE_LOCK.locked(),
             rollback=True,
         ),
         "webadmin": _component(
@@ -141,11 +209,6 @@ def component_versions():
 
 
 def github_version_compat():
-    """Compatibility endpoint used by the existing page JavaScript.
-
-    It now means *server release available in this fork*, never upstream core
-    version and never WebAdmin version.
-    """
     available = _remote_server_version()
     installed = _installed_server_version()
     return {
@@ -159,33 +222,92 @@ def github_version_compat():
     }
 
 
+def lifecycle_status():
+    data = transactional.fork_status()
+    if isinstance(data, dict):
+        urls = _connection_urls()
+        data["urls"] = urls
+        server = data.get("server")
+        if isinstance(server, dict):
+            server["trustedHttps"] = bool(urls.get("trustedHttps"))
+    return data
+
+
 _original_update_worker = transactional.update_worker
 
 
 def guarded_server_update_worker():
-    """Avoid rebuilding the server when its independent release is unchanged."""
-    try:
-        installed = _installed_server_version()
-        available = _remote_server_version()
-        if installed and available and installed == available:
-            transactional._write_result(
-                status="succeeded",
-                phase="no-op",
-                finishedAt=datetime.now(UTC).isoformat(),
-                version=available,
-                repositoryUrl=SOURCE_REPO,
-                branch=SOURCE_BRANCH,
-                message="Server is already at the latest SERVER_VERSION; no container change was made.",
-            )
-            return
-    except Exception:
-        # Network/version detection must never prevent an explicit server update.
-        pass
+    installed = _installed_server_version()
+    available = _remote_server_version()
+    if installed and available and installed == available:
+        transactional._write_result(
+            status="succeeded",
+            phase="no-op",
+            finishedAt=datetime.now(UTC).isoformat(),
+            version=available,
+            repositoryUrl=SOURCE_REPO,
+            branch=SOURCE_BRANCH,
+            message="Server is already at the latest SERVER_VERSION; no container change was made.",
+        )
+        return
     _original_update_worker()
 
 
-# The legacy POST /api/update resolves this module global at execution time.
 legacy.update_worker = guarded_server_update_worker
+
+
+def guarded_update():
+    """Start an update only when a different SERVER_VERSION is verified."""
+    if legacy.UPDATE_LOCK.locked():
+        raise HTTPException(409, "server update already running")
+
+    installed = _installed_server_version()
+    available = _remote_server_version()
+
+    if not installed:
+        raise HTTPException(409, "installed SERVER_VERSION could not be determined; update disabled")
+    if not available:
+        raise HTTPException(503, "available SERVER_VERSION could not be verified; update disabled")
+    if installed == available:
+        transactional._write_result(
+            status="succeeded",
+            phase="no-op",
+            finishedAt=datetime.now(UTC).isoformat(),
+            version=available,
+            repositoryUrl=SOURCE_REPO,
+            branch=SOURCE_BRANCH,
+            message=f"Server {installed} is already up to date; no update was started.",
+        )
+        return {
+            "ok": True,
+            "started": False,
+            "updateAvailable": False,
+            "installed": installed,
+            "available": available,
+            "message": f"Server {installed} is already up to date. Update disabled.",
+        }
+
+    threading.Thread(target=guarded_server_update_worker, daemon=True).start()
+    legacy.audit("software.update", f"server {installed} -> {available}")
+    return {
+        "ok": True,
+        "started": True,
+        "updateAvailable": True,
+        "installed": installed,
+        "available": available,
+        "message": f"Server update started: {installed} -> {available}",
+    }
+
+
+def lifecycle_qr():
+    target = str(_connection_urls()["streamingServer"])
+    out = BytesIO()
+    legacy.segno.make(target, error="m").save(out, kind="svg", scale=5, border=2)
+    return Response(
+        out.getvalue(),
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 SCRIPT_TAG = '<script src="/component-versions.js"></script>'
@@ -193,8 +315,6 @@ SCRIPT_TAG = '<script src="/component-versions.js"></script>'
 
 def lifecycle_home():
     text = (legacy.STATIC / "index.html").read_text(encoding="utf-8")
-    # Never render the obsolete upstream-as-update-source message, even if
-    # JavaScript is disabled or fails before the lifecycle panel is enhanced.
     text = text.replace(STALE_UPDATE_NOTICE, SAFE_UPDATE_NOTICE)
     if SCRIPT_TAG not in text:
         text = text.replace("</body>", f"  {SCRIPT_TAG}\n</body>")
@@ -215,11 +335,15 @@ def _replace_route(path: str) -> None:
     ]
 
 
-# Replace only compatibility/UI routes. Transactional server update routes remain
-# owned by fork_update.py.
 _replace_route("/")
 app.add_api_route("/", lifecycle_home, methods=["GET"])
+_replace_route("/api/status")
+app.add_api_route("/api/status", lifecycle_status, methods=["GET"])
 _replace_route("/api/github-version")
 app.add_api_route("/api/github-version", github_version_compat, methods=["GET"])
+_replace_route("/api/update")
+app.add_api_route("/api/update", guarded_update, methods=["POST"], status_code=202)
+_replace_route("/api/qr.svg")
+app.add_api_route("/api/qr.svg", lifecycle_qr, methods=["GET"])
 app.add_api_route("/api/component-versions", component_versions, methods=["GET"])
 app.add_api_route("/component-versions.js", lifecycle_script, methods=["GET"])

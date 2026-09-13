@@ -1,6 +1,7 @@
 (() => {
   const byId = id => document.getElementById(id);
   let lastVersions = null;
+  let localUpdateStarting = false;
 
   function setBadge(id, component) {
     const el = byId(id);
@@ -22,6 +23,67 @@
     }
   }
 
+  function applyUpdateButtonState() {
+    const button = byId('updateNow');
+    if (!button) return;
+    const server = lastVersions?.server;
+    const running = Boolean(server?.updateInProgress || localUpdateStarting);
+    const canUpdate = server?.updateAvailable === true && !running;
+    button.disabled = !canUpdate;
+
+    if (running) {
+      button.title = 'Server update is in progress';
+    } else if (server?.updateAvailable === true) {
+      button.title = `Update Server: ${server.installed || 'unknown'} → ${server.available}`;
+    } else if (server?.updateAvailable === false) {
+      button.title = `Server ${server.installed || ''} is already the latest release`.trim();
+    } else {
+      button.title = 'Update disabled until the installed and available SERVER_VERSION values can be verified';
+    }
+  }
+
+  async function guardedUpdateClick() {
+    const button = byId('updateNow');
+    const status = byId('updateStatus');
+    const server = lastVersions?.server;
+
+    if (!server || server.updateAvailable !== true) {
+      if (status) {
+        status.textContent = server?.updateAvailable === false
+          ? `Server is up to date (${server.installed}) · Update disabled`
+          : 'Server version could not be verified · Update disabled';
+      }
+      applyUpdateButtonState();
+      return;
+    }
+
+    if (!confirm(`Update Server ${server.installed || 'unknown'} → ${server.available}? Active streams may be interrupted during activation.`)) return;
+
+    localUpdateStarting = true;
+    applyUpdateButtonState();
+    if (status) status.textContent = 'Starting verified server update…';
+
+    try {
+      const response = await fetch('/api/update', {method: 'POST'});
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || 'Update failed');
+
+      if (status) status.textContent = body.message || 'Server update requested';
+      if (typeof window.toast === 'function') {
+        window.toast(body.started === false ? 'Server is already up to date' : 'Server update started');
+      }
+      if (body.started === false) localUpdateStarting = false;
+    } catch (error) {
+      localUpdateStarting = false;
+      if (status) status.textContent = error.message || 'Update failed';
+    }
+
+    setTimeout(() => {
+      localUpdateStarting = false;
+      refreshComponentVersions();
+    }, 2500);
+  }
+
   function setupLifecyclePanel() {
     const updateButton = byId('updateNow');
     if (!updateButton) return false;
@@ -40,7 +102,9 @@
     }
 
     updateButton.textContent = 'Update Server';
-    updateButton.title = 'Transactional update of stremio-libtorrent-server only';
+    updateButton.onclick = guardedUpdateClick;
+    updateButton.disabled = true;
+    updateButton.title = 'Checking SERVER_VERSION…';
 
     const refreshButton = document.createElement('button');
     refreshButton.className = 'btn ghost';
@@ -79,7 +143,7 @@
     if (notice) {
       notice.innerHTML = `
         <strong>Independent release lifecycles.</strong><br>
-        Server updates come only from <code>emmanique/stremio-libtorrent-server-webadmin</code> and use the transactional rollback flow.
+        Server updates come only from <code>emmanique/stremio-libtorrent-server-webadmin</code> and start only when a different <code>SERVER_VERSION</code> is verified.
         A WebAdmin update never triggers a server rebuild automatically. To activate a WebAdmin release on the host, run:<br><br>
         <code id="webadminUpdateCommand">git pull origin main &amp;&amp; docker compose up -d --build --no-deps webadmin</code>
         <button class="mini" id="copyWebadminUpdate" type="button" style="margin-left:8px">Copy command</button>`;
@@ -122,21 +186,16 @@
       const command = data.webadmin?.updateCommand;
       if (command && byId('webadminUpdateCommand')) byId('webadminUpdateCommand').textContent = command;
 
-      const updateButton = byId('updateNow');
-      if (updateButton && data.server?.updateAvailable === false) {
-        updateButton.disabled = true;
-        updateButton.title = `Server ${data.server.installed} is already the latest release`;
-      } else if (updateButton && data.server?.updateAvailable === true) {
-        updateButton.title = `Update Server: ${data.server.installed || 'unknown'} → ${data.server.available}`;
-      }
+      if (data.server?.updateInProgress) localUpdateStarting = false;
+      applyUpdateButtonState();
 
       const status = byId('updateStatus');
-      if (status && !/progress|downloading|building|activating|replacing/i.test(status.textContent || '')) {
+      if (status && !data.server?.updateInProgress && !localUpdateStarting) {
         const serverText = data.server?.updateAvailable === true
           ? `Server update available: ${data.server.installed || 'unknown'} → ${data.server.available}`
           : data.server?.updateAvailable === false
-            ? `Server is up to date (${data.server.installed})`
-            : 'Server version check unavailable';
+            ? `Server is up to date (${data.server.installed}) · Update disabled`
+            : 'Server version check unavailable · Update disabled';
         const webText = data.webadmin?.updateAvailable === true
           ? `WebAdmin update available: ${data.webadmin.installed || 'unknown'} → ${data.webadmin.available}`
           : data.webadmin?.updateAvailable === false
@@ -145,26 +204,24 @@
         status.textContent = `${serverText} · ${webText}`;
       }
     } catch (_) {
+      lastVersions = null;
       if (byId('serverLifecycleBadge')) byId('serverLifecycleBadge').textContent = '● Check failed';
       if (byId('webadminLifecycleBadge')) byId('webadminLifecycleBadge').textContent = '● Check failed';
+      applyUpdateButtonState();
     }
   }
 
-  function enforceNoOpGuard() {
-    if (!lastVersions || lastVersions.server?.updateAvailable !== false) return;
-    const button = byId('updateNow');
-    const status = byId('updateStatus')?.textContent || '';
-    if (button && !/progress|downloading|building|activating|replacing/i.test(status)) button.disabled = true;
+  function enforceUpdateGuard() {
+    applyUpdateButtonState();
   }
 
   function start() {
     if (!setupLifecyclePanel()) return;
     refreshComponentVersions();
     setInterval(refreshComponentVersions, 30000);
-    // The legacy status poll controls the same button. Re-apply the independent
-    // server-version no-op guard after each poll without interfering with a
-    // running transactional update.
-    setInterval(enforceNoOpGuard, 1000);
+    // The legacy five-second status poll also writes to the same button. Keep
+    // the independent SERVER_VERSION gate authoritative in the browser.
+    setInterval(enforceUpdateGuard, 500);
   }
 
   if (document.readyState === 'loading') {

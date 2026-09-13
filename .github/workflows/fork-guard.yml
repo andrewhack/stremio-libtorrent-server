@@ -33,8 +33,6 @@ jobs:
           test -f webadmin/version_lifecycle.py
           test -f webadmin/static/component-versions.js
 
-          # FORK_VERSION is compatibility-only and must never drift from the
-          # authoritative independent server release identifier.
           cmp -s SERVER_VERSION FORK_VERSION || {
             echo 'SERVER_VERSION and FORK_VERSION must contain the same value.'
             exit 1
@@ -78,12 +76,29 @@ jobs:
           grep -q 'WEBADMIN_VERSION_URL' webadmin/version_lifecycle.py
           grep -q '/api/component-versions' webadmin/version_lifecycle.py
           grep -q 'guarded_server_update_worker' webadmin/version_lifecycle.py
+          grep -q 'guarded_update' webadmin/version_lifecycle.py
+          grep -q '_replace_route("/api/update")' webadmin/version_lifecycle.py
+          grep -q 'installed == available' webadmin/version_lifecycle.py
+          grep -q 'updateInProgress' webadmin/version_lifecycle.py
           grep -q 'docker compose up -d --build --no-deps webadmin' webadmin/version_lifecycle.py
           grep -q 'Server installed' webadmin/static/component-versions.js
           grep -q 'WebAdmin installed' webadmin/static/component-versions.js
           grep -q 'Core installed' webadmin/static/component-versions.js
           grep -q 'Update Server' webadmin/static/component-versions.js
+          grep -q 'guardedUpdateClick' webadmin/static/component-versions.js
+          grep -q 'server?.updateAvailable === true' webadmin/static/component-versions.js
           grep -q 'Independent release lifecycles' webadmin/static/component-versions.js
+
+      - name: Validate trusted connection URL integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'httpsCert.json' webadmin/version_lifecycle.py
+          grep -q 'stremio\\.rocks' webadmin/version_lifecycle.py
+          grep -q -- '--development --webui-url=' webadmin/version_lifecycle.py
+          grep -q '_replace_route("/api/status")' webadmin/version_lifecycle.py
+          grep -q '_replace_route("/api/qr.svg")' webadmin/version_lifecycle.py
+          grep -q 'trustedHttps' webadmin/version_lifecycle.py
 
       - name: Validate default Docker Compose
         run: docker compose config --quiet
