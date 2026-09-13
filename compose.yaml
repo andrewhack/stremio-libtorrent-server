@@ -1,4 +1,5 @@
 name: stremio-platform
+
 services:
   stremio-libtorrent-server:
     build:
@@ -14,7 +15,8 @@ services:
       CERT_FILE: "${CERT_FILE:-certificates.pem}"
       IPADDRESS: "${IPADDRESS:-}"
       SERVER_URL: "${SERVER_URL:-}"
-    dns: [172.30.0.53]
+    dns:
+      - 172.30.0.53
     ports:
       - "${IPADDRESS:-0.0.0.0}:8080:8080"
       - "${IPADDRESS:-0.0.0.0}:11470:11470"
@@ -27,6 +29,9 @@ services:
     networks:
       stremio-internal:
         ipv4_address: 172.30.0.10
+    depends_on:
+      pihole:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:11470/health"]
       interval: 30s
@@ -57,7 +62,8 @@ services:
       - webadmin-data:/data
       - stremio-config:/config
       - /var/run/docker.sock:/var/run/docker.sock
-    networks: [stremio-internal]
+    networks:
+      - stremio-internal
     depends_on:
       stremio-libtorrent-server:
         condition: service_healthy
@@ -68,13 +74,17 @@ services:
     restart: unless-stopped
     environment:
       TZ: "${TZ:-Africa/Luanda}"
-      FTLCONF_webserver_api_password: ""
+      FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD:-}"
       FTLCONF_dns_listeningMode: all
       FTLCONF_dns_upstreams: "${PIHOLE_UPSTREAM_DNS:-1.1.1.1;1.0.0.1}"
+    # DNS stays available to Stremio on the internal Docker network without
+    # occupying host port 53. Use compose.dns.yaml when Pi-hole must also be
+    # exposed as the DNS server for the LAN.
+    expose:
+      - "53/tcp"
+      - "53/udp"
     ports:
-      - "${IPADDRESS:?Defina IPADDRESS no .env}:53:53/tcp"
-      - "${IPADDRESS:?Defina IPADDRESS no .env}:53:53/udp"
-      - "${IPADDRESS:?Defina IPADDRESS no .env}:${PIHOLE_WEB_PORT:-8053}:80/tcp"
+      - "${PIHOLE_WEB_BIND_IP:-0.0.0.0}:${PIHOLE_WEB_PORT:-8053}:80/tcp"
     volumes:
       - pihole-etc:/etc/pihole
       - pihole-dnsmasq:/etc/dnsmasq.d
@@ -88,6 +98,7 @@ networks:
     ipam:
       config:
         - subnet: 172.30.0.0/24
+
 volumes:
   stremio-cache:
   stremio-config:
