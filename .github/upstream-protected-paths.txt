@@ -1,0 +1,13 @@
+# Fork-owned runtime/integration paths. The upstream sync workflow always
+# restores these paths from the fork before creating its review PR.
+Dockerfile
+compose.yaml
+compose.dns.yaml
+.env.example
+FORK_VERSION
+webadmin
+docker/webadmin_entrypoint.py
+.github/workflows/upstream-sync.yml
+.github/workflows/fork-guard.yml
+.github/upstream-protected-paths.txt
+.github/UPSTREAM_BASE
