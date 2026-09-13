@@ -6,7 +6,9 @@ FROM androshack/stremio-docker-dual:latest
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /srv/app
-COPY pyproject.toml uv.lock README.md LICENSE FORK_VERSION ./
+# SERVER_VERSION is the authoritative release identifier for the server image.
+# FORK_VERSION remains as a compatibility alias for older WebAdmin installations.
+COPY pyproject.toml uv.lock README.md LICENSE SERVER_VERSION FORK_VERSION ./
 COPY src ./src
 COPY docker ./docker
 RUN uv sync --no-dev --python 3.12 \
@@ -14,6 +16,7 @@ RUN uv sync --no-dev --python 3.12 \
 
 ENV STREMIOSRV_CACHE_ROOT=/root/.stremio-server
 ENV PATH="/srv/app/.venv/bin:${PATH}"
+ENV STREMIO_SERVER_VERSION_FILE=/srv/app/SERVER_VERSION
 ENV STREMIO_FORK_VERSION_FILE=/srv/app/FORK_VERSION
 
 EXPOSE 8080 11470 12470 6881
