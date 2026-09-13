@@ -1,0 +1,50 @@
+name: Fork integration guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate fork-owned files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s FORK_VERSION
+          test -f compose.yaml
+          test -f compose.dns.yaml
+          test -f Dockerfile
+          test -f docker/webadmin_entrypoint.py
+          test -f webadmin/app.py
+          test -f webadmin/fork_update.py
+
+          grep -q '^  webadmin:' compose.yaml
+          grep -q '^  pihole:' compose.yaml
+          grep -q '172.30.0.53' compose.yaml
+          grep -q 'https://github.com/emmanique/stremio-libtorrent-server-webadmin' compose.yaml
+
+          if grep -R --line-number --fixed-strings \
+            'https://github.com/andrewhack/stremio-libtorrent-server' \
+            webadmin compose.yaml Dockerfile docker/webadmin_entrypoint.py; then
+            echo 'Runtime/update paths must not use the upstream repository as their source.'
+            exit 1
+          fi
+
+      - name: Validate default Docker Compose
+        run: docker compose config --quiet
+
+      - name: Validate LAN DNS override
+        run: docker compose -f compose.yaml -f compose.dns.yaml config --quiet
+
+      - name: Compile WebAdmin integration code
+        run: python -m compileall -q webadmin docker/webadmin_entrypoint.py
