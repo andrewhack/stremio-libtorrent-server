@@ -335,7 +335,8 @@ def _proxied(request: Request, o: opts.ProxyOpts, path: str, home: bool,
             answer = _playlist(resp, headers, o)
         finally:
             _abandon(resp, conn, slot)
-        return answer if deadline.stop() else _too_slow()  # a playlist the deadline cut short is never served
+        # A playlist the deadline cut short is never served.
+        return answer if deadline.stop() else _too_slow()
     deadline.stop()  # the headers are in: the body is the viewer's, for as long as it runs
     body = _relay(resp, conn, slot)
     weakref.finalize(body, _abandon, resp, conn, slot)  # a body Starlette never starts
