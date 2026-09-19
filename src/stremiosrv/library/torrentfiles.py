@@ -77,9 +77,9 @@ def _decode(buf: bytes, pos: int, depth: int):
 
 
 def _safe(part: str) -> bool:
-    """A path part that stays below the torrent's directory."""
+    """A path part that stays below the torrent's directory, and that a path can carry at all."""
     return (bool(part) and part not in (".", "..")
-            and "/" not in part and "\\" not in part)
+            and "/" not in part and "\\" not in part and "\x00" not in part)
 
 
 def parse_info(info) -> Listing | None:

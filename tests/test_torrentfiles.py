@@ -67,7 +67,7 @@ def test_a_pad_file_keeps_its_index_and_is_not_listed():
     assert [f.index for f in got.files] == [0, 2]
 
 
-@pytest.mark.parametrize("bad", [[b".."], [b"."], [b""], [b"a/b"], [b"a\\b"]])
+@pytest.mark.parametrize("bad", [[b".."], [b"."], [b""], [b"a/b"], [b"a\\b"], [b"a\x00b.mkv"]])
 def test_an_unsafe_path_drops_that_file(bad):
     info = {b"name": b"P", b"files": [
         {b"length": 5, b"path": bad}, {b"length": 9, b"path": [b"ok.mkv"]}]}

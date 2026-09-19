@@ -129,7 +129,7 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
         path = os.path.join(base, *tf.parts)
         try:
             st = os.stat(path)
-        except OSError:
+        except (OSError, ValueError):  # ValueError: a name no path can carry, a NUL byte in it
             continue
         if not stat.S_ISREG(st.st_mode) or st.st_size != tf.size:
             continue

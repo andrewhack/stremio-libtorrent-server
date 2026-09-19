@@ -233,3 +233,16 @@ def test_a_file_of_another_length_is_not_listed(tmp_path):
     name = _pack(tmp_path, present=("E01",))
     (tmp_path / name / "The Show S02 E01.mkv").write_bytes(b"x" * 5)  # not the torrent's length
     assert _entry(tmp_path)["files"] == []
+
+
+def test_a_path_the_disk_cannot_name_is_skipped_not_raised(tmp_path, monkeypatch):
+    """`os.stat` raises ValueError, not OSError, for a name with a NUL byte in it. One such file in
+    one torrent must not take every library route down with it."""
+    name = "The Show S02"
+    (tmp_path / name).mkdir()
+    (tmp_path / name / "The Show S02 E02.mkv").write_bytes(b"x" * _size("E02"))
+    _index(tmp_path, **{name: PACK_IH})
+    monkeypatch.setattr(torrentfiles, "listing", lambda root, ih: torrentfiles.Listing(2, (
+        torrentfiles.TorrentFile(0, ("The Show S02 E01\x00.mkv",), _size("E01")),
+        torrentfiles.TorrentFile(1, ("The Show S02 E02.mkv",), _size("E02")))))
+    assert [f["index"] for f in _entry(tmp_path)["files"]] == [1]
