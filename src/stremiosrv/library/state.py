@@ -102,22 +102,27 @@ def _disk_files(cache_root: str, name: str, live: list[dict] | None = None) -> l
 
 def _torrent_files(cache_root: str, name: str, info_hash: str,
                    live: list[dict] | None) -> tuple[list[dict], int] | None:
-    """The torrent's OWN file records, and its file count, for a torrent the session is not
-    tracking -- or None when no resume record knows it, and the disk is all there is (see
-    _disk_files).
+    """The torrent's OWN video files, and its file count, for a torrent the session is not
+    tracking -- or None when no resume record finds any of them, and the disk is all there is
+    (see _disk_files).
 
     A directory listing has names and sizes but no torrent file indices, and nothing at all for a
     torrent that is one bare file at the cache root. The addon then offered no episode of a pack --
     a real pack numbered its files E06, E02, E03, E04, E05, E01, E07, E08, so any order-based
     guess plays the wrong one -- and could never learn or offer a single-file release.
 
-    The resume record gives each file's index, path and length. A file the session holds is
-    counted by its handle, matched on that index -- it may be being written, and its holes are
-    what the disk cannot be asked about cheaply (see _disk_files). Every other file is measured on
-    the disk, and one whose length there is not the torrent's belongs to something else. A
-    brand-new torrent has no record until the engine's next save, half a minute at most, and
-    keeps the walk until then -- except a single file at the root, which has no directory to
-    walk: see _fresh_single_file.
+    The resume record gives each file's index, path and length. Only videos are listed, as the
+    walk lists them: a subtitle or a link file drew a card of its own, and one that was complete
+    was offered in place of a video still arriving. A file the session holds is counted by its
+    handle, matched on that index -- it may be being written, and its holes are what the disk
+    cannot be asked about cheaply (see _disk_files). Every other file is measured on the disk, and
+    one whose length there is not the torrent's belongs to something else. When the record finds
+    none of its videos on the disk -- libtorrent writes some names differently from the record
+    (invalid UTF-8, a part too long, a duplicate) -- or nothing has arrived -- the walk answers, as
+    it did before: an empty list reads as a single-file torrent's, whose one answer is index 0. A
+    brand-new torrent has no record until the engine's next save (every 30 s by default) and keeps
+    the walk until then -- except a single file at the root, which has no directory to walk: see
+    _fresh_single_file.
     """
     base = os.path.join(cache_root, name)
     resume = torrentfiles.listing(cache_root, info_hash) if info_hash else None
@@ -126,6 +131,9 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
     held = {f.get("index"): f for f in live or [] if isinstance(f.get("index"), int)}
     out: list[dict] = []
     for tf in resume.files:
+        fname = tf.parts[-1] if tf.parts else name
+        if not fname.lower().endswith(pinsmod.VIDEO_EXT):
+            continue
         path = os.path.join(base, *tf.parts)
         try:
             st = os.stat(path)
@@ -139,13 +147,13 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
             continue
         out.append({
             "index": tf.index,
-            "name": tf.parts[-1] if tf.parts else name,
+            "name": fname,
             "size": tf.size,
             "downloaded": got,
             "progress": round(got / tf.size, 4) if tf.size else 0.0,
             "wanted": False,
         })
-    return out, resume.count
+    return (out, resume.count) if out else None
 
 
 def _fresh_single_file(base: str, name: str,
@@ -155,10 +163,13 @@ def _fresh_single_file(base: str, name: str,
     Such a torrent has no directory to walk, so without this it would have no listing at all
     until the engine's next save -- and the player's first request, which is what teaches the
     library what the file is, would find nothing to match. Only one record, of this name, whose
-    length the file on disk has; its `wanted` is only playback's focus and is dropped. The count
-    stays unknown (0), so the page does not treat the list as the torrent's whole one.
+    length the file on disk has, and only a video's, as everywhere else in the listing; its
+    `wanted` is only playback's focus and is dropped. The count stays unknown (0), so the page
+    does not treat the list as the torrent's whole one.
     """
     if not live or len(live) != 1 or live[0].get("name") != name:
+        return None
+    if not name.lower().endswith(pinsmod.VIDEO_EXT):
         return None
     try:
         st = os.stat(base)
