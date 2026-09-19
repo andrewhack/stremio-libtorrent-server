@@ -414,3 +414,22 @@ def test_a_lone_video_named_without_an_episode_plays_on_its_label_at_its_own_ind
     streams = model.streams_for_meta_id(statemod.build(str(tmp_path), None), "tt0000005:1:1",
                                         "http://o")
     assert [s["url"] for s in streams] == [f"http://o/{DIR_IH}/1"]
+
+
+def test_a_root_file_the_session_holds_lists_itself_before_its_first_bytes(tmp_path):
+    """Its record is saved but none of its bytes has arrived, so the record finds nothing, and a
+    root file has no directory to walk. The session's own record lists it: the first play still
+    learns it, and it is not offered before it is complete."""
+    name, size = _root_file(tmp_path)
+    live = [{"index": 0, "name": name, "size": size, "downloaded": 0, "progress": 0.0,
+             "wanted": True}]
+    engine = _Eng({name: FILE_IH}, {FILE_IH: live})
+    state = statemod.build(str(tmp_path), engine)
+    [e] = [e for e in state["entries"] if e.get("infoHash")]
+    assert [(f["index"], f["downloaded"]) for f in e["files"]] == [(0, 0)]
+    hits = model.learn_labels(state, "series", "tt0000002:4:5",
+                              {"videoSize": str(size), "filename": name})
+    assert [ih for ih, _ in hits] == [FILE_IH]
+    labels.put(str(tmp_path), FILE_IH, dict(hits[0][1]))
+    state = statemod.build(str(tmp_path), engine)
+    assert model.streams_for_meta_id(state, "tt0000002:4:5", "http://o") == []

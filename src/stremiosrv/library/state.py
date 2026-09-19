@@ -116,13 +116,14 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
     was offered in place of a video still arriving. A file the session holds is counted by its
     handle, matched on that index -- it may be being written, and its holes are what the disk
     cannot be asked about cheaply (see _disk_files). Every other file is measured on the disk, and
-    one whose length there is not the torrent's belongs to something else. When the record finds
-    none of its videos on the disk -- libtorrent writes some names differently from the record
-    (invalid UTF-8, a part too long, a duplicate) -- or nothing has arrived -- the walk answers, as
-    it did before: an empty list reads as a single-file torrent's, whose one answer is index 0. A
-    brand-new torrent has no record until the engine's next save (every 30 s by default) and keeps
-    the walk until then -- except a single file at the root, which has no directory to walk: see
-    _fresh_single_file.
+    one whose length there is not the torrent's belongs to something else. A file libtorrent wrote
+    under another name than the record's (invalid UTF-8, a part too long, a duplicate) is missing
+    from the list, never listed at a wrong index. The walk answers when the record finds none of
+    its videos on the disk -- renamed, or nothing has arrived yet: an empty list reads as a
+    single-file torrent's, whose one answer is index 0 -- and for a brand-new torrent, which has
+    no record until the engine's next save (every 30 s by default). Either way a single file at
+    the root, which has no directory to walk, is listed from the session's own record instead:
+    see _fresh_single_file.
     """
     base = os.path.join(cache_root, name)
     resume = torrentfiles.listing(cache_root, info_hash) if info_hash else None
@@ -153,16 +154,17 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
             "progress": round(got / tf.size, 4) if tf.size else 0.0,
             "wanted": False,
         })
-    return (out, resume.count) if out else None
+    return (out, resume.count) if out else _fresh_single_file(base, name, live)
 
 
 def _fresh_single_file(base: str, name: str,
                        live: list[dict] | None) -> tuple[list[dict], int] | None:
-    """The session's own record for a single file at the cache root that has no resume record yet.
+    """The session's own record for a single file at the cache root that its resume record does not
+    list yet: no record is saved yet, or none of the file's bytes has arrived.
 
     Such a torrent has no directory to walk, so without this it would have no listing at all
-    until the engine's next save -- and the player's first request, which is what teaches the
-    library what the file is, would find nothing to match. Only one record, of this name, whose
+    until then -- and the player's first request, which is what teaches the library what the
+    file is, would find nothing to match. Only one record, of this name, whose
     length the file on disk has, and only a video's, as everywhere else in the listing; its
     `wanted` is only playback's focus and is dropped. The count stays unknown (0), so the page
     does not treat the list as the torrent's whole one.
