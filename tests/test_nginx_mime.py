@@ -24,15 +24,26 @@ def _uncommented(path: pathlib.Path) -> str:
 
 
 def _block_end(text: str, open_brace: int) -> int:
-    """Index of the `}` that closes the `{` at `open_brace`."""
-    depth = 0
-    for i in range(open_brace, len(text)):
-        if text[i] == "{":
+    """Index of the `}` that closes the `{` at `open_brace`. A brace inside a quoted string --
+    `return 200 '}'` -- is text, not structure, and a backslash escapes the next character."""
+    depth, quote, i = 0, None, open_brace
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "{":
             depth += 1
-        elif text[i] == "}":
+        elif ch == "}":
             depth -= 1
             if depth == 0:
                 return i
+        i += 1
     raise AssertionError("unbalanced braces in the nginx config")
 
 
@@ -70,3 +81,10 @@ def test_no_types_block_in_a_server_scope():
     for server in servers:
         assert not _TYPES.search(server)
     assert not _TYPES.search(_uncommented(_LOCATIONS))
+
+
+def test_a_quoted_brace_is_not_structure():
+    """A `}` inside a quoted string used to close the block early, so a types block after it
+    escaped the server scope the guard checks."""
+    text = "server { return 200 '}'; types { application/wasm wasm; } }"
+    assert _block_end(text, text.index("{")) == len(text) - 1
