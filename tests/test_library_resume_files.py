@@ -174,9 +174,40 @@ def test_a_brand_new_single_file_is_listed_from_its_handle(tmp_path):
     [e] = [e for e in state["entries"] if e.get("infoHash")]
     assert e["files"] == [dict(live[0], wanted=False)]
     assert e["numFiles"] == 0 and e["filesFrom"] == "disk"
+    assert "children" not in e  # the entry already names its one file, record or not
     hits = model.learn_labels(state, "series", "tt0000002:4:5",
                               {"videoSize": str(size), "filename": name})
     assert [ih for ih, _ in hits] == [FILE_IH]
+
+
+@pytest.mark.parametrize("live", [
+    [{"index": 0, "name": "The.Show.S04E05.1080p.mkv", "size": 6000, "downloaded": 600},
+     {"index": 1, "name": "The.Show.nfo", "size": 10, "downloaded": 10}],
+    [{"index": 0, "name": "Another.Show.S01E01.mkv", "size": 6000, "downloaded": 600}],
+    [{"index": 0, "name": "The.Show.S04E05.1080p.mkv", "size": 5999, "downloaded": 600}],
+], ids=["two records", "another name", "another length"])
+def test_a_brand_new_root_file_takes_only_its_own_record(tmp_path, live):
+    """Only the one record that IS this file -- by name, and by the length it has on disk -- stands
+    in for a resume record not saved yet; anything else leaves the walk's answer, which is none."""
+    name, size = "The.Show.S04E05.1080p.mkv", 6000
+    (tmp_path / name).write_bytes(b"x" * size)
+    e = _entry(tmp_path, _Eng({name: FILE_IH}, {FILE_IH: live}))
+    assert e["files"] == [] and e["filesFrom"] is None
+
+
+def test_a_folder_holding_one_file_keeps_its_card(tmp_path):
+    """The entry is named after the folder, so its one file still gets a card that names it, as
+    the walk gave it before. Only a card that would repeat the entry's own name is left out."""
+    name = "The.Show.S01E01.1080p"
+    _record(tmp_path, DIR_IH, {"name": name, "files": [
+        {"length": 5000, "path": ["The.Show.S01E01.1080p.mkv"]}]})
+    (tmp_path / name).mkdir()
+    (tmp_path / name / "The.Show.S01E01.1080p.mkv").write_bytes(b"x" * 5000)
+    _index(tmp_path, **{name: DIR_IH})
+    e = _entry(tmp_path)
+    assert e["numFiles"] == 1 and e["filesFrom"] == "resume"
+    [card] = e["children"]
+    assert (card["name"], card["fileIdx"]) == ("The.Show.S01E01.1080p.mkv", 0)
 
 
 def test_no_record_and_no_live_list_is_the_walk_as_before(tmp_path):

@@ -284,10 +284,11 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         scraps = [f for f in held if f not in files]
         # One file is worth a card too when the list is not the engine's: the entry is named after
         # the TORRENT, so a pack holding a single episode otherwise shows the season's name and
-        # nothing that says which episode it is. A single-file torrent is the exception -- its
-        # entry already names its one file.
+        # nothing that says which episode it is. Not when the card would only repeat the entry's
+        # name: a single-file torrent's entry IS its one file, whether or not its resume record
+        # has been saved yet -- so the file count cannot be what decides it.
         if len(files) > 1 or (files and scraps) or (files and not engine_files
-                                                     and num_files != 1):
+                                                     and files[0]["name"] != name):
             parent = entries[-1]
             if scraps:
                 parent["scraps"] = {"count": len(scraps),
