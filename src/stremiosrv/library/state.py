@@ -12,10 +12,12 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
 
 from stremiosrv import cache as cachemod
 from stremiosrv import pins as pinsmod
 from stremiosrv.library import labels as labelsmod
+from stremiosrv.library import torrentfiles
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +100,75 @@ def _disk_files(cache_root: str, name: str, live: list[dict] | None = None) -> l
     return out
 
 
+def _torrent_files(cache_root: str, name: str, info_hash: str,
+                   live: list[dict] | None) -> tuple[list[dict], int] | None:
+    """The torrent's OWN file records, and its file count, for a torrent the session is not
+    tracking -- or None when no resume record knows it, and the disk is all there is (see
+    _disk_files).
+
+    A directory listing has names and sizes but no torrent file indices, and nothing at all for a
+    torrent that is one bare file at the cache root. The addon then offered no episode of a pack --
+    a real pack numbered its files E06, E02, E03, E04, E05, E01, E07, E08, so any order-based
+    guess plays the wrong one -- and could never learn or offer a single-file release.
+
+    The resume record gives each file's index, path and length. A file the session holds is
+    counted by its handle, matched on that index -- it may be being written, and its holes are
+    what the disk cannot be asked about cheaply (see _disk_files). Every other file is measured on
+    the disk, and one whose length there is not the torrent's belongs to something else. A
+    brand-new torrent has no record until the engine's next save, half a minute at most, and
+    keeps the walk until then -- except a single file at the root, which has no directory to
+    walk: see _fresh_single_file.
+    """
+    base = os.path.join(cache_root, name)
+    resume = torrentfiles.listing(cache_root, info_hash) if info_hash else None
+    if resume is None:
+        return _fresh_single_file(base, name, live)
+    held = {f.get("index"): f for f in live or [] if isinstance(f.get("index"), int)}
+    out: list[dict] = []
+    for tf in resume.files:
+        path = os.path.join(base, *tf.parts)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode) or st.st_size != tf.size:
+            continue
+        seen = held.get(tf.index)
+        got = (seen.get("downloaded") or 0) if seen else cachemod.data_bytes(path, st)
+        if not got:
+            continue
+        out.append({
+            "index": tf.index,
+            "name": tf.parts[-1] if tf.parts else name,
+            "size": tf.size,
+            "downloaded": got,
+            "progress": round(got / tf.size, 4) if tf.size else 0.0,
+            "wanted": False,
+        })
+    return out, resume.count
+
+
+def _fresh_single_file(base: str, name: str,
+                       live: list[dict] | None) -> tuple[list[dict], int] | None:
+    """The session's own record for a single file at the cache root that has no resume record yet.
+
+    Such a torrent has no directory to walk, so without this it would have no listing at all
+    until the engine's next save -- and the player's first request, which is what teaches the
+    library what the file is, would find nothing to match. Only one record, of this name, whose
+    length the file on disk has; its `wanted` is only playback's focus and is dropped. The count
+    stays unknown (0), so the page does not treat the list as the torrent's whole one.
+    """
+    if not live or len(live) != 1 or live[0].get("name") != name:
+        return None
+    try:
+        st = os.stat(base)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_size != live[0].get("size"):
+        return None
+    return [dict(live[0], wanted=False)], 0
+
+
 def _engine_view(engine) -> tuple[dict, dict, dict]:
     """(name -> infohash, infohash -> tracked status, infohash -> live per-file list). Never
     raises: the engine is allowed to be absent or briefly broken, and a listing of the disk is
@@ -150,11 +221,20 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         if ih:
             seen.add(ih)
         # A tracked torrent (kept or downloading) lists its files from the engine: what is wanted
-        # as well as what is present. Anything else lists the disk -- even with a live handle,
-        # whose `wanted` is only playback's focus -- and takes byte counts from that handle where
-        # it reports the file (see _disk_files). Not both.
+        # as well as what is present. Anything else lists the torrent's own files where the
+        # session or a resume record knows them (see _torrent_files), and the disk otherwise.
         engine_files = pin.get("files") or []
-        disk_files = [] if engine_files else _disk_files(cache_root, name, live.get(ih))
+        own = None if engine_files else _torrent_files(cache_root, name, ih, live.get(ih))
+        if engine_files:
+            listed, num_files, source = engine_files, pin.get("numFiles") or 0, "engine"
+        elif own is not None:
+            listed, num_files = own
+            # The page reads anything but "disk" as the torrent's whole list, and its single-file
+            # shortcut needs the count -- which only the resume record carries.
+            source = "resume" if num_files else ("disk" if listed else None)
+        else:
+            listed, num_files = _disk_files(cache_root, name, live.get(ih)), 0
+            source = "disk" if listed else None
         entries.append({
             "name": name,
             "infoHash": ih or None,
@@ -175,12 +255,12 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             # Distinct from `children` below on purpose: `children` is the subset worth drawing as
             # its own card, while these are the facts a caller matches against -- which is what
             # tells a release for episode 6 apart from the episode 5 the torrent is busy with.
-            "files": engine_files or disk_files,
-            "numFiles": pin.get("numFiles") or 0,
+            "files": listed,
+            "numFiles": num_files,
             # Where those facts came from. A disk listing has no file indices and cannot know how
             # many files the TORRENT has -- only how many have landed -- so a caller must not read
             # it as though it were the torrent's own list.
-            "filesFrom": "engine" if engine_files else ("disk" if disk_files else None),
+            "filesFrom": source,
             "state": pin.get("state", "idle"),
             "peers": pin.get("peers", 0),
             "seeds": pin.get("seeds", 0),
@@ -199,13 +279,15 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         # has, and listing them as though they were is the same lie as hiding the real ones, told
         # the other way round. Show what someone could actually watch; account for the rest in one
         # line rather than dropping it, because unattributed disk is what this view exists to stop.
-        held = [f for f in (engine_files or disk_files) if f.get("downloaded")]
+        held = [f for f in listed if f.get("downloaded")]
         files = [f for f in held if is_watchable(f)]
         scraps = [f for f in held if f not in files]
-        # One file is worth a card too when the list came from the disk: the entry is named after
+        # One file is worth a card too when the list is not the engine's: the entry is named after
         # the TORRENT, so a pack holding a single episode otherwise shows the season's name and
-        # nothing that says which episode it is.
-        if len(files) > 1 or (files and scraps) or (files and not engine_files):
+        # nothing that says which episode it is. A single-file torrent is the exception -- its
+        # entry already names its one file.
+        if len(files) > 1 or (files and scraps) or (files and not engine_files
+                                                     and num_files != 1):
             parent = entries[-1]
             if scraps:
                 parent["scraps"] = {"count": len(scraps),
