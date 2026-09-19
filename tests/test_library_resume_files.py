@@ -320,3 +320,97 @@ def test_a_brand_new_root_file_that_is_not_a_video_is_not_listed(tmp_path):
     live = [{"index": 0, "name": name, "size": 6000, "downloaded": 600}]
     e = _entry(tmp_path, _Eng({name: FILE_IH}, {FILE_IH: live}))
     assert e["files"] == [] and e["filesFrom"] is None
+
+
+def test_an_episode_still_arriving_is_not_answered_with_another_one(tmp_path, monkeypatch):
+    """The label names the episode a pack was learned from, not a file. That episode, played
+    part-way and left for the next, stays partial -- and the label's fallback, picking a file by
+    itself, offered the next episode's on its page."""
+    _pack(tmp_path, present=("E01", "E02"))
+    labels.put(str(tmp_path), PACK_IH, {"metaId": "tt0000001", "type": "series", "season": 2,
+                                        "episode": 1, "videoId": "tt0000001:2:1"})
+
+    def arrived(path, st):
+        return st.st_size * 3 // 10 if path.endswith("E01.mkv") else st.st_size
+
+    monkeypatch.setattr(cachemod, "data_bytes", arrived)
+    state = statemod.build(str(tmp_path), None)
+    assert model.streams_for_meta_id(state, "tt0000001:2:1", "http://o") == []
+    assert [s["url"] for s in model.streams_for_meta_id(state, "tt0000001:2:2", "http://o")] == [
+        f"http://o/{PACK_IH}/1"]
+
+
+def test_a_film_still_arriving_is_not_answered_with_its_sample(tmp_path, monkeypatch):
+    """A film's main file is its largest; its sample, complete long before, is never offered in its
+    place -- and the film plays at its own index once all of it is here."""
+    name = "The.Film.2024.1080p"
+    _record(tmp_path, DIR_IH, {"name": name, "files": [
+        {"length": 900, "path": ["Sample", "the.film.sample.mkv"]},
+        {"length": 9000, "path": ["The.Film.2024.1080p.mkv"]}]})
+    d = tmp_path / name
+    (d / "Sample").mkdir(parents=True)
+    (d / "Sample" / "the.film.sample.mkv").write_bytes(b"x" * 900)
+    (d / "The.Film.2024.1080p.mkv").write_bytes(b"x" * 9000)
+    _index(tmp_path, **{name: DIR_IH})
+    labels.put(str(tmp_path), DIR_IH, {"metaId": "tt0000003", "type": "movie",
+                                       "videoId": "tt0000003"})
+    film = {"arrived": 2700}
+
+    def arrived(path, st):
+        return film["arrived"] if path.endswith("1080p.mkv") else st.st_size
+
+    monkeypatch.setattr(cachemod, "data_bytes", arrived)
+    assert model.streams_for_meta_id(statemod.build(str(tmp_path), None),
+                                     "tt0000003", "http://o") == []
+    film["arrived"] = 9000
+    streams = model.streams_for_meta_id(statemod.build(str(tmp_path), None), "tt0000003",
+                                        "http://o")
+    assert [s["url"] for s in streams] == [f"http://o/{DIR_IH}/1"]
+
+
+def test_a_pack_whose_names_carry_no_episode_is_not_guessed_from_its_label(tmp_path):
+    """The label says episode 1, but nothing says which file that is: offering either would be a
+    guess, and the larger one was episode 2."""
+    name = "[Group] The Show"
+    _record(tmp_path, PACK_IH, {"name": name, "files": [
+        {"length": 6000, "path": ["[Group] The Show - 02 [1080p].mkv"]},
+        {"length": 5000, "path": ["[Group] The Show - 01 [1080p].mkv"]}]})
+    d = tmp_path / name
+    d.mkdir()
+    (d / "[Group] The Show - 02 [1080p].mkv").write_bytes(b"x" * 6000)
+    (d / "[Group] The Show - 01 [1080p].mkv").write_bytes(b"x" * 5000)
+    _index(tmp_path, **{name: PACK_IH})
+    labels.put(str(tmp_path), PACK_IH, {"metaId": "tt0000004", "type": "series", "season": 1,
+                                        "episode": 1, "videoId": "tt0000004:1:1"})
+    state = statemod.build(str(tmp_path), None)
+    assert model.streams_for_meta_id(state, "tt0000004:1:1", "http://o") == []
+
+
+def test_a_lone_file_named_as_another_episode_is_not_offered_on_the_label(tmp_path):
+    """A label learned while its own episode had no bytes -- the walk lists such files -- can
+    outlive them: the one file listed now reads as another episode, and must not play in its
+    place."""
+    _pack(tmp_path, present=("E02",))
+    labels.put(str(tmp_path), PACK_IH, {"metaId": "tt0000001", "type": "series", "season": 2,
+                                        "episode": 1, "videoId": "tt0000001:2:1"})
+    state = statemod.build(str(tmp_path), None)
+    assert model.streams_for_meta_id(state, "tt0000001:2:1", "http://o") == []
+
+
+def test_a_lone_video_named_without_an_episode_plays_on_its_label_at_its_own_index(tmp_path):
+    """Where the only video's name reads as no episode, the label is all there is -- and it plays
+    at the video's own index, 1 here, where the walk could only guess 0."""
+    name = "The Show Special"
+    _record(tmp_path, DIR_IH, {"name": name, "files": [
+        {"length": 115, "path": ["Visit us.url"]},
+        {"length": 7000, "path": ["the.show.special.mkv"]}]})
+    d = tmp_path / name
+    d.mkdir()
+    (d / "Visit us.url").write_bytes(b"x" * 115)
+    (d / "the.show.special.mkv").write_bytes(b"x" * 7000)
+    _index(tmp_path, **{name: DIR_IH})
+    labels.put(str(tmp_path), DIR_IH, {"metaId": "tt0000005", "type": "series", "season": 1,
+                                       "episode": 1, "videoId": "tt0000005:1:1"})
+    streams = model.streams_for_meta_id(statemod.build(str(tmp_path), None), "tt0000005:1:1",
+                                        "http://o")
+    assert [s["url"] for s in streams] == [f"http://o/{DIR_IH}/1"]

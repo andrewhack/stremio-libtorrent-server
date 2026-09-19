@@ -178,13 +178,16 @@ def test_without_a_wanted_file_the_biggest_addressable_file_wins():
     assert am.playable_index(e) == 7
 
 
-def test_ranking_with_no_wanted_file_uses_bytes_downloaded_not_declared_size():
-    """`meta_for` was already fixed to rank by `downloaded`; this is the same fix for
-    `playable_index`. `size` is the torrent's declared size and is identical for a file at 0% and
-    one that is finished -- it says nothing about what is actually on disk."""
+def test_without_a_wanted_file_only_the_main_file_plays_and_only_once_complete():
+    """The main file is the largest the torrent lists, by declared size; the bytes on disk decide
+    only WHEN it plays. A smaller file that happens to be complete -- a sample, another episode, a
+    text file -- is never offered in its place: that is how a film's page played its sample once
+    untracked torrents gained their indices."""
     e = _entry(files=[{"index": 1, "name": "a.mkv", "size": 9000, "downloaded": 100},
-                      {"index": 2, "name": "b.mkv", "size": 10, "downloaded": 5000}])
-    assert am.playable_index(e) == 2
+                      {"index": 2, "name": "b.mkv", "size": 10, "downloaded": 10}])
+    assert am.playable_index(e) is None
+    e["files"][0]["downloaded"] = 9000
+    assert am.playable_index(e) == 1
 
 
 def test_a_file_the_engine_can_address_beats_one_it_cannot():
@@ -359,6 +362,30 @@ def test_a_single_file_episode_still_matches_on_its_label_alone():
     state = {"entries": [e]}
     assert len(am.streams_for_meta_id(state, "tt0000011:2:4", ORIGIN)) == 1
     assert am.streams_for_meta_id(state, "tt0000011:2:5", ORIGIN) == []
+
+
+def test_a_lone_file_named_with_a_resolution_still_plays_on_its_label():
+    """1920x1080 is not an episode number: for a lone file named so, the label is still all there
+    is."""
+    e = _entry(label={"type": "series", "metaId": "tt0000012", "season": 1, "episode": 2,
+                      "name": "Episode"},
+               files=[{"index": 1, "name": "show.special.1920x1080.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    assert len(am.streams_for_meta_id({"entries": [e]}, "tt0000012:1:2", ORIGIN)) == 1
+
+
+def test_a_download_that_recorded_its_file_still_plays_on_its_label():
+    """A page download narrowed to one episode records which file it is for, so its label may pick
+    that file even where the pack's names read as no episode and a neighbour's spill is listed."""
+    e = _entry(wantedFile="[Group] Show - 03.mkv",
+               label={"type": "series", "metaId": "tt0000013", "season": 1, "episode": 3,
+                      "name": "Pack"},
+               files=[{"index": 2, "name": "[Group] Show - 02.mkv", "size": 4 * GB,
+                       "downloaded": 3 * 1024 ** 2, "progress": 0.0007},
+                      {"index": 3, "name": "[Group] Show - 03.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0, "wanted": True}])
+    streams = am.streams_for_meta_id({"entries": [e]}, "tt0000013:1:3", ORIGIN)
+    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/3"]
 
 
 def test_a_pack_never_answers_for_a_different_show():

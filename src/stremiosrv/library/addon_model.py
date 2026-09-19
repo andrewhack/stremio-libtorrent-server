@@ -241,13 +241,15 @@ def playable_index(entry: dict) -> int | None:
     `<origin>/<infohash>/<fileIdx>` and there is nothing else to put there. `wantedFile` is the
     NAME of the file the download was started for (engine.wanted_path), never an index -- it wins
     by matching basenames against the addressable files, whichever of them it matches, whether or
-    not it has bytes yet, because it is what the download was started for. Otherwise the
-    addressable file with the most bytes DOWNLOADED, not the largest declared size -- size is
-    identical for a file at 0% and one that is finished, so ranking by it can point at a file that
-    is not actually here yet. With at most one file listed (a single-file torrent, or no file list
-    at all) index 0 is the only answer and a safe one. Anything wider with no addressable file --
-    state.py's disk fallback reports every file as index None once the engine handle is gone -- is
-    refused rather than guessed: on a real torrent index 0 was a text file and the video was index 1.
+    not it has bytes yet, because it is what the download was started for. Otherwise the torrent's
+    main file: the largest addressable one by declared size, and only once all of it is here. The
+    size picks WHICH file and the bytes decide WHEN -- a smaller file that happens to be complete (a
+    sample, another episode, a text file) is never offered in its place, which is how a film's page
+    played its sample once untracked torrents gained their indices. With at most one file listed (a
+    single-file torrent, or no file list at all) index 0 is the only answer and a safe one.
+    Anything wider with no addressable file -- state.py's disk fallback reports every file as index
+    None -- is refused rather than guessed: on a real torrent index 0 was a text file and the video
+    was index 1.
     """
     files = entry.get("files") or []
     addressable = [f for f in files if isinstance(f.get("index"), int)]
@@ -257,13 +259,10 @@ def playable_index(entry: dict) -> int | None:
         for f in addressable:
             if _basename(f.get("name") or "") == wanted_base:
                 return f["index"] if is_complete(f) else None
-    # Complete only. Ranking by raw bytes would hand back a neighbour's boundary spill, and
-    # offering a file still arriving cannot keep the promise the row makes.
-    complete = [f for f in addressable if is_complete(f)]
-    if complete:
-        return max(complete, key=lambda f: f.get("downloaded") or 0)["index"]
+    # Complete only: offering a file still arriving cannot keep the promise the row makes.
     if addressable:
-        return None
+        main = max(addressable, key=lambda f: f.get("size") or 0)
+        return main["index"] if is_complete(main) else None
     # No addressable index -- state.py's disk fallback reports every file as index None once the
     # engine handle is gone, which after a restart is most of the cache. A single file there is
     # still index 0, and its completeness is knowable even when its index is not.
@@ -323,6 +322,33 @@ def episode_index(entry: dict, season: int, episode: int) -> int | None:
     return None if pos is None else have[pos]["index"]
 
 
+# A file name that reads as an episode, in either form pins.select_wanted_file reads: S04E05 and
+# 4x05. The digits are bounded so that a resolution such as 1920x1080 does not read as one.
+_EPISODE_NAME_RE = re.compile(r"s\d{1,3}[\s._-]*e\d{1,4}(?!\d)|(?<!\d)\d{1,2}\s*x\s*\d{1,3}(?!\d)",
+                              re.IGNORECASE)
+
+
+def _label_alone_names_the_file(entry: dict) -> bool:
+    """Whether an episode label can say by itself which of this entry's files it means.
+
+    A label names the episode its torrent was learned from, not a file. Where the files carry the
+    torrent's own indices, `playable_index` would pick one by itself -- and on a pack that was
+    another episode: one played part-way and left for the next stays partial, and its page offered
+    the next one's file. So the label decides alone only where there is nothing to confuse: a
+    download that recorded its file (`wantedFile`); no addressable file at all (the disk walk's
+    listing, where `playable_index` plays a lone file as 0 and refuses a pack); or exactly one
+    addressable file whose name reads as no episode. A name that does read as one is
+    `episode_index`'s to answer, and it already has.
+    """
+    if entry.get("wantedFile"):
+        return True
+    addressable = [f for f in entry.get("files") or [] if isinstance(f.get("index"), int)]
+    if not addressable:
+        return True
+    return (len(addressable) == 1
+            and not _EPISODE_NAME_RE.search(_basename(addressable[0].get("name") or "")))
+
+
 def _label_matches(label: dict, base: str, season: int | None, episode: int | None) -> bool:
     if (label.get("metaId") or "") != base:
         return False
@@ -355,11 +381,13 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
         if season is not None:
             # The pack's own files first: they cover every episode it holds, not only the one the
             # label happens to name. The label match stays below as the fallback for a torrent
-            # whose file names carry no readable episode number -- there, the label is all we have.
+            # whose file names carry no readable episode number -- there, the label is all we have
+            # -- and only where the label alone can say which file it means.
             idx = episode_index(e, season, episode)
             if idx is not None:
                 stream = stream_for(e, origin, idx)
-        if stream is None and _label_matches(label, base, season, episode):
+        if (stream is None and _label_matches(label, base, season, episode)
+                and (season is None or _label_alone_names_the_file(e))):
             stream = stream_for(e, origin)
         if stream is not None:
             out.append(stream)
