@@ -137,8 +137,9 @@ def listing(cache_root: str, info_hash: str) -> Listing | None:
     An info dict never changes -- the infohash is its hash -- so a listing once read is kept by the
     record's path alone. The engine rewrites the record of every torrent in its session (every
     30 s by default), and a cache keyed on the record's version kept one more copy per rewrite. A
-    record that is missing, half-written, unreadable or too large is not kept: it is tried again
-    on the next call.
+    record that is missing, half-written, unreadable, too large or still without an info dict is
+    not kept: it is tried again on the next call. One whose info dict cannot be listed is kept,
+    as an empty listing.
     """
     try:
         return _read(resume_path(cache_root, info_hash))
@@ -155,7 +156,11 @@ def _read(path: str) -> Listing:
             record = bdecode(f.read())
     except (OSError, ValueError):
         raise _NoListing from None
-    found = parse_info(record.get(b"info")) if isinstance(record, dict) else None
-    if found is None:
-        raise _NoListing
-    return found
+    info = record.get(b"info") if isinstance(record, dict) else None
+    if not isinstance(info, dict):
+        raise _NoListing  # no info dict yet: a torrent still fetching its metadata
+    # An info dict never changes, so one that cannot be listed (a v2-only one, say) is kept too,
+    # as an empty listing -- which the library answers with the walk -- rather than decoded again
+    # on every build.
+    found = parse_info(info)
+    return found if found is not None else Listing(0, ())

@@ -154,5 +154,27 @@ def test_a_record_not_readable_yet_is_tried_again(tmp_path):
 
 def test_a_record_over_the_size_cap_is_not_read(tmp_path, monkeypatch):
     monkeypatch.setattr(tf, "_MAX_RECORD_BYTES", 10)
+    monkeypatch.setattr(tf, "bdecode", lambda buf: pytest.fail("a record over the cap was read"))
     write_record(tmp_path, {"name": "A.mkv", "length": 1})
     assert tf.listing(str(tmp_path), IH) is None
+
+
+def test_an_info_dict_that_cannot_be_listed_is_kept_as_an_empty_listing(tmp_path):
+    """It never changes either. Decoded again on every build, a large v2-only record cost 0.7 s a
+    time; kept as an empty listing, it is answered with the walk at no cost."""
+    tf._read.cache_clear()
+    write_record(tmp_path, {"name": "v2", "file tree": {}})
+    first = tf.listing(str(tmp_path), IH)
+    assert first == tf.Listing(0, ())
+    assert tf.listing(str(tmp_path), IH) is first
+    assert tf._read.cache_info().currsize == 1
+
+
+def test_a_record_without_an_info_dict_yet_is_tried_again(tmp_path):
+    """A torrent still fetching its metadata saves a record without an info dict."""
+    tf._read.cache_clear()
+    (tmp_path / ".resume").mkdir()
+    (tmp_path / ".resume" / f"{IH}.fastresume").write_bytes(benc({"name": "x"}))
+    assert tf.listing(str(tmp_path), IH) is None
+    write_record(tmp_path, {"name": "A.mkv", "length": 1})
+    assert tf.listing(str(tmp_path), IH) == tf.Listing(1, (tf.TorrentFile(0, (), 1),))
