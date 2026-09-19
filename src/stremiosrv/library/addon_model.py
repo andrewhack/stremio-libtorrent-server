@@ -323,9 +323,10 @@ def episode_index(entry: dict, season: int, episode: int) -> int | None:
 
 
 # A file name that reads as an episode, in either form pins.select_wanted_file reads: S04E05 and
-# 4x05. The digits are bounded so that a resolution such as 1920x1080 does not read as one.
-_EPISODE_NAME_RE = re.compile(r"s\d{1,3}[\s._-]*e\d{1,4}(?!\d)|(?<!\d)\d{1,2}\s*x\s*\d{1,3}(?!\d)",
-                              re.IGNORECASE)
+# 4x05. The digits are bounded so that a resolution such as 1920x1080 does not read as one, and
+# a decimal before the x -- DD5.1x264, an audio and a codec tag -- does not either.
+_EPISODE_NAME_RE = re.compile(
+    r"s\d{1,3}[\s._-]*e\d{1,4}(?!\d)|(?<!\d)(?<!\d\.)\d{1,2}\s*x\s*\d{1,3}(?!\d)", re.IGNORECASE)
 
 
 def _label_alone_names_the_file(entry: dict) -> bool:
@@ -336,14 +337,18 @@ def _label_alone_names_the_file(entry: dict) -> bool:
     another episode: one played part-way and left for the next stays partial, and its page offered
     the next one's file. So the label decides alone only where there is nothing to confuse: a
     download that recorded its file (`wantedFile`); no addressable file at all (the disk walk's
-    listing, where `playable_index` plays a lone file as 0 and refuses a pack); or exactly one
-    addressable file whose name reads as no episode. A name that does read as one is
-    `episode_index`'s to answer, and it already has.
+    listing, where `playable_index` plays a lone file as 0 and refuses a pack); a torrent that
+    holds a single video, which is the file the label was learned from whatever its name says --
+    numbering unlike the app's (anime, split seasons, specials) is what the label is for; or
+    exactly one addressable file whose name reads as no episode. Otherwise a name that reads as
+    an episode is `episode_index`'s to answer, and it already has.
     """
     if entry.get("wantedFile"):
         return True
     addressable = [f for f in entry.get("files") or [] if isinstance(f.get("index"), int)]
     if not addressable:
+        return True
+    if entry.get("numVideos") == 1 or entry.get("numFiles") == 1:
         return True
     return (len(addressable) == 1
             and not _EPISODE_NAME_RE.search(_basename(addressable[0].get("name") or "")))

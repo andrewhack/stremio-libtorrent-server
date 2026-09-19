@@ -388,6 +388,25 @@ def test_a_download_that_recorded_its_file_still_plays_on_its_label():
     assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/3"]
 
 
+def test_a_single_file_torrent_plays_on_its_label_whatever_its_name_says():
+    """A torrent of one file can only mean that file, even when its name numbers the episode unlike
+    the app does -- which is what the label is for."""
+    e = _entry(label={"type": "series", "metaId": "tt0000015", "season": 2, "episode": 3,
+                      "name": "Episode"}, numFiles=1,
+               files=[{"index": 0, "name": "The.Show.S01E13.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    assert len(am.streams_for_meta_id({"entries": [e]}, "tt0000015:2:3", ORIGIN)) == 1
+
+
+def test_a_codec_tag_is_not_an_episode_number():
+    """DD5.1x264 names the audio and the codec, not season 1 episode 264."""
+    e = _entry(label={"type": "series", "metaId": "tt0000014", "season": 1, "episode": 2,
+                      "name": "Episode"}, numFiles=2,
+               files=[{"index": 1, "name": "the.show.special.DD5.1x264.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    assert len(am.streams_for_meta_id({"entries": [e]}, "tt0000014:1:2", ORIGIN)) == 1
+
+
 def test_a_pack_never_answers_for_a_different_show():
     e = _entry(label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5},
                files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB,

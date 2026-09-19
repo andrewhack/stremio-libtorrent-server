@@ -101,10 +101,10 @@ def _disk_files(cache_root: str, name: str, live: list[dict] | None = None) -> l
 
 
 def _torrent_files(cache_root: str, name: str, info_hash: str,
-                   live: list[dict] | None) -> tuple[list[dict], int] | None:
-    """The torrent's OWN video files, and its file count, for a torrent the session is not
-    tracking -- or None when no resume record finds any of them, and the disk is all there is
-    (see _disk_files).
+                   live: list[dict] | None) -> tuple[list[dict], int, int] | None:
+    """The torrent's OWN video files, its file count and how many videos it holds, for a torrent
+    the session is not tracking -- or None when no resume record finds any of them, and the disk
+    is all there is (see _disk_files).
 
     A directory listing has names and sizes but no torrent file indices, and nothing at all for a
     torrent that is one bare file at the cache root. The addon then offered no episode of a pack --
@@ -113,12 +113,14 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
 
     The resume record gives each file's index, path and length. Only videos are listed, as the
     walk lists them: a subtitle or a link file drew a card of its own, and one that was complete
-    was offered in place of a video still arriving. A file the session holds is counted by its
+    was offered in place of a video still arriving. The videos are counted from the record, here
+    or not: a torrent of one video can only mean that one, whatever its name says (see
+    addon_model._label_alone_names_the_file). A file the session holds is counted by its
     handle, matched on that index -- it may be being written, and its holes are what the disk
     cannot be asked about cheaply (see _disk_files). Every other file is measured on the disk, and
     one whose length there is not the torrent's belongs to something else. A file libtorrent wrote
     under another name than the record's (invalid UTF-8, a part too long, a duplicate) is missing
-    from the list, never listed at a wrong index. The walk answers when the record finds none of
+    from the list. The walk answers when the record finds none of
     its videos on the disk -- renamed, or nothing has arrived yet: an empty list reads as a
     single-file torrent's, whose one answer is index 0 -- and for a brand-new torrent, which has
     no record until the engine's next save (every 30 s by default). Either way a single file at
@@ -131,10 +133,12 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
         return _fresh_single_file(base, name, live)
     held = {f.get("index"): f for f in live or [] if isinstance(f.get("index"), int)}
     out: list[dict] = []
+    videos = 0
     for tf in resume.files:
         fname = tf.parts[-1] if tf.parts else name
         if not fname.lower().endswith(pinsmod.VIDEO_EXT):
             continue
+        videos += 1
         path = os.path.join(base, *tf.parts)
         try:
             st = os.stat(path)
@@ -154,11 +158,11 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
             "progress": round(got / tf.size, 4) if tf.size else 0.0,
             "wanted": False,
         })
-    return (out, resume.count) if out else _fresh_single_file(base, name, live)
+    return (out, resume.count, videos) if out else _fresh_single_file(base, name, live)
 
 
 def _fresh_single_file(base: str, name: str,
-                       live: list[dict] | None) -> tuple[list[dict], int] | None:
+                       live: list[dict] | None) -> tuple[list[dict], int, int] | None:
     """The session's own record for a single file at the cache root that its resume record does not
     list yet: no record is saved yet, or none of the file's bytes has arrived.
 
@@ -179,7 +183,7 @@ def _fresh_single_file(base: str, name: str,
         return None
     if not stat.S_ISREG(st.st_mode) or st.st_size != live[0].get("size"):
         return None
-    return [dict(live[0], wanted=False)], 0
+    return [dict(live[0], wanted=False)], 0, 1  # one video, however little of it is here
 
 
 def _engine_view(engine) -> tuple[dict, dict, dict]:
@@ -238,10 +242,11 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         # session or a resume record knows them (see _torrent_files), and the disk otherwise.
         engine_files = pin.get("files") or []
         own = None if engine_files else _torrent_files(cache_root, name, ih, live.get(ih))
+        num_videos = None
         if engine_files:
             listed, num_files, source = engine_files, pin.get("numFiles") or 0, "engine"
         elif own is not None:
-            listed, num_files = own
+            listed, num_files, num_videos = own
             # The page reads anything but "disk" as the torrent's whole list, and its single-file
             # shortcut needs the count -- which only the resume record carries.
             source = "resume" if num_files else ("disk" if listed else None)
@@ -270,6 +275,10 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             # tells a release for episode 6 apart from the episode 5 the torrent is busy with.
             "files": listed,
             "numFiles": num_files,
+            # How many videos the torrent holds, from its own record -- None where only the engine
+            # or the disk knows the files. One video can only be the file a label means, whatever
+            # its name says: see addon_model._label_alone_names_the_file.
+            "numVideos": num_videos,
             # Where those facts came from. A disk listing has no file indices and cannot know how
             # many files the TORRENT has -- only how many have landed -- so a caller must not read
             # it as though it were the torrent's own list.

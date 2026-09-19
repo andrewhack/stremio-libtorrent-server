@@ -433,3 +433,53 @@ def test_a_root_file_the_session_holds_lists_itself_before_its_first_bytes(tmp_p
     labels.put(str(tmp_path), FILE_IH, dict(hits[0][1]))
     state = statemod.build(str(tmp_path), engine)
     assert model.streams_for_meta_id(state, "tt0000002:4:5", "http://o") == []
+
+
+def test_an_entry_carries_how_many_videos_its_torrent_holds(tmp_path):
+    """Counted from the torrent's own record, whether or not each video is here yet."""
+    _pack(tmp_path, present=("E01",))
+    assert _entry(tmp_path)["numVideos"] == 8
+
+
+def test_a_single_file_numbered_unlike_its_label_still_plays_on_it(tmp_path):
+    """Numbering unlike the app's -- anime, split seasons, specials -- is what the label fallback is
+    for: a single-file release learned from its own playback as S2E3, while its name says S01E13,
+    can only mean that one file."""
+    _root_file(tmp_path, name="The.Show.S01E13.1080p.mkv")
+    labels.put(str(tmp_path), FILE_IH, {"metaId": "tt0000006", "type": "series", "season": 2,
+                                        "episode": 3, "videoId": "tt0000006:2:3"})
+    state = statemod.build(str(tmp_path), None)
+    assert [s["url"] for s in model.streams_for_meta_id(state, "tt0000006:2:3", "http://o")] == [
+        f"http://o/{FILE_IH}/0"]
+
+
+def test_a_folder_with_one_video_numbered_unlike_its_label_still_plays_on_it(tmp_path):
+    """The same for a folder that holds one video beside a link file: the record says the torrent
+    holds a single video, so the label can only mean it -- at its own index."""
+    name = "The.Show.S01E13.1080p"
+    _record(tmp_path, DIR_IH, {"name": name, "files": [
+        {"length": 115, "path": ["Visit us.url"]},
+        {"length": 7000, "path": ["The.Show.S01E13.1080p.mkv"]}]})
+    d = tmp_path / name
+    d.mkdir()
+    (d / "Visit us.url").write_bytes(b"x" * 115)
+    (d / "The.Show.S01E13.1080p.mkv").write_bytes(b"x" * 7000)
+    _index(tmp_path, **{name: DIR_IH})
+    labels.put(str(tmp_path), DIR_IH, {"metaId": "tt0000006", "type": "series", "season": 2,
+                                       "episode": 3, "videoId": "tt0000006:2:3"})
+    state = statemod.build(str(tmp_path), None)
+    assert [s["url"] for s in model.streams_for_meta_id(state, "tt0000006:2:3", "http://o")] == [
+        f"http://o/{DIR_IH}/1"]
+
+
+def test_a_brand_new_single_file_plays_on_its_label_before_its_record_is_saved(tmp_path):
+    """Listed from the session's own record, it is one video all the same."""
+    name, size = "The.Show.S04E05.1080p.mkv", 6000
+    (tmp_path / name).write_bytes(b"x" * size)
+    live = [{"index": 0, "name": name, "size": size, "downloaded": size, "progress": 1.0,
+             "wanted": True}]
+    labels.put(str(tmp_path), FILE_IH, {"metaId": "tt0000007", "type": "series", "season": 1,
+                                        "episode": 2, "videoId": "tt0000007:1:2"})
+    state = statemod.build(str(tmp_path), _Eng({name: FILE_IH}, {FILE_IH: live}))
+    assert [s["url"] for s in model.streams_for_meta_id(state, "tt0000007:1:2", "http://o")] == [
+        f"http://o/{FILE_IH}/0"]
