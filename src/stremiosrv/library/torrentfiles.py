@@ -21,6 +21,11 @@ from stremiosrv import cache as cachemod
 
 _MAX_DEPTH = 64
 
+# A record larger than this is not read, and the walk answers for its torrent: it is decoded in
+# the request's thread and kept in memory, and one hostile torrent must not cost more than this.
+# A real 5,000-file torrent's record is about 1.5 MB.
+_MAX_RECORD_BYTES = 32 * 1024 * 1024
+
 
 class TorrentFile(NamedTuple):
     index: int              # libtorrent's index for the file: its position in the info dict
@@ -85,25 +90,28 @@ def _safe(part: str) -> bool:
 def parse_info(info) -> Listing | None:
     """The file list of a v1 info dict, or None for anything else -- a v2-only one included.
 
-    A pad file keeps its slot in the numbering, because libtorrent counts it, and is not
-    listed. A file with a path part that could leave the torrent's directory is not listed
-    either.
+    Read the way libtorrent reads it: `files` before `length`, and `path.utf-8` only when it is a
+    list. A pad file or a symlink keeps its slot in the numbering, because libtorrent counts it,
+    and is not listed: neither has content of its own. A file with a path part that could leave
+    the torrent's directory is not listed either.
     """
     if not isinstance(info, dict):
         return None
-    if isinstance(info.get(b"length"), int):
-        return Listing(1, (TorrentFile(0, (), info[b"length"]),))
     files = info.get(b"files")
     if not isinstance(files, list):
+        if isinstance(info.get(b"length"), int):
+            return Listing(1, (TorrentFile(0, (), info[b"length"]),))
         return None
     out = []
     for index, f in enumerate(files):
         if not isinstance(f, dict) or not isinstance(f.get(b"length"), int):
             return None
         attr = f.get(b"attr")
-        if isinstance(attr, bytes) and b"p" in attr:
+        if isinstance(attr, bytes) and (b"p" in attr or b"l" in attr):
             continue
-        raw = f.get(b"path.utf-8", f.get(b"path"))
+        raw = f.get(b"path.utf-8")
+        if not isinstance(raw, list):
+            raw = f.get(b"path")
         if (not isinstance(raw, list) or not raw
                 or not all(isinstance(p, bytes) for p in raw)):
             return None
@@ -118,25 +126,36 @@ def resume_path(cache_root: str, info_hash: str) -> str:
                         info_hash.lower() + ".fastresume")
 
 
+class _NoListing(Exception):
+    """No listing from this record at present. Raised rather than returned, because lru_cache
+    keeps what a call returns and nothing that it raises."""
+
+
 def listing(cache_root: str, info_hash: str) -> Listing | None:
     """The torrent's own file list from its resume record, or None when there is no readable one.
 
-    A record is decoded once per version of it: its mtime and size are part of the cache key, so
-    a record the engine rewrites is read again.
+    An info dict never changes -- the infohash is its hash -- so a listing once read is kept by the
+    record's path alone. The engine rewrites the record of every torrent in its session (every
+    30 s by default), and a cache keyed on the record's version kept one more copy per rewrite. A
+    record that is missing, half-written, unreadable or too large is not kept: it is tried again
+    on the next call.
     """
-    path = resume_path(cache_root, info_hash)
     try:
-        st = os.stat(path)
-    except OSError:
+        return _read(resume_path(cache_root, info_hash))
+    except _NoListing:
         return None
-    return _read(path, st.st_mtime_ns, st.st_size)
 
 
 @functools.lru_cache(maxsize=512)
-def _read(path: str, _mtime_ns: int, _size: int) -> Listing | None:
+def _read(path: str) -> Listing:
     try:
         with open(path, "rb") as f:
+            if os.fstat(f.fileno()).st_size > _MAX_RECORD_BYTES:
+                raise _NoListing
             record = bdecode(f.read())
     except (OSError, ValueError):
-        return None
-    return parse_info(record.get(b"info")) if isinstance(record, dict) else None
+        raise _NoListing from None
+    found = parse_info(record.get(b"info")) if isinstance(record, dict) else None
+    if found is None:
+        raise _NoListing
+    return found
