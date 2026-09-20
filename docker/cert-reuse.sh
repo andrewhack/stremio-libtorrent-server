@@ -17,9 +17,13 @@ RENEW_WITHIN=604800   # 7 days, in seconds: renew a week early rather than on th
 # nothing readable at that path at all.
 openssl x509 -checkend "$RENEW_WITHIN" -noout -in "$CERT" >/dev/null 2>&1 || exit 1
 
-# The service issues one wildcard for the whole zone, so the zone is what can be matched here --
-# the per-IP name never appears in the certificate. Only the SAN decides what a TLS client will
-# accept, so only the SAN is read, and -F keeps the dots in the zone literal rather than wildcards.
-openssl x509 -noout -ext subjectAltName -in "$CERT" 2>/dev/null | grep -qF ".$ZONE" || exit 1
-
-exit 0
+# Only the SAN decides what a TLS client will accept, so only the SAN is read, and each name in it
+# is matched whole: a name that merely contains the zone, like evil.<zone>.attacker.example, is
+# somebody else's. set -f because a SAN holds a literal "*" that must not become a filename.
+set -f
+for name in $(openssl x509 -noout -ext subjectAltName -in "$CERT" 2>/dev/null | tr ',' ' '); do
+    case "$name" in
+        DNS:*."$ZONE") exit 0 ;;
+    esac
+done
+exit 1
