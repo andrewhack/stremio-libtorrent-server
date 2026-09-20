@@ -10,7 +10,8 @@ CERT="$1"
 ZONE="$2"
 RENEW_WITHIN=604800   # 7 days, in seconds: renew a week early rather than on the last day
 
-# An empty zone would make the grep below match every certificate, including the self-signed one.
+# An empty zone leaves nothing to identify a certificate by, so it is refused here rather than left
+# to the comparison below, which would then be deciding on an empty string.
 [ -n "$ZONE" ] || exit 1
 
 # -checkend exits non-zero when the certificate would expire inside the window, and when there is
