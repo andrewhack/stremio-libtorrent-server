@@ -56,7 +56,6 @@ docker run -d --name "$NAME" --restart unless-stopped $GPU_ARGS $ENV_ARGS \
   -v "$DATA":/root/.stremio-server \
   -p "$WEB_PORT":8080 -p "$HTTP_PORT":11470 -p "$HTTPS_PORT":12470 \
   -p "$BT_PORT":"$BT_PORT"/tcp -p "$BT_PORT":"$BT_PORT"/udp \
-
   --health-cmd "curl -fsS http://127.0.0.1:11470/health || exit 1" \
   --health-interval 30s --health-timeout 5s --health-retries 3 --health-start-period 15s \
   --label monitor.enabled=true --label monitor.name="$NAME" \
