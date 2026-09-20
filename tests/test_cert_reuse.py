@@ -18,13 +18,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _make_pem(path: Path, san: str, days: int) -> None:
+def _make_pem(path: Path, san: str, days: int, subj: str = "/CN=test") -> None:
     """A real certificate, in the layout the entrypoint writes: certificate then private key in one
     file. Reading the certificate out of that pairing is part of what has to work."""
     crt, key = str(path) + ".crt", str(path) + ".key"
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", str(days),
-         "-keyout", key, "-out", crt, "-subj", "/CN=test",
+         "-keyout", key, "-out", crt, "-subj", subj,
          "-addext", f"subjectAltName={san}"],
         check=True, capture_output=True, timeout=30,
     )
@@ -75,3 +75,20 @@ def test_an_empty_zone_keeps_nothing(tmp_path):
     p = tmp_path / "certificates.pem"
     _make_pem(p, f"DNS:*.{ZONE}", days=30)
     assert not _keeps(p, zone="")
+
+
+def test_the_zone_in_the_subject_does_not_count(tmp_path):
+    """Only the SAN decides what a TLS client will accept. A certificate that merely mentions the
+    zone in its subject cannot serve the magic-DNS host, so keeping it would mean never fetching
+    the one that can."""
+    p = tmp_path / "certificates.pem"
+    _make_pem(p, "DNS:localhost", days=30, subj=f"/CN={ZONE}")
+    assert not _keeps(p)
+
+
+def test_a_near_miss_zone_does_not_count(tmp_path):
+    """The dots in the zone are regex wildcards unless the match is a fixed string, so a name one
+    character off would otherwise read as ours."""
+    p = tmp_path / "certificates.pem"
+    _make_pem(p, "DNS:*.519b6502d940Xstremio.rocks", days=30)
+    assert not _keeps(p)
