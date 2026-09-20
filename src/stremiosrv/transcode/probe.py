@@ -13,6 +13,15 @@ _HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}  # PQ (HDR10/HDR10+) and HLG
 _DOVI_TAGS = {"dvhe", "dvh1", "dav1", "dvav"}
 
 
+class ProbeTimeoutError(Exception):
+    """ffprobe did not answer within its timeout.
+
+    Named so each caller can decide what to do about it: playback cannot proceed without a probe,
+    subtitles can. Carries no URL -- these messages reach the log, and the URL names what someone
+    is watching.
+    """
+
+
 def _fps(rate: str | None) -> float | None:
     if not rate or "/" not in rate:
         return None
@@ -76,6 +85,9 @@ def map_probe(ffprobe_json: dict) -> dict:
 def probe_media(media_url: str, ffprobe: str = "ffprobe", timeout: int = 30) -> dict:
     argv = [ffprobe, "-v", "quiet", "-print_format", "json",
             "-show_format", "-show_streams", media_url]
-    proc = subprocess.run(argv, capture_output=True, timeout=timeout)
+    try:
+        proc = subprocess.run(argv, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise ProbeTimeoutError(f"ffprobe did not answer within {timeout}s") from e
     data = json.loads(proc.stdout or b"{}")
     return map_probe(data)

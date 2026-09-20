@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gzip
+import logging
 import os
 import re
 import subprocess
@@ -15,13 +16,14 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from stremiosrv import metrics
 from stremiosrv.stream.fileserver import file_disk_path
 from stremiosrv.subs.opensub import opensubtitles_hash_and_size
-from stremiosrv.transcode.probe import probe_media
+from stremiosrv.transcode.probe import ProbeTimeoutError, probe_media
 
 try:  # proper charset detection (Cyrillic/legacy subs); degrade gracefully if absent
     from charset_normalizer import from_bytes as _detect_bytes
 except ImportError:  # pragma: no cover
     _detect_bytes = None
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -232,7 +234,14 @@ def subtitle_signature(videoUrl: str | None = None, container: str | None = None
 
 @router.get("/{info_hash}/{idx:int}/subtitles.json")
 def subtitles_list(info_hash: str, idx: int, mediaURL: str) -> dict:
-    pr = probe_media(mediaURL)
+    # Unlike the playback routes, this one has an ordinary answer for "no tracks" and the player
+    # asks for it on every playback. A slow probe must not turn that into a 500 -- but it is still
+    # said out loud, because an empty list on a file that does have subtitles is otherwise silent.
+    try:
+        pr = probe_media(mediaURL)
+    except ProbeTimeoutError:
+        logger.warning("subtitle probe timed out; answering with no tracks")
+        return {"subtitles": []}
     subs = [
         {"id": s.get("id"), "track": s.get("index"), "codec": s.get("codec"), "lang": s.get("lang")}
         for s in pr["streams"]

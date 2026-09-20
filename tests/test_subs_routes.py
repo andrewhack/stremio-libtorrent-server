@@ -114,3 +114,24 @@ def test_subtitle_signature_does_not_shadow_other_routes():
     # /subtitles.srt still reaches the proxy route (422 = its own validation, not a 404/mismatch)
     assert c.get("/subtitles.srt").status_code in (422, 400)
     assert c.get("/opensubHash").status_code == 422
+
+
+def test_subtitles_list_answers_its_empty_shape_when_the_probe_times_out(monkeypatch, caplog):
+    """The player asks for this on every playback and it has an ordinary answer for "no tracks",
+    so a slow ffprobe must not make it a 500. It is still logged: an empty list for a file that
+    does have subtitles is otherwise a silent wrong answer."""
+    import logging
+
+    from stremiosrv.api import subs as subs_api
+    from stremiosrv.transcode.probe import ProbeTimeoutError
+
+    def _times_out(url):
+        raise ProbeTimeoutError("ffprobe did not answer within 30s")
+
+    monkeypatch.setattr(subs_api, "probe_media", _times_out)
+    c = TestClient(create_app())
+    with caplog.at_level(logging.WARNING):
+        r = c.get("/" + "a" * 40 + "/0/subtitles.json", params={"mediaURL": "http://x/y"})
+    assert r.status_code == 200
+    assert r.json() == {"subtitles": []}
+    assert "timed out" in caplog.text

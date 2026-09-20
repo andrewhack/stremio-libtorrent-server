@@ -159,3 +159,32 @@ def test_head_cannot_tear_down_a_transcode_job():
 
     assert c.get("/hlsv2/job1/destroy").status_code == 200
     assert conv.stopped == ["job1"]    # ...while GET still does
+
+
+# --- a probe that never answers. Both routes here need it before they can do anything, so both
+# answer 504 -- the gateway timeout the playlist route already uses when a transcode won't start.
+
+
+def _times_out(url):
+    from stremiosrv.transcode.probe import ProbeTimeoutError
+
+    raise ProbeTimeoutError("ffprobe did not answer within 30s")
+
+
+def test_probe_answers_504_when_ffprobe_times_out(monkeypatch):
+    from stremiosrv.api import hls
+
+    monkeypatch.setattr(hls, "probe_media", _times_out)
+    c = TestClient(create_app())
+    assert c.get("/hlsv2/probe", params={"mediaURL": "http://x/y"}).status_code == 504
+
+
+def test_the_master_playlist_answers_504_when_ffprobe_times_out(monkeypatch):
+    """With a converter attached, so the 503 for a missing one cannot stand in for the answer."""
+    from stremiosrv.api import hls
+
+    monkeypatch.setattr(hls, "probe_media", _times_out)
+    app = create_app()
+    app.state.converter = _FakeConv()
+    r = TestClient(app).get("/hlsv2/job1/master.m3u8", params={"mediaURL": "http://x/y"})
+    assert r.status_code == 504

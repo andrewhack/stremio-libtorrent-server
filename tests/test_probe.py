@@ -1,3 +1,8 @@
+import subprocess
+
+import pytest
+
+from stremiosrv.transcode import probe as probe_mod
 from stremiosrv.transcode.probe import map_probe
 
 FFPROBE = {
@@ -38,3 +43,16 @@ def test_no_hdr_for_sdr():
          "color_transfer": "bt709", "color_primaries": "bt709"}]}
     s = map_probe(j)["streams"][0]
     assert s["isHdr"] is False and s["isDoVi"] is False
+
+
+def test_a_hanging_ffprobe_becomes_a_named_error(monkeypatch):
+    """subprocess.TimeoutExpired escaping probe_media is a 500 at every call site, and nothing can
+    tell it apart from a genuine fault. The callers need to."""
+    def _hang(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout", 30))
+
+    monkeypatch.setattr(probe_mod.subprocess, "run", _hang)
+    with pytest.raises(probe_mod.ProbeTimeoutError) as exc:
+        probe_mod.probe_media("http://host/somehash/3")
+    # The message reaches the log, and the URL names what someone is watching.
+    assert "somehash" not in str(exc.value)

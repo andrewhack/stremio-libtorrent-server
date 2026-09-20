@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from stremiosrv.transcode.fingerprint import decide
-from stremiosrv.transcode.probe import probe_media
+from stremiosrv.transcode.probe import ProbeTimeoutError, probe_media
 
 router = APIRouter(prefix="/hlsv2")
 
@@ -42,9 +42,16 @@ def _wait_file(path: Path, timeout: float) -> bool:
 # sending HEAD must not be able to kill someone's playback. It stays GET-only until the reference
 # is shown to require otherwise.
 
+# A probe that never answers used to escape as a 500 with a traceback. Both routes here need the
+# probe to do their job, so they answer 504 -- the same gateway-timeout the playlist route already
+# gives when a transcode fails to start.
+
 @router.api_route("/probe", methods=["GET", "HEAD"])
 def probe(mediaURL: str) -> dict:
-    return probe_media(mediaURL)
+    try:
+        return probe_media(mediaURL)
+    except ProbeTimeoutError as e:
+        raise HTTPException(status_code=504, detail="probe timed out") from e
 
 
 @router.api_route("/{job_id}/master.m3u8", methods=["GET", "HEAD"])
@@ -60,7 +67,10 @@ def master(
     conv = _converter(request)
     if conv is None:
         raise HTTPException(status_code=503, detail="transcoder unavailable")
-    pr = probe_media(mediaURL)
+    try:
+        pr = probe_media(mediaURL)
+    except ProbeTimeoutError as e:
+        raise HTTPException(status_code=504, detail="probe timed out") from e
     dec = decide(pr, videoCodecs or ["h264"], audioCodecs or ["aac"], maxAudioChannels, maxWidth)
     try:
         d = conv.ensure_job(job_id, mediaURL, dec)
