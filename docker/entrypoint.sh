@@ -17,7 +17,7 @@ if [ -n "${IPADDRESS}" ]; then
     IPD=$(echo "$IPADDRESS" | sed "s/[.]/-/g")
     SROCKS_DOMAIN="${IPD}.${SROCKS_ZONE}"
     HAVE_SROCKS=""
-    # A trusted cert we already hold and that still has a week to run is kept: the cert service is
+    # A trusted cert we already hold and that still has a month to run is kept: the cert service is
     # not called on every restart, and a box that is briefly offline still comes up trusted.
     # Anything the check cannot settle falls through to the fetch below, unchanged.
     if sh /srv/app/docker/cert-reuse.sh "$CERT" "$SROCKS_ZONE"; then

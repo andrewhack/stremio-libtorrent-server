@@ -1,8 +1,8 @@
 #!/bin/sh
 # Answers 0 when the certificate at $1 is worth keeping instead of fetching a new one: it still has
-# a month to run and it carries the magic-DNS zone $2. Every other answer -- no file, an unreadable
-# one, an openssl that cannot parse it, a certificate for some other name -- is a non-zero exit, so
-# the caller fetches exactly as it did before this check existed.
+# a month to run and it is the wildcard for the magic-DNS zone $2. Every other answer -- no file, an
+# unreadable one, an openssl that cannot parse it, a certificate for some other name -- is a
+# non-zero exit, so the caller fetches exactly as it did before this check existed.
 #
 # Its own script rather than four lines inside entrypoint.sh, because entrypoint.sh ends by running
 # uvicorn and nginx and so cannot be exercised by a test. This can be, and is.
