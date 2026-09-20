@@ -13,21 +13,36 @@ CERT="$CACHE/${CERT_FILE:-certificates.pem}"
 #    c. else -> self-signed (HTTPS still starts, but browsers warn and TVs reject).
 mkdir -p "$CACHE"
 if [ -n "${IPADDRESS}" ]; then
-    echo "[entrypoint] IPADDRESS=$IPADDRESS -> fetching trusted stremio.rocks cert"
-    # Time-box the fetch: on an offline / isolated (LAN-only, static-IP) network it would otherwise
-    # hang on DNS/HTTP timeouts and block uvicorn from ever starting. On timeout we fall through to
-    # the existing/self-signed cert so the server still comes up on the LAN.
-    if (cd /srv/stremio-server && timeout 30 node certificate.js --action fetch); then
-        IPD=$(echo "$IPADDRESS" | sed "s/[.]/-/g")
-        SROCKS_DOMAIN="${IPD}.519b6502d940.stremio.rocks"
-        cp /srv/stremio-server/certificates.pem "$CERT"
+    SROCKS_ZONE="519b6502d940.stremio.rocks"
+    IPD=$(echo "$IPADDRESS" | sed "s/[.]/-/g")
+    SROCKS_DOMAIN="${IPD}.${SROCKS_ZONE}"
+    HAVE_SROCKS=""
+    # A trusted cert we already hold and that still has a week to run is kept: the cert service is
+    # not called on every restart, and a box that is briefly offline still comes up trusted.
+    # Anything the check cannot settle falls through to the fetch below, unchanged.
+    if sh /srv/app/docker/cert-reuse.sh "$CERT" "$SROCKS_ZONE"; then
+        echo "[entrypoint] trusted cert on disk is still valid -> keeping it, no fetch"
+        HAVE_SROCKS=1
+    else
+        echo "[entrypoint] IPADDRESS=$IPADDRESS -> fetching trusted stremio.rocks cert"
+        # Time-box the fetch: on an offline / isolated (LAN-only, static-IP) network it would
+        # otherwise hang on DNS/HTTP timeouts and block uvicorn from ever starting. On timeout we
+        # fall through to the existing/self-signed cert so the server still comes up on the LAN.
+        if (cd /srv/stremio-server && timeout 30 node certificate.js --action fetch); then
+            cp /srv/stremio-server/certificates.pem "$CERT"
+            HAVE_SROCKS=1
+        else
+            echo "[entrypoint] stremio.rocks fetch failed -> falling back to existing/self-signed cert"
+        fi
+    fi
+    # Both paths still do this: it depends on IPADDRESS, which can change between starts while the
+    # wildcard cert stays valid.
+    if [ -n "$HAVE_SROCKS" ]; then
         grep -q "$SROCKS_DOMAIN" /etc/hosts 2>/dev/null || echo "${IPADDRESS} ${SROCKS_DOMAIN}" >> /etc/hosts
         (cd /srv/stremio-server && node certificate.js --action load \
             --pem-path "$CERT" --domain "$SROCKS_DOMAIN" --json-path "$CACHE/httpsCert.json") || true
         echo "[entrypoint] trusted cert for $SROCKS_DOMAIN"
         [ -z "${SERVER_URL}" ] && SERVER_URL="https://${SROCKS_DOMAIN}:12470/"
-    else
-        echo "[entrypoint] stremio.rocks fetch failed -> falling back to existing/self-signed cert"
     fi
 fi
 if [ -f "$CERT" ]; then
