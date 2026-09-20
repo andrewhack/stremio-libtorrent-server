@@ -324,9 +324,11 @@ def episode_index(entry: dict, season: int, episode: int) -> int | None:
 
 # A file name that reads as an episode, in either form pins.select_wanted_file reads: S04E05 and
 # 4x05. The digits are bounded so that a resolution such as 1920x1080 does not read as one, and
-# a decimal before the x -- DD5.1x264, an audio and a codec tag -- does not either.
+# the codec numbers x264, x265 and x266 do not either -- DD5.1x264 is an audio and a codec tag,
+# while The.100.1x05 is an episode.
 _EPISODE_NAME_RE = re.compile(
-    r"s\d{1,3}[\s._-]*e\d{1,4}(?!\d)|(?<!\d)(?<!\d\.)\d{1,2}\s*x\s*\d{1,3}(?!\d)", re.IGNORECASE)
+    r"s\d{1,3}[\s._-]*e\d{1,4}(?!\d)|(?<!\d)\d{1,2}\s*x\s*(?!26[456](?!\d))\d{1,3}(?!\d)",
+    re.IGNORECASE)
 
 
 def _label_alone_names_the_file(entry: dict) -> bool:

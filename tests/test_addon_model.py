@@ -1,4 +1,7 @@
 """The pure half of the Stremio addon: ids, manifest, and the payloads built from library state."""
+import pytest
+
+from stremiosrv import pins as pinsmod
 from stremiosrv.library import addon_model as am
 from stremiosrv.library import state as statemod
 
@@ -405,6 +408,22 @@ def test_a_codec_tag_is_not_an_episode_number():
                files=[{"index": 1, "name": "the.show.special.DD5.1x264.mkv", "size": 4 * GB,
                        "downloaded": 4 * GB, "progress": 1.0}])
     assert len(am.streams_for_meta_id({"entries": [e]}, "tt0000014:1:2", ORIGIN)) == 1
+
+
+@pytest.mark.parametrize(("name", "season"), [
+    ("The.100.1x05.mkv", 1), ("24.1x05.mkv", 1), ("Station.19.1x05.mkv", 1),
+    ("Babylon.5.1x05.mkv", 1), ("Doctor.Who.2005.1x05.mkv", 1), ("Show.4x05.mkv", 4),
+    ("Show 4x05.mkv", 4), ("Show.S01E05.mkv", 1)])
+def test_a_lone_episode_file_reads_as_the_download_path_reads_it(name, season):
+    """The guard reads an episode name in the forms pins.select_wanted_file reads -- a title ending
+    in a digit and a dot included -- so a lone file of episode 5 is never offered on episode 1's
+    page: the file the label was learned from may simply have no bytes yet."""
+    assert pinsmod.select_wanted_file([name], {"season": season, "episode": 5}) == 0
+    e = _entry(label={"type": "series", "metaId": "tt0000016", "season": season, "episode": 1,
+                      "name": "Pack"}, numFiles=2,
+               files=[{"index": 1, "name": name, "size": 4 * GB, "downloaded": 4 * GB,
+                       "progress": 1.0}])
+    assert am.streams_for_meta_id({"entries": [e]}, f"tt0000016:{season}:1", ORIGIN) == []
 
 
 def test_a_pack_never_answers_for_a_different_show():
