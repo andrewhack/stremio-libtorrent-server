@@ -18,6 +18,16 @@ def test_vaapi_hls():
     cmd = build_hls_cmd("http://x/0", DEC_TRANSCODE, "vaapi-renderD128", "/tmp/j")
     assert "h264_vaapi" in cmd
     assert "vaapi" in cmd
+    # h264_vaapi is 8-bit only and the decoder hands it whatever the source was, so the filter has
+    # to convert: a 10-bit source otherwise fails at init, with no fallback.
+    assert "scale_vaapi=w=1920:h=-2:format=nv12" in cmd
+
+
+def test_vaapi_hls_converts_the_pixel_format_with_nothing_to_scale():
+    """The other branch. It emitted no -vf at all, so there was nowhere for the conversion to go."""
+    cmd = build_hls_cmd("http://x/0", {"video": {"action": "transcode"}}, "vaapi-x", "/tmp/j")
+    assert "-vf" in cmd
+    assert "scale_vaapi=format=nv12" in cmd
 
 
 def test_cpu_hls():

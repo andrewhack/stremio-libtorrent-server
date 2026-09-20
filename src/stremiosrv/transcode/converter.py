@@ -44,9 +44,11 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
             argv += ["-vf", f"scale={w}:-2:flags=lanczos,format=yuv420p" if w else "format=yuv420p",
                      "-c:v", "h264_nvenc", "-preset", "p4"]
         elif profile and profile.startswith("vaapi"):
-            if w:
-                argv += ["-vf", f"scale_vaapi=w={w}:h=-2"]
-            argv += ["-c:v", "h264_vaapi"]
+            # -hwaccel_output_format vaapi means a 10-bit source decodes to p010 surfaces, and
+            # h264_vaapi is 8-bit only: without an explicit conversion ffmpeg fails at init with
+            # no fallback. The NVENC branch above normalises the same way (format=yuv420p).
+            vf = f"scale_vaapi=w={w}:h=-2:format=nv12" if w else "scale_vaapi=format=nv12"
+            argv += ["-vf", vf, "-c:v", "h264_vaapi"]
         else:
             if w:
                 argv += ["-vf", f"scale={w}:-2:flags=lanczos"]
