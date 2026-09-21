@@ -167,9 +167,11 @@ def subtitles(token: str, type_: str, video_id: str, request: Request, extra: st
 
     The app asks every installed subtitles addon whenever it plays anything, from any addon, and
     says what it is playing: the video id, and the file's size and name. Matched to a torrent on
-    disk that has no label, that is enough to label it, and from then on the title's page offers
-    the local copy -- see model.learn_labels. A request that cannot teach anything (an id that is
-    not `tt…`, no size yet) returns before the state build, which walks the whole cache.
+    disk that has no label, that is enough to label it -- with the file it played -- and from then
+    on the title's page offers exactly that file; a label that has no file yet gains it when its
+    own video plays again. See model.learn_labels and model.learn_files. A request that cannot
+    teach anything (an id that is not `tt…`, no size yet) returns before the state build, which
+    walks the whole cache.
     """
     _guard(request, token)
     report = (model.parse_extra(_raw_extra(request, extra))
@@ -178,20 +180,24 @@ def subtitles(token: str, type_: str, video_id: str, request: Request, extra: st
         metrics.record_library_subtitles(reported=False, learned=0)
         return {"subtitles": []}
     cache_root = _settings(request).cache_root
-    learned = model.learn_labels(_state(request), type_, video_id, report)
-    for ih, label in learned:
-        labelsmod.put(cache_root, ih, label)
-    metrics.record_library_subtitles(reported=True, learned=len(learned))
-    if learned:
-        _announce(len(learned))
+    state = _state(request)
+    # Both writes check again under the labels lock: the page can label a torrent between this
+    # state read and the write, and a label it wrote is the owner's choice.
+    learned = sum(labelsmod.learn(cache_root, ih, label)
+                  for ih, label in model.learn_labels(state, type_, video_id, report))
+    filed = sum(labelsmod.add_file(cache_root, ih, label)
+                for ih, label in model.learn_files(state, type_, video_id, report))
+    metrics.record_library_subtitles(reported=True, learned=learned)
+    if learned or filed:
+        _announce(learned, filed)
     return {"subtitles": []}
 
 
-def _announce(count: int) -> None:
-    """Put a count of learned labels in the container log.
+def _announce(learned: int, filed: int) -> None:
+    """Put a count of what playback taught in the container log.
 
-    uvicorn surfaces only its own loggers, so without a handler of its own this line never reached
-    `docker logs` -- the evictor and the transcoder attach theirs the same way. A count only:
+    uvicorn surfaces only its own loggers, so without a handler of its own these lines never
+    reached `docker logs` -- the evictor and the transcoder attach theirs the same way. Counts only:
     labels.json is the owner's library and never goes into a log.
     """
     if not log.handlers:
@@ -199,4 +205,7 @@ def _announce(count: int) -> None:
         handler.setFormatter(logging.Formatter("%(asctime)s [library] %(message)s"))
         log.addHandler(handler)
         log.setLevel(logging.INFO)
-    log.info("addon learned the title of %d cached torrent(s) from playback", count)
+    if learned:
+        log.info("addon learned the title of %d cached torrent(s) from playback", learned)
+    if filed:
+        log.info("addon learned the file of %d labelled torrent(s) from playback", filed)

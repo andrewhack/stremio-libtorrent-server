@@ -54,7 +54,8 @@ def test_the_manifest_asks_for_subtitles_requests_on_films_and_episodes():
 def test_an_episode_played_from_the_cache_is_labelled_with_that_episode():
     got = am.learn_labels({"entries": [_cached()]}, "series", "tt0000020:3:6", _report())
     assert got == [(IH, {"metaId": "tt0000020", "type": "series", "season": 3, "episode": 6,
-                         "videoId": "tt0000020:3:6"})]
+                         "videoId": "tt0000020:3:6",
+                         "file": {"name": EPISODE, "size": 6 * GB}})]
 
 
 def test_a_film_is_labelled_as_a_film_even_while_it_is_still_arriving():
@@ -63,7 +64,8 @@ def test_a_film_is_labelled_as_a_film_even_while_it_is_still_arriving():
     e = _cached(files=[{"index": 0, "name": "Sample.Film.mkv", "size": 2 * GB, "downloaded": GB}])
     got = am.learn_labels({"entries": [e]}, "movie", "tt0000021",
                           _report(size=2 * GB, filename="Sample.Film.mkv"))
-    assert got == [(IH, {"metaId": "tt0000021", "type": "movie"})]
+    assert got == [(IH, {"metaId": "tt0000021", "type": "movie",
+                         "file": {"name": "Sample.Film.mkv", "size": 2 * GB}})]
 
 
 def test_a_file_of_another_size_or_another_name_teaches_nothing():
@@ -227,6 +229,7 @@ def test_a_label_the_page_wrote_survives_a_playback(tmp_path):
     t = sessionmod.ensure_addon_token(str(tmp_path))
     _subs(c, t, "tt0000030:3:6", f"videoSize={size}&filename={fname}")
     assert labelsmod.load(str(tmp_path))[IH]["metaId"] == "tt0000077"
+    assert "file" not in labelsmod.load(str(tmp_path))[IH]  # another video's report
 
 
 # --- seeing it work from outside -----------------------------------------------------------------
@@ -263,3 +266,94 @@ def test_a_learned_title_is_counted_in_the_container_log(tmp_path):
     log = logging.getLogger("stremiosrv.library.addon")
     assert log.handlers, "no handler: uvicorn will not print this logger's INFO lines"
     assert log.getEffectiveLevel() <= logging.INFO
+
+
+# --- the file a label is learned from (1.6.14) -------------------------------------------------
+
+TWINS = [{"index": 0, "name": "a.mkv", "size": 6 * GB, "downloaded": 6 * GB},
+         {"index": 1, "name": "b.mkv", "size": 6 * GB, "downloaded": 6 * GB}]
+
+
+def test_a_report_without_a_file_name_records_the_listings_own():
+    [(_ih, label)] = am.learn_labels({"entries": [_cached()]}, "series", "tt0000020:3:6",
+                                     _report(filename=None))
+    assert label["file"] == {"name": EPISODE, "size": 6 * GB}
+
+
+def test_no_file_is_recorded_when_two_files_could_be_the_one():
+    """Two files of the played size and no name to tell them apart: the label is still written, as
+    before, but naming either file would be a guess."""
+    [(_ih, label)] = am.learn_labels({"entries": [_cached(files=TWINS)]}, "series",
+                                     "tt0000020:3:6", _report(filename=None))
+    assert "file" not in label
+
+
+def _own(label=None, **kw):
+    """A torrent labelled with the very video being reported, and no file recorded yet."""
+    own = {"metaId": "tt0000020", "type": "series", "season": 3, "episode": 6,
+           "videoId": "tt0000020:3:6"}
+    own.update(label or {})
+    return _cached(label=own, **kw)
+
+
+def test_a_label_without_a_file_gains_the_one_its_own_video_plays_from():
+    got = am.learn_files({"entries": [_own()]}, "series", "tt0000020:3:6", _report())
+    assert got == [(IH, {"metaId": "tt0000020", "type": "series", "season": 3, "episode": 6,
+                         "videoId": "tt0000020:3:6",
+                         "file": {"name": EPISODE, "size": 6 * GB}})]
+
+
+def test_a_film_label_gains_its_file_too():
+    e = _cached(label={"metaId": "tt0000021", "type": "movie"},
+                files=[{"index": 0, "name": "Sample.Film.mkv", "size": 2 * GB, "downloaded": GB}])
+    got = am.learn_files({"entries": [e]}, "movie", "tt0000021",
+                         _report(size=2 * GB, filename="Sample.Film.mkv"))
+    assert got == [(IH, {"metaId": "tt0000021", "type": "movie",
+                         "file": {"name": "Sample.Film.mkv", "size": 2 * GB}})]
+
+
+def test_a_label_gains_no_file_from_another_video_over_its_own_or_by_a_guess():
+    report = ("series", "tt0000020:3:6")
+    another = _own({"episode": 5, "videoId": "tt0000020:3:5"})
+    has_one = _own({"file": {"name": "x.mkv", "size": 1}})
+    assert am.learn_files({"entries": [another]}, *report, _report()) == []
+    assert am.learn_files({"entries": [has_one]}, *report, _report()) == []
+    assert am.learn_files({"entries": [_cached()]}, *report, _report()) == []  # learn_labels'
+    assert am.learn_files({"entries": [_own(files=TWINS)]}, *report,
+                          _report(filename=None)) == []
+
+
+def test_playing_a_title_records_its_file_in_the_label(tmp_path):
+    fname, size = _on_disk(tmp_path)
+    c = _client(tmp_path)
+    t = sessionmod.ensure_addon_token(str(tmp_path))
+    _subs(c, t, "tt0000030:3:6", f"videoSize={size}&filename={fname}")
+    assert labelsmod.load(str(tmp_path))[IH]["file"] == {"name": fname, "size": size}
+
+
+def test_replaying_its_own_video_gives_an_older_label_its_file(tmp_path):
+    """A label learned before files were recorded, or one the page wrote, gains its file the next
+    time its own video plays -- and nothing else in it changes."""
+    fname, size = _on_disk(tmp_path)
+    labelsmod.put(str(tmp_path), IH, {"metaId": "tt0000030", "type": "series", "season": 3,
+                                      "episode": 6, "videoId": "tt0000030:3:6",
+                                      "name": "Chosen"})
+    before = labelsmod.load(str(tmp_path))[IH]
+    c = _client(tmp_path)
+    t = sessionmod.ensure_addon_token(str(tmp_path))
+    _subs(c, t, "tt0000030:3:6", f"videoSize={size}&filename={fname}")
+    assert labelsmod.load(str(tmp_path))[IH] == {**before, "file": {"name": fname, "size": size}}
+
+
+def test_a_recorded_file_is_counted_in_the_log_by_number_only(tmp_path, caplog):
+    import logging
+
+    fname, size = _on_disk(tmp_path)
+    labelsmod.put(str(tmp_path), IH, {"metaId": "tt0000030", "type": "series", "season": 3,
+                                      "episode": 6, "videoId": "tt0000030:3:6"})
+    c = _client(tmp_path)
+    t = sessionmod.ensure_addon_token(str(tmp_path))
+    with caplog.at_level(logging.INFO, logger="stremiosrv.library.addon"):
+        _subs(c, t, "tt0000030:3:6", f"videoSize={size}&filename={fname}")
+    assert "the file of 1 labelled torrent(s)" in caplog.text
+    assert fname not in caplog.text

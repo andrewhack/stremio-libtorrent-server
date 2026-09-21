@@ -91,3 +91,76 @@ def test_concurrent_puts_do_not_lose_entries(tmp_path):
         assert len(labels.load(str(tmp_path))) == 24
     finally:
         sys.setswitchinterval(old)
+
+
+# --- labels learned at playback, and the file they record (1.6.14) ----------------------------
+
+FILE = {"name": "Sample.Show.S01E03.mkv", "size": 4096}
+
+
+def test_a_file_record_is_a_basename_and_a_positive_size():
+    """labels.json is a plain file on the owner's box and can be edited by hand: anything but this
+    exact shape reads as no file, and that label answers as one learned before files were."""
+    assert labels.file_record(FILE) == FILE
+    assert labels.file_record({**FILE, "extra": 1}) == FILE
+    for bad in (None, "a.mkv", [], {"name": "", "size": 5}, {"name": "a.mkv", "size": 0},
+                {"name": "a.mkv", "size": True}, {"name": "a.mkv", "size": "5"},
+                {"size": 5}, {"name": 7, "size": 5}):
+        assert labels.file_record(bad) is None, bad
+
+
+def test_a_learned_label_is_written_with_its_file(tmp_path):
+    root = str(tmp_path)
+    assert labels.learn(root, "AABB", {"metaId": "m1", "type": "series", "season": 1,
+                                       "episode": 3, "videoId": "m1:1:3", "file": FILE})
+    stored = labels.load(root)["aabb"]
+    assert stored["file"] == FILE
+    assert (stored["metaId"], stored["season"], stored["episode"]) == ("m1", 1, 3)
+    assert stored["addedAt"] > 0
+
+
+def test_a_learned_label_never_replaces_one_written_in_between(tmp_path):
+    """The torrent was unlabelled when the state was read, but a download started from the page can
+    label it before the learned label is written -- and the page's label is the owner's choice."""
+    root = str(tmp_path)
+    labels.put(root, "aabb", LABEL)
+    assert labels.learn(root, "aabb", {"metaId": "m9", "type": "movie", "file": FILE}) is False
+    assert labels.load(root)["aabb"]["metaId"] == "m1"
+
+
+def test_a_malformed_file_is_left_out_of_a_learned_label(tmp_path):
+    root = str(tmp_path)
+    assert labels.learn(root, "aabb", {"metaId": "m1", "type": "movie",
+                                       "file": {"name": "", "size": 5}})
+    assert "file" not in labels.load(root)["aabb"]
+
+
+def test_a_label_gains_the_file_its_own_video_plays_from(tmp_path):
+    """And nothing else in it changes: the page wrote its name and poster, and the owner chose
+    them."""
+    root = str(tmp_path)
+    labels.put(root, "aabb", LABEL)
+    before = labels.load(root)["aabb"]
+    assert labels.add_file(root, "aabb", {"metaId": "m1", "season": 1, "episode": 3,
+                                          "file": FILE})
+    assert labels.load(root)["aabb"] == {**before, "file": FILE}
+
+
+def test_a_file_is_added_to_its_own_videos_label_only_and_only_once(tmp_path):
+    root = str(tmp_path)
+    labels.put(root, "aabb", LABEL)
+    own = {"metaId": "m1", "season": 1, "episode": 3}
+    assert labels.add_file(root, "aabb", {**own, "episode": 4, "file": FILE}) is False
+    assert labels.add_file(root, "ccdd", {**own, "file": FILE}) is False  # no label at all
+    assert labels.add_file(root, "aabb", {**own, "file": {"name": "", "size": 5}}) is False
+    assert labels.add_file(root, "aabb", {**own, "file": FILE})
+    assert labels.add_file(root, "aabb", {**own, "file": {"name": "b.mkv", "size": 9}}) is False
+    assert labels.load(root)["aabb"]["file"] == FILE
+    assert "ccdd" not in labels.load(root)
+
+
+def test_the_page_cannot_set_a_file(tmp_path):
+    """Only the server records which file a label means; `put` stores what the browser sends."""
+    root = str(tmp_path)
+    labels.put(root, "aabb", {**LABEL, "file": FILE})
+    assert "file" not in labels.load(root)["aabb"]

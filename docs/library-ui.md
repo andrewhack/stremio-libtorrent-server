@@ -69,7 +69,8 @@ listed recognised titles would let the disk fill invisibly.
 
 Titles and artwork come from the Stremio data already in your browser — your library, and the record
 of which stream played which video. The server stores a small `labels.json` beside the cache for the
-downloads you start here, so they are still labelled on a different device.
+downloads you start here, so they are still labelled on a different device, and for what the Stremio
+app plays once the library's addon is installed (below).
 
 ## The library as a Stremio addon
 
@@ -81,10 +82,14 @@ under Addons → Add addon, and it produces two surfaces there:
 - a **My Library** entry in a normal title's stream list, beside every other source, whenever the box
   already holds that title.
 
-An entry the server has no Stremio identity for — a pasted magnet, or anything played before the
-library existed — still shows up on that board row, but under its on-disk **folder name** and with
-**no poster**: the addon can only name a title from `labels.json`, and guessing an identity from a
-folder name would risk putting the wrong film behind a right-looking row.
+The addon names a title only from `labels.json`, never from a folder name: guessing an identity from
+a folder name would risk putting the wrong film behind a right-looking row. Besides the downloads you
+start here, it learns a title when the app plays it. The app tells every installed subtitles addon
+what it is playing — the video, and the file's name and size — and a file on the server that matches
+exactly is labelled with that video, together with the file that played. That title's page then
+offers exactly that file, once all of it is here. An entry nothing has named yet — a pasted magnet,
+or anything not played since the addon was installed — still shows up on that board row, but under
+its on-disk **folder name** and with **no poster**.
 
 The install address carries a token. **New link**, in the same panel, mints a fresh one and retires
 the old — every device that installed the previous address stops working immediately, which is what
@@ -139,6 +144,6 @@ Both live in the data volume and are protected from cache eviction:
 | File | Contents |
 |---|---|
 | `library-ui.json` | The owning account id and current sessions. Owner-readable only. |
-| `labels.json` | infohash → title, for downloads started from the page. |
+| `labels.json` | infohash → title: for downloads started from the page, and for what the app has played, with the file that played. |
 
 Delete `library-ui.json` to sign every device out and re-pair the server with a fresh account.

@@ -9,6 +9,7 @@ import re
 from urllib.parse import unquote
 
 from stremiosrv import pins as pinsmod
+from stremiosrv.library import labels as labelsmod
 from stremiosrv.stream.fileserver import is_video
 
 ADDON_ID = "org.stremiosrv.library"
@@ -100,6 +101,38 @@ def parse_extra(raw: str) -> dict[str, str]:
     return out
 
 
+def _played(type_: str, video_id: str, extra: dict) -> tuple[dict, int, str] | None:
+    """What a subtitles request reports, or None when it cannot teach anything: the label its video
+    would carry, the playing file's size, and its name ("" when the app sent none)."""
+    m = _VIDEO_ID_RE.fullmatch(video_id or "")
+    if m is None or type_ not in ("movie", "series"):
+        return None
+    base, season, episode = m.groups()
+    if (type_ == "series") != (season is not None):
+        return None
+    size = extra.get("videoSize") or ""
+    if not size.isdecimal() or int(size) <= 0:
+        return None
+    label = {"metaId": base, "type": type_}
+    if season is not None:
+        label.update(season=int(season), episode=int(episode), videoId=video_id)
+    return label, int(size), _basename(extra.get("filename") or "")
+
+
+def _matching_files(entry: dict, size: int, name: str) -> list[dict]:
+    """The entry's files a report can mean: of the played size to the byte, and of the played name
+    when the app sent one."""
+    return [f for f in entry.get("files") or []
+            if (f.get("size") or 0) == size
+            and (not name or _basename(f.get("name") or "") == name)]
+
+
+def _file_of(matched: list[dict], size: int) -> dict | None:
+    """The file a label records -- {"name", "size"} -- when the report can mean only one."""
+    name = _basename(matched[0].get("name") or "") if len(matched) == 1 else ""
+    return {"name": name, "size": size} if name else None
+
+
 def learn_labels(state: dict, type_: str, video_id: str, extra: dict) -> list[tuple[str, dict]]:
     """(infohash, label) for each unlabelled cached torrent holding the file a player reports.
 
@@ -112,29 +145,58 @@ def learn_labels(state: dict, type_: str, video_id: str, extra: dict) -> list[tu
     The size must match to the byte. The name must match too when the app sends one; without it,
     the size alone is accepted only when it points at exactly one torrent. A label that is already
     there is never replaced: the page writes one with a name and a poster, and the owner chose it.
+
+    The label records the file it was learned from -- `file`, its name and size -- when only one of
+    the torrent's files matched, and a title page then offers exactly that file for this video (see
+    streams_for_meta_id). Name and size rather than an index: a brand-new torrent's first play is
+    matched against the directory walk, which has no indices, and a torrent's file list never
+    changes, so the two find the same file every time.
     """
-    m = _VIDEO_ID_RE.fullmatch(video_id or "")
-    if m is None or type_ not in ("movie", "series"):
+    played = _played(type_, video_id, extra)
+    if played is None:
         return []
-    base, season, episode = m.groups()
-    if (type_ == "series") != (season is not None):
-        return []
-    size = extra.get("videoSize") or ""
-    if not size.isdecimal() or int(size) <= 0:
-        return []
-    size = int(size)
-    name = _basename(extra.get("filename") or "")
-    label = {"metaId": base, "type": type_}
-    if season is not None:
-        label.update(season=int(season), episode=int(episode), videoId=video_id)
-    hits = [e["infoHash"].lower() for e in state.get("entries", [])
-            if is_title(e) and not e.get("label")
-            and any((f.get("size") or 0) == size
-                    and (not name or _basename(f.get("name") or "") == name)
-                    for f in e.get("files") or [])]
+    label, size, name = played
+    hits = []
+    for e in state.get("entries", []):
+        if not is_title(e) or e.get("label"):
+            continue
+        matched = _matching_files(e, size, name)
+        if not matched:
+            continue
+        found = _file_of(matched, size)
+        hits.append((e["infoHash"].lower(), {**label, "file": found} if found else dict(label)))
     if not name and len(hits) > 1:
         return []
-    return [(ih, dict(label)) for ih in hits]
+    return hits
+
+
+def learn_files(state: dict, type_: str, video_id: str, extra: dict) -> list[tuple[str, dict]]:
+    """(infohash, label with its file) for each torrent whose label is the reported video's and
+    records no file yet, when exactly one of its files matches.
+
+    A label learned before files were recorded, or one the page wrote, names its video but not the
+    file, and its page has to work the file out. The next time that video plays from the torrent,
+    the report says which file it is. Only the label's own video -- the same metaId, season and
+    episode -- because a label records the file it was learned from, not every file played. The
+    size-only rule is learn_labels' own.
+    """
+    played = _played(type_, video_id, extra)
+    if played is None:
+        return []
+    label, size, name = played
+    hits = []
+    for e in state.get("entries", []):
+        own = e.get("label") or {}
+        if (not is_title(e) or not own or labelsmod.file_record(own.get("file")) is not None
+                or not _label_matches(own, label["metaId"], label.get("season"),
+                                      label.get("episode"))):
+            continue
+        found = _file_of(_matching_files(e, size, name), size)
+        if found:
+            hits.append((e["infoHash"].lower(), {**label, "file": found}))
+    if not name and len(hits) > 1:
+        return []
+    return hits
 
 
 def human_size(n: int) -> str:
