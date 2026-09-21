@@ -514,10 +514,12 @@ def meta_for(entry: dict) -> dict:
     `videos` lists what a viewer can pick, and only complete videos: offering an episode that is
     not there produces a row that cannot play, which is worse than not listing it, and a complete
     `.nfo` or subtitle in a tracked download's list is nothing to play at all. They are listed when
-    there are two or more, and when there is one the card cannot play by itself -- a pack's only
+    there are two or more, and when there is one the card does not play by itself: a pack's only
     complete episode that is not its largest file, or a download's own file still arriving, left
-    the card playing nothing. Without a list, stremio-core asks for the card's own streams (a meta
-    with no videos plays its own id), and `playable_index` answers them.
+    the card playing nothing, and a download whose largest complete file is no video -- an
+    archive, a disc image -- left it playing that. Without a list, stremio-core asks for the
+    card's own streams (a meta with no videos plays its own id), and `playable_index` answers
+    them.
     """
     label = entry.get("label") or {}
     ih = entry["infoHash"].lower()
@@ -537,7 +539,8 @@ def meta_for(entry: dict) -> dict:
     on_disk = [f for f in (entry.get("files") or [])
                if is_complete(f) and isinstance(f.get("index"), int)
                and is_video(f.get("name") or "")]
-    if len(on_disk) > 1 or (on_disk and playable_index(entry) is None):
+    plays = playable_index(entry) if on_disk else None
+    if len(on_disk) > 1 or (on_disk and plays not in {f["index"] for f in on_disk}):
         meta["videos"] = [
             {"id": format_id(ih, f["index"]), "title": f.get("name") or f"file {f['index']}",
              "released": None}

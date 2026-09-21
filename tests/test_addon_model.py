@@ -772,3 +772,14 @@ def test_a_learned_file_is_its_name_and_its_size():
                        "downloaded": 2 * GB, "progress": 1.0}])
     streams = am.streams_for_meta_id({"entries": [e]}, "tt0000050:1:1", ORIGIN)
     assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/1"]
+
+
+def test_a_card_whose_largest_file_is_no_video_lists_its_video():
+    """A download's own list holds every file with bytes. When its largest complete file is no
+    video -- an archive, a disc image -- the card's own id plays that, so the one complete video
+    gets its row."""
+    e = _entry(files=[{"index": 0, "name": "Extras.rar", "size": 12 * GB, "downloaded": 12 * GB,
+                       "progress": 1.0},
+                      {"index": 1, "name": "Film.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                       "progress": 1.0}])
+    assert [v["id"] for v in am.meta_for(e)["videos"]] == [am.format_id(IH, 1)]
