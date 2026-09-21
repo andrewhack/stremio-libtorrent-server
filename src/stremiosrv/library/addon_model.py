@@ -513,8 +513,13 @@ def find_entry(state: dict, info_hash: str) -> dict | None:
 def meta_for(entry: dict) -> dict:
     """The detail page for one of our ids.
 
-    `videos` is emitted only for a pack, and only for files with bytes on disk: offering an episode
-    that is not there produces a row that cannot play, which is worse than not listing it.
+    `videos` lists what a viewer can pick, and only complete videos: offering an episode that is
+    not there produces a row that cannot play, which is worse than not listing it, and a complete
+    `.nfo` or subtitle in a tracked download's list is nothing to play at all. They are listed when
+    there are two or more, and when there is one the card cannot play by itself -- a pack's only
+    complete episode that is not its largest file, or a download's own file still arriving, left
+    the card playing nothing. Without a list, stremio-core asks for the card's own streams (a meta
+    with no videos plays its own id), and `playable_index` answers them.
     """
     label = entry.get("label") or {}
     ih = entry["infoHash"].lower()
@@ -532,8 +537,9 @@ def meta_for(entry: dict) -> dict:
     # arrives and identical for a file at 0% and one that is finished, so it is not evidence that
     # anything of it is actually on disk -- `downloaded` is.
     on_disk = [f for f in (entry.get("files") or [])
-               if is_complete(f) and isinstance(f.get("index"), int)]
-    if len(on_disk) > 1:
+               if is_complete(f) and isinstance(f.get("index"), int)
+               and is_video(f.get("name") or "")]
+    if len(on_disk) > 1 or (on_disk and playable_index(entry) is None):
         meta["videos"] = [
             {"id": format_id(ih, f["index"]), "title": f.get("name") or f"file {f['index']}",
              "released": None}

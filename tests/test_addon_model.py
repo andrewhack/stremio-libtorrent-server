@@ -720,3 +720,43 @@ def test_the_learned_file_is_offered_once_complete_and_nothing_before():
     e["files"][0].update(downloaded=4 * GB, progress=1.0)
     streams = am.streams_for_meta_id(state, "tt0000050:1:1", ORIGIN)
     assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/0"]
+
+
+# --- a card's page lists complete videos, and one the card cannot play (1.6.14) ---------------
+
+
+def test_a_packs_one_complete_episode_is_listed_when_the_card_cannot_play_it():
+    """V1b: the card's own id plays the torrent's main file -- its largest -- only once complete,
+    and a list needed two complete files. A pack whose one complete episode is smaller than one
+    still arriving played nothing from its card."""
+    e = _entry(files=[{"index": 0, "name": "Show.S01E01.mkv", "size": 4 * GB,
+                       "downloaded": GB, "progress": 0.25},
+                      {"index": 1, "name": "Show.S01E02.mkv", "size": 3 * GB,
+                       "downloaded": 3 * GB, "progress": 1.0}])
+    assert am.stream_for(e, ORIGIN) is None
+    assert [v["id"] for v in am.meta_for(e)["videos"]] == [am.format_id(IH, 1)]
+
+
+def test_a_complete_film_still_plays_straight_from_its_card():
+    """No list, so stremio-core asks for the card's own streams, and the main file answers."""
+    e = _entry(files=[{"index": 0, "name": "Film.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+                       "progress": 1.0},
+                      {"index": 1, "name": "film.sample.mkv", "size": 50 * 1024 ** 2,
+                       "downloaded": 0, "progress": 0.0}])
+    assert "videos" not in am.meta_for(e)
+
+
+def test_a_cards_page_lists_videos_only():
+    """A tracked download's list holds every file with bytes: a complete .nfo was a row to play."""
+    nfo = {"index": 0, "name": "Show.nfo", "size": 2000, "downloaded": 2000, "progress": 1.0}
+    one = _entry(wantedFile="Show.S01E05.mkv",
+                 files=[nfo, {"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB,
+                              "downloaded": 4 * GB, "progress": 1.0, "wanted": True}])
+    assert "videos" not in am.meta_for(one)  # one video, and the card plays it
+    two = _entry(files=[nfo,
+                        {"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB,
+                         "downloaded": 4 * GB, "progress": 1.0},
+                        {"index": 4, "name": "Show.S01E06.mkv", "size": 4 * GB,
+                         "downloaded": 4 * GB, "progress": 1.0}])
+    assert [v["id"] for v in am.meta_for(two)["videos"]] == [am.format_id(IH, 3),
+                                                             am.format_id(IH, 4)]
