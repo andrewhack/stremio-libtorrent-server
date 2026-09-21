@@ -266,9 +266,10 @@ token alone is not treated as the boundary. Both a wrong token and an outside ad
 
 Two things worth knowing before you judge what you see:
 
-- **Titles you merely watched have no poster and show a folder name.** The server only learns what a
-  torrent *is* when a download is started from the library page; anything cached by ordinary playback
-  was never told, so it appears as the name of the folder on disk.
+- **Titles you merely watched have no poster and show a folder name.** A title the app plays is
+  learned for its own page — its **My Library** entry offers the very file that played — but only a
+  download started from the library page tells the server a title's name and poster, so a watched
+  title's card on the board shows the name of the folder on disk.
 - **Rotating the link breaks existing installs**, which is the point of the **New link** button next
   to Copy — it is how you take back a URL that has spread further than you meant.
 

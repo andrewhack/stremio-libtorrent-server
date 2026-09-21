@@ -1,8 +1,10 @@
 """infohash -> title record, so the cache can be shown as titles rather than folder names.
 
-Written when a download is started from the page, which is the one moment the title is known.
-Entries the server has no label for are labelled client-side from the web player's own `streams` and
-`library` buckets, so this file is a convenience for cross-device display, not the source of truth.
+Written when a download is started from the page, which is the one moment the page knows the
+title, and learned at playback by the library's addon (see `learn` and `add_file`). For the page's
+display it is a convenience: entries without a label are labelled client-side from the web player's
+own `streams` and `library` buckets. For the addon it is the record: a learned label's `file` is the
+one file a title's page offers.
 
 **This is the owner's library, on the owner's own box.** It is never logged, never included in
 release notes or issue reports, and never served on an unauthenticated route. Same discipline as
@@ -72,7 +74,7 @@ def put(cache_root: str, info_hash: str, label: dict) -> None:
 LEARNED_FIELDS = ("metaId", "videoId", "type", "season", "episode", "file")
 
 
-def file_record(value) -> dict | None:
+def file_record(value: object) -> dict | None:
     """A label's `file` -- {"name": <basename>, "size": <bytes>} -- or None when it is not one.
 
     labels.json is a plain file on the owner's box and can be edited by hand. Anything but this

@@ -87,9 +87,9 @@ a folder name would risk putting the wrong film behind a right-looking row. Besi
 start here, it learns a title when the app plays it. The app tells every installed subtitles addon
 what it is playing — the video, and the file's name and size — and a file on the server that matches
 exactly is labelled with that video, together with the file that played. That title's page then
-offers exactly that file, once all of it is here. An entry nothing has named yet — a pasted magnet,
-or anything not played since the addon was installed — still shows up on that board row, but under
-its on-disk **folder name** and with **no poster**.
+offers exactly that file, once all of it is here. A title learned this way is named for its page
+in the app, not on the board: its card, like one for a pasted magnet, still shows its on-disk
+**folder name** and **no poster**. Only a download started here carries the title's name and poster.
 
 The install address carries a token. **New link**, in the same panel, mints a fresh one and retires
 the old — every device that installed the previous address stops working immediately, which is what
