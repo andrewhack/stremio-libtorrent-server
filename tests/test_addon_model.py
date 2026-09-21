@@ -578,3 +578,51 @@ def test_a_file_still_downloading_gets_no_row_even_when_the_disk_says_it_is_whol
     whole = dict(arriving, downloaded=4096, progress=1.0)
     state = statemod.build(str(tmp_path), _FakeEngine({name: ih}, [], live={ih: [whole]}))
     assert len(am.streams_for_meta_id(state, "tt0000011:1:5", ORIGIN)) == 1
+
+
+# --- an episode's file is its largest video, offered only once complete (1.6.14) -------------
+
+
+def test_a_complete_sample_never_stands_in_for_its_episode():
+    """Picked among complete files only, a single-episode release's sample -- complete long before
+    the episode, as in any whole-torrent download -- was offered on the episode's page. The label
+    here is another episode's, so only the episode's own files can answer."""
+    e = _entry(label={"type": "series", "metaId": "tt0000040", "season": 1, "episode": 9,
+                      "name": "Pack"},
+               files=[{"index": 0, "name": "Show.S01E01.1080p.mkv", "size": 3 * GB,
+                       "downloaded": GB, "progress": 0.33},
+                      {"index": 1, "name": "show.s01e01.1080p.sample.mkv", "size": 80 * 1024 ** 2,
+                       "downloaded": 80 * 1024 ** 2, "progress": 1.0}])
+    state = {"entries": [e]}
+    assert am.streams_for_meta_id(state, "tt0000040:1:1", ORIGIN) == []
+    e["files"][0].update(downloaded=3 * GB, progress=1.0)
+    assert [s["url"] for s in am.streams_for_meta_id(state, "tt0000040:1:1", ORIGIN)] == [
+        f"{ORIGIN}/{IH}/0"]
+
+
+def test_a_subtitle_is_never_offered_as_its_episode():
+    """A tracked download's list holds every file with bytes, and a small subtitle can be completed
+    by the pieces it shares with its neighbours: it was offered as the episode."""
+    e = _entry(label={"type": "series", "metaId": "tt0000041", "season": 1, "episode": 2,
+                      "name": "Pack"},
+               files=[{"index": 4, "name": "Show.S01E01.srt", "size": 50_000,
+                       "downloaded": 50_000, "progress": 1.0},
+                      {"index": 6, "name": "Show.S01E02.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000041:1:1", ORIGIN) == []
+
+
+def test_of_two_files_named_as_one_episode_the_larger_decides():
+    """Two qualities of one episode in one pack: the larger is the episode's file, and it is waited
+    for rather than stood in for -- the rule that keeps a sample off the page."""
+    e = _entry(label={"type": "series", "metaId": "tt0000042", "season": 1, "episode": 9,
+                      "name": "Pack"},
+               files=[{"index": 0, "name": "Show.S01E01.720p.mkv", "size": 2 * GB,
+                       "downloaded": 2 * GB, "progress": 1.0},
+                      {"index": 1, "name": "Show.S01E01.1080p.mkv", "size": 4 * GB,
+                       "downloaded": GB, "progress": 0.25}])
+    state = {"entries": [e]}
+    assert am.streams_for_meta_id(state, "tt0000042:1:1", ORIGIN) == []
+    e["files"][1].update(downloaded=4 * GB, progress=1.0)
+    assert [s["url"] for s in am.streams_for_meta_id(state, "tt0000042:1:1", ORIGIN)] == [
+        f"{ORIGIN}/{IH}/1"]

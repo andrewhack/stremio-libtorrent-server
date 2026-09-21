@@ -101,6 +101,16 @@ def _episode_matcher(want: dict | None):
     return lambda path: any(p.search(os.path.basename(path)) for p in pats)
 
 
+def names_episode(path: str, season: int, episode: int) -> bool:
+    """Whether a file's name reads as this episode, in the forms a download reads (S01E05, 1x05).
+
+    The addon's episode pages ask this of the same names the download path reads, so a file one of
+    them takes for an episode, the other does too.
+    """
+    is_episode = _episode_matcher({"season": season, "episode": episode})
+    return is_episode is not None and is_episode(path)
+
+
 # --- which file a stream wants when the addon does not say ------------------------------------
 # A stream with no fileIdx leaves the choice to the server: stremio-video asks for a guess in the
 # body of POST /<ih>/create (`guessFileIdx`, with season and episode when it has them), and

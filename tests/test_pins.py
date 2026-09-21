@@ -393,3 +393,15 @@ def test_keeping_an_episode_does_not_start_fetching_its_whole_season():
     h.wanted = set()
     h.reapply_priorities()
     assert raw.prios == [1, 1, 1, 1]
+
+
+def test_names_episode_reads_the_forms_a_download_reads():
+    """The addon's episode pages read a file's name the way the download path does."""
+    from stremiosrv.pins import names_episode
+
+    assert names_episode("Show.S01E05.Title.1080p.mkv", 1, 5)
+    assert names_episode("Show 1x05 Title.mkv", 1, 5)
+    assert names_episode("Folder/Show.S01E05.mkv", 1, 5)
+    assert not names_episode("Show.S01E50.mkv", 1, 5)
+    assert not names_episode("Show.S02E05.mkv", 1, 5)
+    assert not names_episode("Some.Film.2019.1080p.mkv", 1, 5)

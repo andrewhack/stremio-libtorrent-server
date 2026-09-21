@@ -9,6 +9,7 @@ import re
 from urllib.parse import unquote
 
 from stremiosrv import pins as pinsmod
+from stremiosrv.stream.fileserver import is_video
 
 ADDON_ID = "org.stremiosrv.library"
 CATALOG_ID = "library"
@@ -301,25 +302,31 @@ def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict | 
 
 
 def episode_index(entry: dict, season: int, episode: int) -> int | None:
-    """The torrent file index holding this episode, or None if the pack does not hold it.
+    """The torrent file index holding this episode, or None if the pack does not hold it here.
 
     There is one label per infohash and a season pack holds many episodes, so matching the label's
     own episode number answered for exactly one of them: on a real box, a pack with six episodes on
     disk offered a stream on one episode page and nothing on the other five. The pack's file names
-    know better, and `pins.select_wanted_file` already reads them -- it is what the download path
-    uses to pick an episode out of a pack, so the same names resolve the same way in both places.
+    know better, read the way the download path reads them (pins.names_episode), so the same names
+    resolve the same way in both places.
 
-    Only files with bytes count. Offering an episode that is not here would start fetching it on
-    play, which is the opposite of what "play the local copy" promises.
+    Of the videos whose names read as the episode, the largest is the episode's file: the size
+    picks WHICH and the bytes decide WHEN, as for a torrent's main file in playable_index. Picking
+    among complete files only let a sample stand in for its episode -- a release whose sample was
+    complete while the episode was at 30%, which any whole-torrent download passes through, offered
+    the sample. Videos only, because a tracked download's list holds every file with bytes, and a
+    subtitle completed by the pieces it shares with its neighbours was offered as the episode.
+
+    Only a complete file is offered. Offering an episode that is not all here would start fetching
+    it on play, which is the opposite of what "play the local copy" promises.
     """
-    have = [f for f in (entry.get("files") or [])
-            if isinstance(f.get("index"), int) and is_complete(f)]
-    if not have:
+    named = [f for f in (entry.get("files") or [])
+             if isinstance(f.get("index"), int) and is_video(f.get("name") or "")
+             and pinsmod.names_episode(f.get("name") or "", season, episode)]
+    if not named:
         return None
-    # select_wanted_file returns a position in the list it was handed, not a torrent file index.
-    pos = pinsmod.select_wanted_file([f.get("name") or "" for f in have],
-                                     {"season": season, "episode": episode})
-    return None if pos is None else have[pos]["index"]
+    main = max(named, key=lambda f: f.get("size") or 0)
+    return main["index"] if is_complete(main) else None
 
 
 # A file name that reads as an episode, in either form pins.select_wanted_file reads: S04E05 and
