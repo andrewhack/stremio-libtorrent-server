@@ -547,6 +547,8 @@ def test_a_label_learned_from_the_walk_answers_at_the_torrents_own_index(tmp_pat
     [(ih, label)] = model.learn_labels(state, "series", "tt0000004:1:1",
                                        {"videoSize": "5000", "filename": files[1][0]})
     assert labels.learn(str(tmp_path), ih, label)
+    state = statemod.build(str(tmp_path), None)  # still the walk: no index to offer yet
+    assert model.streams_for_meta_id(state, "tt0000004:1:1", "http://o") == []
     _record(tmp_path, PACK_IH, {"name": name, "files": [
         {"length": size, "path": [fname]} for fname, size in files]})
     state = statemod.build(str(tmp_path), None)

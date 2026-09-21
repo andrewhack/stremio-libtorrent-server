@@ -650,7 +650,7 @@ def test_a_label_offers_the_file_it_was_learned_from():
 
 
 def test_a_learned_file_with_no_bytes_is_not_answered_with_another_episode():
-    """V4: learned while its own file had no bytes, which the resume listing leaves out, so the one
+    """Learned while its own file had no bytes, which the resume listing leaves out, so the one
     video listed is episode 2 -- a lone video whose name reads as no episode, offered in its
     place."""
     e = _entry(label=_learned(1, 1, "[Group] Show - 01 [1080p].mkv", 4 * GB), numVideos=2,
@@ -661,7 +661,7 @@ def test_a_learned_file_with_no_bytes_is_not_answered_with_another_episode():
 
 
 def test_a_learned_film_with_no_bytes_is_not_answered_with_its_sample():
-    """V5: a torrent's main file is its largest LISTED one, and a film with no bytes is not listed,
+    """A torrent's main file is its largest LISTED one, and a film with no bytes is not listed,
     so its complete sample was offered."""
     e = _entry(label={"type": "movie", "metaId": "tt0000051",
                       "file": {"name": "The.Film.2024.1080p.mkv", "size": 9 * GB}},
@@ -678,16 +678,16 @@ def test_a_learned_file_two_files_could_be_is_not_guessed():
     assert am.streams_for_meta_id({"entries": [e]}, "tt0000050:1:1", ORIGIN) == []
 
 
-def test_in_a_walk_listing_index_zero_is_only_the_learned_file():
-    """The walk has no indices, and its single video answers as index 0 -- right when that video is
-    the one the label was learned from, and not when another is all that is here."""
+def test_a_learned_file_answers_nothing_on_a_listing_with_no_indices():
+    """The walk has no indices and walks only folders, so index 0 there is a guess about the
+    torrent's file order: a folder whose first file is a text file would play the text. A label
+    that records its file waits for the torrent's own record, whichever video the walk lists."""
     lone = [{"index": None, "name": "Show.S01E02.mkv", "size": 4 * GB, "downloaded": 4 * GB,
              "progress": 1.0}]
     other = _entry(label=_learned(1, 1, "Show.S01E01.mkv", 4 * GB), files=lone)
     assert am.streams_for_meta_id({"entries": [other]}, "tt0000050:1:1", ORIGIN) == []
     own = _entry(label=_learned(1, 2, "Show.S01E02.mkv", 4 * GB), files=lone)
-    streams = am.streams_for_meta_id({"entries": [own]}, "tt0000050:1:2", ORIGIN)
-    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/0"]
+    assert am.streams_for_meta_id({"entries": [own]}, "tt0000050:1:2", ORIGIN) == []
 
 
 def test_other_episodes_of_a_learned_pack_still_answer_by_their_names():
@@ -705,7 +705,8 @@ def test_a_malformed_learned_file_reads_as_none():
     e = _entry(label={**_learned(2, 4, "x.mkv", 1), "file": {"name": "", "size": -1}},
                files=[{"index": 0, "name": "some.release.name.mkv", "size": 4 * GB,
                        "downloaded": 4 * GB, "progress": 1.0}])
-    assert len(am.streams_for_meta_id({"entries": [e]}, "tt0000050:2:4", ORIGIN)) == 1
+    streams = am.streams_for_meta_id({"entries": [e]}, "tt0000050:2:4", ORIGIN)
+    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/0"]
 
 
 def test_the_learned_file_is_offered_once_complete_and_nothing_before():
@@ -726,7 +727,7 @@ def test_the_learned_file_is_offered_once_complete_and_nothing_before():
 
 
 def test_a_packs_one_complete_episode_is_listed_when_the_card_cannot_play_it():
-    """V1b: the card's own id plays the torrent's main file -- its largest -- only once complete,
+    """The card's own id plays the torrent's main file -- its largest -- only once complete,
     and a list needed two complete files. A pack whose one complete episode is smaller than one
     still arriving played nothing from its card."""
     e = _entry(files=[{"index": 0, "name": "Show.S01E01.mkv", "size": 4 * GB,
@@ -760,3 +761,14 @@ def test_a_cards_page_lists_videos_only():
                          "downloaded": 4 * GB, "progress": 1.0}])
     assert [v["id"] for v in am.meta_for(two)["videos"]] == [am.format_id(IH, 3),
                                                              am.format_id(IH, 4)]
+
+
+def test_a_learned_file_is_its_name_and_its_size():
+    """One episode in two folders at two qualities: the same name, told apart by size."""
+    e = _entry(label=_learned(1, 1, "Show.S01E01.mkv", 2 * GB),
+               files=[{"index": 0, "name": "Show.S01E01.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0},
+                      {"index": 1, "name": "Show.S01E01.mkv", "size": 2 * GB,
+                       "downloaded": 2 * GB, "progress": 1.0}])
+    streams = am.streams_for_meta_id({"entries": [e]}, "tt0000050:1:1", ORIGIN)
+    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/1"]

@@ -7,6 +7,7 @@ for subtitles, passing the video id and the playing file's size and name. That i
 playback to a real file, not a guess from a folder name, so it is safe to record. The reply is an
 empty subtitle list, which changes nothing in the player.
 """
+from bencode_helper import benc
 from fastapi.testclient import TestClient
 
 from stremiosrv import cache as cachemod
@@ -135,6 +136,10 @@ def test_once_learned_the_episode_page_offers_the_local_copy():
     [(_ih, label)] = am.learn_labels(state, "series", "tt0000020:3:6", _report())
     assert am.streams_for_meta_id(state, "tt0000020:3:6", ORIGIN) == []
     e["label"] = label
+    # Learned from the walk, whose files carry no index: nothing until the torrent's own record
+    # says where the file is -- index 0 in a folder would be a guess about its order.
+    assert am.streams_for_meta_id(state, "tt0000020:3:6", ORIGIN) == []
+    e["files"] = [dict(e["files"][0], index=0)]  # the resume record, saved
     assert [s["url"] for s in am.streams_for_meta_id(state, "tt0000020:3:6", ORIGIN)] == [
         f"{ORIGIN}/{IH}/0"]
 
@@ -161,6 +166,15 @@ def _on_disk(tmp_path, name="Sample.Show.S03E06.1080p", ih=IH, size=4096):
     return f"{name}.mkv", size
 
 
+def _record_saved(tmp_path, name, size, ih=IH):
+    """What the engine writes within its next save (every 30 s by default): the torrent's resume
+    record, with its own file list -- which is what gives a file its index."""
+    d = tmp_path / ".resume"
+    d.mkdir(exist_ok=True)
+    (d / f"{ih}.fastresume").write_bytes(benc({"info": {"name": name, "files": [
+        {"length": size, "path": [f"{name}.mkv"]}]}}))
+
+
 def _subs(c, token, video_id, extra, kind="series"):
     return c.get(f"/library/addon/{token}/subtitles/{kind}/{video_id}/{extra}.json", headers=LAN)
 
@@ -177,7 +191,11 @@ def test_playing_an_episode_puts_the_local_copy_on_its_page(tmp_path):
     assert r.status_code == 200
     assert r.json() == {"subtitles": []}
     assert labelsmod.load(str(tmp_path))[IH]["metaId"] == "tt0000030"
+    # The first play comes before the engine saves the torrent's record, so the file was found by
+    # walking its folder, which knows no file indices: no row until the record says where it is.
+    assert c.get(page, headers=LAN).json() == {"streams": []}
 
+    _record_saved(tmp_path, "Sample.Show.S03E06.1080p", size)
     streams = c.get(page, headers=LAN).json()["streams"]
     assert len(streams) == 1
     assert streams[0]["url"].endswith(f"/{IH}/0")

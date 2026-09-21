@@ -439,18 +439,16 @@ def _label_matches(label: dict, base: str, season: int | None, episode: int | No
 def _recorded_index(entry: dict, recorded: dict) -> int | None:
     """Where the file a label recorded is in this entry's listing, if it is here and complete.
 
-    Found by name and size among the files that carry an index: one match is the file, none or
-    several is nothing -- not here yet, or no way to tell which. A listing with no index at all is
-    the directory walk's, whose single video answers as index 0; that is kept only when the video is
-    the recorded file, where the fallback plays it whatever it is.
+    Found the way it was learned (_matching_files: by name and size) among the files that carry an
+    index: one match is the file, none or several is nothing -- not here yet, or no way to tell
+    which. A listing with no index at all answers nothing. It is the directory walk's, which walks
+    only folders and cannot know the torrent's own order, so index 0 there would be a guess -- a
+    folder whose first file is a text file would play the text. The torrent's resume record, which
+    the engine saves every 30 s by default, gives the file its index.
     """
-    files = entry.get("files") or []
-    same = [f for f in files if _basename(f.get("name") or "") == recorded["name"]
-            and (f.get("size") or 0) == recorded["size"]]
-    if any(isinstance(f.get("index"), int) for f in files):
-        found = [f for f in same if isinstance(f.get("index"), int)]
-        return found[0]["index"] if len(found) == 1 and is_complete(found[0]) else None
-    return 0 if len(files) == 1 and same and is_complete(files[0]) else None
+    found = [f for f in _matching_files(entry, recorded["size"], recorded["name"])
+             if isinstance(f.get("index"), int)]
+    return found[0]["index"] if len(found) == 1 and is_complete(found[0]) else None
 
 
 def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
