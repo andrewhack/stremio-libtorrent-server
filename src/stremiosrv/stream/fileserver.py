@@ -32,6 +32,16 @@ def content_type_for(path: str) -> str:
     return VIDEO_TYPES.get(ext) or mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 
+def is_video(name: str) -> bool:
+    """Whether a file is a video, by its name: one of the types this server streams as one.
+
+    The library's one answer, for its listing, for matching an episode and for a title's card page.
+    The listing used to ask the download path's shorter list (pins.VIDEO_EXT), so a .wmv, a .mpg or
+    a .flv streamed here yet was never listed -- never learned at its first play, never offered.
+    """
+    return os.path.splitext(name or "")[1].lower() in VIDEO_TYPES
+
+
 def file_disk_path(save_path: str, handle, idx: int) -> str:
     return os.path.join(save_path, handle.file_path(idx))
 

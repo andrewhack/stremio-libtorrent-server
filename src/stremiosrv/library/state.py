@@ -15,9 +15,9 @@ import re
 import stat
 
 from stremiosrv import cache as cachemod
-from stremiosrv import pins as pinsmod
 from stremiosrv.library import labels as labelsmod
 from stremiosrv.library import torrentfiles
+from stremiosrv.stream.fileserver import is_video
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def _disk_files(cache_root: str, name: str, live: list[dict] | None = None) -> l
     out: list[dict] = []
     for dirpath, _dirs, files in os.walk(base):
         for fn in sorted(files):
-            if not fn.lower().endswith(pinsmod.VIDEO_EXT):
+            if not is_video(fn):
                 continue
             path = os.path.join(dirpath, fn)
             try:
@@ -136,7 +136,7 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
     videos = 0
     for tf in resume.files:
         fname = tf.parts[-1] if tf.parts else name
-        if not fname.lower().endswith(pinsmod.VIDEO_EXT):
+        if not is_video(fname):
             continue
         videos += 1
         path = os.path.join(base, *tf.parts)
@@ -175,7 +175,7 @@ def _fresh_single_file(base: str, name: str,
     """
     if not live or len(live) != 1 or live[0].get("name") != name:
         return None
-    if not name.lower().endswith(pinsmod.VIDEO_EXT):
+    if not is_video(name):
         return None
     try:
         st = os.stat(base)

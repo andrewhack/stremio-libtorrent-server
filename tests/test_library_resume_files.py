@@ -483,3 +483,45 @@ def test_a_brand_new_single_file_plays_on_its_label_before_its_record_is_saved(t
     state = statemod.build(str(tmp_path), _Eng({name: FILE_IH}, {FILE_IH: live}))
     assert [s["url"] for s in model.streams_for_meta_id(state, "tt0000007:1:2", "http://o")] == [
         f"http://o/{FILE_IH}/0"]
+
+
+# --- every type the server streams as video is listed (1.6.14) --------------------------------
+
+
+@pytest.mark.parametrize("name", ["The.Film.1999.wmv", "The.Film.1999.mpg", "The.Film.1999.mpeg",
+                                  "The.Film.1999.flv", "The.Film.1999.ogv", "The.Film.1999.MKV"])
+def test_every_type_the_server_streams_as_video_is_listed_learned_and_offered(tmp_path, name):
+    """The listing asked the download path's shorter list, so a video the server streams -- a
+    .wmv, a .mpg, a .flv -- was never listed: never learned at its first play, never offered."""
+    _record(tmp_path, FILE_IH, {"name": name, "length": 6000})
+    (tmp_path / name).write_bytes(b"x" * 6000)
+    _index(tmp_path, **{name: FILE_IH})
+    state = statemod.build(str(tmp_path), None)
+    [e] = [e for e in state["entries"] if e.get("infoHash")]
+    assert [(f["index"], f["name"]) for f in e["files"]] == [(0, name)]
+    hits = model.learn_labels(state, "movie", "tt0000008",
+                              {"videoSize": "6000", "filename": name})
+    assert [ih for ih, _ in hits] == [FILE_IH]
+    labels.put(str(tmp_path), FILE_IH, {"metaId": "tt0000008", "type": "movie"})
+    state = statemod.build(str(tmp_path), None)
+    assert [s["url"] for s in model.streams_for_meta_id(state, "tt0000008", "http://o")] == [
+        f"http://o/{FILE_IH}/0"]
+
+
+def test_the_walk_lists_those_types_too(tmp_path):
+    """A torrent whose resume record is not saved yet is listed by walking its folder."""
+    name = "Home.Movies"
+    (tmp_path / name).mkdir()
+    (tmp_path / name / "tape.mpg").write_bytes(b"x" * 10)
+    (tmp_path / name / "notes.txt").write_bytes(b"x" * 10)
+    _index(tmp_path, **{name: DIR_IH})
+    assert [f["name"] for f in _entry(tmp_path)["files"]] == ["tape.mpg"]
+
+
+def test_a_brand_new_root_file_of_such_a_type_is_listed_from_its_handle(tmp_path):
+    name, size = "The.Film.1999.flv", 6000
+    (tmp_path / name).write_bytes(b"x" * size)
+    live = [{"index": 0, "name": name, "size": size, "downloaded": 600, "progress": 0.1,
+             "wanted": True}]
+    e = _entry(tmp_path, _Eng({name: FILE_IH}, {FILE_IH: live}))
+    assert [f["name"] for f in e["files"]] == [name]
