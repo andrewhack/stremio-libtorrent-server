@@ -413,6 +413,9 @@ def _label_alone_names_the_file(entry: dict) -> bool:
     numbering unlike the app's (anime, split seasons, specials) is what the label is for; or
     exactly one addressable file whose name reads as no episode. Otherwise a name that reads as
     an episode is `episode_index`'s to answer, and it already has.
+
+    Only a label with no recorded file gets here: one learned before files were recorded, or one
+    the page wrote. A label that records its file needs none of this (see streams_for_meta_id).
     """
     if entry.get("wantedFile"):
         return True
@@ -433,6 +436,23 @@ def _label_matches(label: dict, base: str, season: int | None, episode: int | No
     return label.get("season") == season and label.get("episode") == episode
 
 
+def _recorded_index(entry: dict, recorded: dict) -> int | None:
+    """Where the file a label recorded is in this entry's listing, if it is here and complete.
+
+    Found by name and size among the files that carry an index: one match is the file, none or
+    several is nothing -- not here yet, or no way to tell which. A listing with no index at all is
+    the directory walk's, whose single video answers as index 0; that is kept only when the video is
+    the recorded file, where the fallback plays it whatever it is.
+    """
+    files = entry.get("files") or []
+    same = [f for f in files if _basename(f.get("name") or "") == recorded["name"]
+            and (f.get("size") or 0) == recorded["size"]]
+    if any(isinstance(f.get("index"), int) for f in files):
+        found = [f for f in same if isinstance(f.get("index"), int)]
+        return found[0]["index"] if len(found) == 1 and is_complete(found[0]) else None
+    return 0 if len(files) == 1 and same and is_complete(files[0]) else None
+
+
 def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
     """Streams for a Stremio meta id (`tt…` or `tt…:S:E`).
 
@@ -441,6 +461,10 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
     put the wrong film behind a right-looking row. A matched entry that `stream_for` refuses (no
     addressable file) is dropped rather than included: the list this returns is what the app can
     actually play, not a row of everything that matched by name.
+
+    A label learned at playback records the file it was learned from, and for the label's own video
+    that file is the answer -- once complete, and nothing in its place. Anything else is worked out
+    from the torrent's files: an episode by its name, and a label with no file by the fallback.
     """
     parts = meta_id.split(":")
     base = parts[0]
@@ -453,18 +477,26 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
         label = e.get("label") or {}
         if not label or (label.get("metaId") or "") != base:
             continue
+        own = _label_matches(label, base, season, episode)
+        recorded = labelsmod.file_record(label.get("file"))
         stream = None
-        if season is not None:
-            # The pack's own files first: they cover every episode it holds, not only the one the
-            # label happens to name. The label match stays below as the fallback for a torrent
-            # whose file names carry no readable episode number -- there, the label is all we have
-            # -- and only where the label alone can say which file it means.
-            idx = episode_index(e, season, episode)
+        if own and recorded is not None:
+            # Neither a name that reads as this episode nor the torrent's main file: a guess could
+            # only ever be right where the recorded file already is.
+            idx = _recorded_index(e, recorded)
             if idx is not None:
                 stream = stream_for(e, origin, idx)
-        if (stream is None and _label_matches(label, base, season, episode)
-                and (season is None or _label_alone_names_the_file(e))):
-            stream = stream_for(e, origin)
+        else:
+            if season is not None:
+                # The pack's own files first: they cover every episode it holds, not only the one
+                # the label happens to name. The label match stays below as the fallback for a
+                # torrent whose file names carry no readable episode number -- there, the label is
+                # all we have -- and only where the label alone can say which file it means.
+                idx = episode_index(e, season, episode)
+                if idx is not None:
+                    stream = stream_for(e, origin, idx)
+            if stream is None and own and (season is None or _label_alone_names_the_file(e)):
+                stream = stream_for(e, origin)
         if stream is not None:
             out.append(stream)
     return out

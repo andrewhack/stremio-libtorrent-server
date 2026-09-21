@@ -626,3 +626,97 @@ def test_of_two_files_named_as_one_episode_the_larger_decides():
     e["files"][1].update(downloaded=4 * GB, progress=1.0)
     assert [s["url"] for s in am.streams_for_meta_id(state, "tt0000042:1:1", ORIGIN)] == [
         f"{ORIGIN}/{IH}/1"]
+
+
+# --- a title page offers the file its label was learned from (1.6.14) -------------------------
+
+
+def _learned(season, episode, name, size, meta="tt0000050"):
+    """A label learned at playback, which records the file it was learned from."""
+    return {"type": "series", "metaId": meta, "season": season, "episode": episode,
+            "videoId": f"{meta}:{season}:{episode}", "file": {"name": name, "size": size}}
+
+
+def test_a_label_offers_the_file_it_was_learned_from():
+    """Names that carry no episode number, and two episodes complete: without the file the label
+    was learned from nothing can say which one it means -- with it, nothing has to."""
+    e = _entry(label=_learned(1, 1, "[Group] Show - 01 [1080p].mkv", 4 * GB),
+               files=[{"index": 2, "name": "[Group] Show - 02 [1080p].mkv", "size": 5 * GB,
+                       "downloaded": 5 * GB, "progress": 1.0},
+                      {"index": 1, "name": "[Group] Show - 01 [1080p].mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    streams = am.streams_for_meta_id({"entries": [e]}, "tt0000050:1:1", ORIGIN)
+    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/1"]
+
+
+def test_a_learned_file_with_no_bytes_is_not_answered_with_another_episode():
+    """V4: learned while its own file had no bytes, which the resume listing leaves out, so the one
+    video listed is episode 2 -- a lone video whose name reads as no episode, offered in its
+    place."""
+    e = _entry(label=_learned(1, 1, "[Group] Show - 01 [1080p].mkv", 4 * GB), numVideos=2,
+               numFiles=2,
+               files=[{"index": 2, "name": "[Group] Show - 02 [1080p].mkv", "size": 5 * GB,
+                       "downloaded": 5 * GB, "progress": 1.0}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000050:1:1", ORIGIN) == []
+
+
+def test_a_learned_film_with_no_bytes_is_not_answered_with_its_sample():
+    """V5: a torrent's main file is its largest LISTED one, and a film with no bytes is not listed,
+    so its complete sample was offered."""
+    e = _entry(label={"type": "movie", "metaId": "tt0000051",
+                      "file": {"name": "The.Film.2024.1080p.mkv", "size": 9 * GB}},
+               files=[{"index": 0, "name": "the.film.sample.mkv", "size": 90 * 1024 ** 2,
+                       "downloaded": 90 * 1024 ** 2, "progress": 1.0}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000051", ORIGIN) == []
+
+
+def test_a_learned_file_two_files_could_be_is_not_guessed():
+    """The same name and size in two folders of one torrent: either could be the file."""
+    twin = {"name": "Show.S01E01.mkv", "size": 4 * GB, "downloaded": 4 * GB, "progress": 1.0}
+    e = _entry(label=_learned(1, 1, "Show.S01E01.mkv", 4 * GB),
+               files=[{"index": 0, **twin}, {"index": 5, **twin}])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000050:1:1", ORIGIN) == []
+
+
+def test_in_a_walk_listing_index_zero_is_only_the_learned_file():
+    """The walk has no indices, and its single video answers as index 0 -- right when that video is
+    the one the label was learned from, and not when another is all that is here."""
+    lone = [{"index": None, "name": "Show.S01E02.mkv", "size": 4 * GB, "downloaded": 4 * GB,
+             "progress": 1.0}]
+    other = _entry(label=_learned(1, 1, "Show.S01E01.mkv", 4 * GB), files=lone)
+    assert am.streams_for_meta_id({"entries": [other]}, "tt0000050:1:1", ORIGIN) == []
+    own = _entry(label=_learned(1, 2, "Show.S01E02.mkv", 4 * GB), files=lone)
+    streams = am.streams_for_meta_id({"entries": [own]}, "tt0000050:1:2", ORIGIN)
+    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/0"]
+
+
+def test_other_episodes_of_a_learned_pack_still_answer_by_their_names():
+    e = _entry(label=_learned(1, 1, "Show.S01E01.mkv", 4 * GB),
+               files=[{"index": 0, "name": "Show.S01E01.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0},
+                      {"index": 1, "name": "Show.S01E02.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    streams = am.streams_for_meta_id({"entries": [e]}, "tt0000050:1:2", ORIGIN)
+    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/1"]
+
+
+def test_a_malformed_learned_file_reads_as_none():
+    """A hand-edited labels.json: the label answers as one learned before files were recorded."""
+    e = _entry(label={**_learned(2, 4, "x.mkv", 1), "file": {"name": "", "size": -1}},
+               files=[{"index": 0, "name": "some.release.name.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    assert len(am.streams_for_meta_id({"entries": [e]}, "tt0000050:2:4", ORIGIN)) == 1
+
+
+def test_the_learned_file_is_offered_once_complete_and_nothing_before():
+    """Nothing stands in for it meanwhile -- here, a complete sample."""
+    e = _entry(label=_learned(1, 1, "Show.S01E01.mkv", 4 * GB),
+               files=[{"index": 0, "name": "Show.S01E01.mkv", "size": 4 * GB,
+                       "downloaded": GB, "progress": 0.25},
+                      {"index": 1, "name": "show.s01e01.sample.mkv", "size": 50 * 1024 ** 2,
+                       "downloaded": 50 * 1024 ** 2, "progress": 1.0}])
+    state = {"entries": [e]}
+    assert am.streams_for_meta_id(state, "tt0000050:1:1", ORIGIN) == []
+    e["files"][0].update(downloaded=4 * GB, progress=1.0)
+    streams = am.streams_for_meta_id(state, "tt0000050:1:1", ORIGIN)
+    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/0"]

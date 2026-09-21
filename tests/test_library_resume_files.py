@@ -525,3 +525,30 @@ def test_a_brand_new_root_file_of_such_a_type_is_listed_from_its_handle(tmp_path
              "wanted": True}]
     e = _entry(tmp_path, _Eng({name: FILE_IH}, {FILE_IH: live}))
     assert [f["name"] for f in e["files"]] == [name]
+
+
+# --- a label records the file it was learned from (1.6.14) ------------------------------------
+
+
+def test_a_label_learned_from_the_walk_answers_at_the_torrents_own_index(tmp_path):
+    """A brand-new torrent's first play comes before its resume record is saved, so the report is
+    matched against the walk, which has no indices. The label records the file by name and size,
+    and once the record is saved that file answers at the torrent's own index -- in a pack whose
+    names carry no episode number, where nothing else could say which file it is."""
+    name = "[Group] The Show"
+    files = [("[Group] The Show - 02 [1080p].mkv", 6000),
+             ("[Group] The Show - 01 [1080p].mkv", 5000)]
+    d = tmp_path / name
+    d.mkdir()
+    for fname, size in files:
+        (d / fname).write_bytes(b"x" * size)
+    _index(tmp_path, **{name: PACK_IH})
+    state = statemod.build(str(tmp_path), None)  # no record yet: the walk
+    [(ih, label)] = model.learn_labels(state, "series", "tt0000004:1:1",
+                                       {"videoSize": "5000", "filename": files[1][0]})
+    assert labels.learn(str(tmp_path), ih, label)
+    _record(tmp_path, PACK_IH, {"name": name, "files": [
+        {"length": size, "path": [fname]} for fname, size in files]})
+    state = statemod.build(str(tmp_path), None)
+    streams = model.streams_for_meta_id(state, "tt0000004:1:1", "http://o")
+    assert [s["url"] for s in streams] == [f"http://o/{PACK_IH}/1"]
