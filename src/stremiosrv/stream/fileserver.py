@@ -50,7 +50,7 @@ def wait_and_read(
     save_path: str, handle, idx: int, start: int, end: int,
     timeout: float = 30.0, first_timeout: float = 120.0,
     chunk: int = 262144, window_bytes: int = 50_331_648, step_ms: int = 50,
-    info_hash: str = "",
+    info_hash: str = "", count: bool = True, deadline_offset_ms: int = 0,
 ) -> Generator[bytes, None, None]:
     """Yield bytes [start, end] (inclusive, file-relative) of file `idx`, blocking per chunk
     until the covering piece is available.
@@ -74,7 +74,13 @@ def wait_and_read(
     `info_hash` is only ever logged. It is passed in rather than read back off the handle for the
     same reason the read cursor is recorded by the caller: this generator must never raise into the
     ASGI layer, and `handle.status().info_hashes.v1` is one more call that could — on a handle the
-    evictor has just removed, precisely when the stream is failing and the log matters most."""
+    evictor has just removed, precisely when the stream is failing and the log matters most.
+
+    `count` and `deadline_offset_ms` are for a second reader of a file someone is already watching:
+    the embedded-ASS extractor (api/embedded_ass.py), whose ffmpeg reads the TV's file while the TV
+    plays it. Its waits are not playback stalls, so `count=False` keeps them out of the stall and
+    timeout counters. `deadline_offset_ms` makes every deadline it sets later than the viewer's
+    own, so the pieces under the viewer's playhead are always fetched first."""
     pos = start  # bound before the try so the except handler can always report where it stopped
     try:
         plen = handle.piece_length()
@@ -90,7 +96,8 @@ def wait_and_read(
             far = min(gp + window, total - 1)
             while deadlined_to < far:
                 deadlined_to += 1
-                handle.boost_piece(deadlined_to, max(0, deadlined_to - gp) * step_ms)
+                handle.boost_piece(
+                    deadlined_to, deadline_offset_ms + max(0, deadlined_to - gp) * step_ms)
             budget = timeout if yielded else first_timeout
             deadline = time.time() + budget
             wait_start = time.time()
@@ -105,14 +112,15 @@ def wait_and_read(
                 # — a cold seek target — so the swarm never delivered the piece the player asked for.
                 # Non-zero means the window ran dry partway through and the budget that expired was
                 # the shorter `timeout`, not `first_timeout`.
-                metrics.record_timeout()
+                if count:
+                    metrics.record_timeout()
                 logger.warning(
                     "piece %d/%d not available within %.0fs (peer-starved?); ending stream "
                     "[%s file %d, byte %d of range %d-%d, %d served]",
                     gp, total, budget, info_hash or "?", idx, pos, start, end, pos - start,
                 )
                 return
-            if had_to_wait:
+            if had_to_wait and count:
                 metrics.record_stall(time.time() - wait_start)
             # Never read past the end of the current (verified) piece: the next piece may not be
             # downloaded yet, and reading into it would return sparse/zero bytes -> corrupt frames.
@@ -133,7 +141,8 @@ def wait_and_read(
         # the data is present. As above, the resulting short body is absorbed by
         # SuppressClientDisconnect. (Client disconnects raise GeneratorExit, not Exception, so they
         # pass through and close the generator normally.)
-        metrics.record_timeout()
+        if count:
+            metrics.record_timeout()
         logger.warning(
             "stream ended early (%s: %s); player will retry "
             "[%s file %d, byte %d of range %d-%d, %d served]",

@@ -68,3 +68,79 @@ def test_disk_error_ends_stream_gracefully(tmp_path, monkeypatch):
     chunks = list(wait_and_read(str(tmp_path), h, 0, 0, 2000, timeout=0.5, first_timeout=0.5, chunk=1024))
     assert chunks == []        # ended cleanly (no raise)...
     assert timeouts == [1]     # ...recorded + returned
+
+
+# --- A second reader of a file someone is watching (api/embedded_ass.py's private reader). ---
+
+
+class RecordingHandle(FakeHandle):
+    """Every piece present; records each boost as (piece, deadline_ms)."""
+
+    def __init__(self, plen: int, have: set[int]):
+        super().__init__(plen, have)
+        self.boosts: list[tuple[int, int]] = []
+
+    def boost_piece(self, p, ms):
+        self.boosts.append((p, ms))
+
+
+class ArrivingHandle(FakeHandle):
+    """Piece 0 arrives after the reader has waited for it once (a stall); piece 1 never does (a
+    timeout). One read of this handle produces both events a reader can count."""
+
+    def __init__(self, plen: int):
+        super().__init__(plen, have=set())
+        self.asked = 0
+
+    def have_piece(self, i):
+        if i == 0:
+            self.asked += 1
+            return self.asked > 1
+        return False
+
+
+def test_deadline_offset_makes_every_deadline_later(tmp_path):
+    """The embedded-ASS reader reads a file the viewer is playing. Each deadline it sets must come
+    after the viewer's own, so the pieces under the viewer's playhead are fetched first."""
+    plen = 1024
+    (tmp_path / "f.bin").write_bytes(b"A" * plen * 4)
+    viewer, reader = RecordingHandle(plen, {0, 1, 2, 3}), RecordingHandle(plen, {0, 1, 2, 3})
+    kw = dict(window_bytes=plen * 4, chunk=plen)
+    list(wait_and_read(str(tmp_path), viewer, 0, 0, plen * 4 - 1, **kw))
+    list(wait_and_read(str(tmp_path), reader, 0, 0, plen * 4 - 1, deadline_offset_ms=2000, **kw))
+    assert viewer.boosts, "nothing was boosted -- the comparison below would prove nothing"
+    assert [p for p, _ in reader.boosts] == [p for p, _ in viewer.boosts]
+    assert [ms for _, ms in reader.boosts] == [ms + 2000 for _, ms in viewer.boosts]
+
+
+def test_an_uncounted_reader_records_no_stall_and_no_timeout(tmp_path, monkeypatch):
+    """A second reader's waits are not playback stalls. Counted, they would show a starved box on
+    /stats.json whenever a TV has a styled subtitle track selected."""
+    from stremiosrv import metrics
+    seen = []
+    monkeypatch.setattr(metrics, "record_timeout", lambda: seen.append("timeout"))
+    monkeypatch.setattr(metrics, "record_stall", lambda s: seen.append("stall"))
+    plen = 1024
+    (tmp_path / "f.bin").write_bytes(b"A" * plen * 2)
+    kw = dict(timeout=0.2, first_timeout=0.2, chunk=plen)
+    counted = list(wait_and_read(str(tmp_path), ArrivingHandle(plen), 0, 0, plen * 2 - 1, **kw))
+    assert counted == [b"A" * plen]
+    assert seen == ["stall", "timeout"], "the handle must produce both events for this to prove it"
+    seen.clear()
+    quiet = list(wait_and_read(str(tmp_path), ArrivingHandle(plen), 0, 0, plen * 2 - 1,
+                               count=False, **kw))
+    assert quiet == [b"A" * plen]
+    assert seen == []
+
+
+def test_an_uncounted_reader_records_no_timeout_on_a_disk_error(tmp_path, monkeypatch):
+    from stremiosrv import metrics
+    seen = []
+    monkeypatch.setattr(metrics, "record_timeout", lambda: seen.append("timeout"))
+    h = FakeHandle(plen=1024, have={0})  # piece 0 present, but no f.bin on disk
+    kw = dict(timeout=0.5, first_timeout=0.5, chunk=1024)
+    assert list(wait_and_read(str(tmp_path), h, 0, 0, 2000, **kw)) == []
+    assert seen == ["timeout"], "the disk error must be counted by default for this to prove it"
+    seen.clear()
+    assert list(wait_and_read(str(tmp_path), h, 0, 0, 2000, count=False, **kw)) == []
+    assert seen == []
