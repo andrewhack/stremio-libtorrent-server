@@ -34,7 +34,7 @@ ORIGIN_ONLY = {
     "/netcheck.json": _CONFIG_WEB,
     "/active.json": _CONFIG_WEB,
     "/transcode.json": "diagnostics; no client requests it through the player origin",
-    "/_embedded-ass-read/{secret}/{info_hash}/{idx:int}":
+    "/_embedded-ass-read/{secret}/{info_hash}/{idx}":
         "ffmpeg's private reader: loopback only, a per-process secret in the path",
 }
 
