@@ -34,6 +34,8 @@ ORIGIN_ONLY = {
     "/netcheck.json": _CONFIG_WEB,
     "/active.json": _CONFIG_WEB,
     "/transcode.json": "diagnostics; no client requests it through the player origin",
+    "/_embedded-ass-read/{secret}/{info_hash}/{idx:int}":
+        "ffmpeg's private reader: loopback only, a per-process secret in the path",
 }
 
 
@@ -191,6 +193,13 @@ def test_unmatched_paths_get_a_counted_404_not_the_web_player():
     assert "X-Original-Method $request_method" in named
     assert "X-Original-URI $request_uri" in named
     assert 'proxy_set_header X-Forwarded-For "";' in named
+
+
+def test_the_embedded_ass_reader_is_never_proxied():
+    """ffmpeg's private reader answers loopback only. A location for it would leave a read of any
+    loaded torrent guarded by nothing but a path secret, one leak away from the internet."""
+    path = "/_embedded-ass-read/secret/" + "a" * 40 + "/0"
+    assert not any(_matches(path, mod, val) for mod, val in _proxied_matchers())
 
 
 def test_the_proxy_route_reaches_the_app_with_its_raw_path():

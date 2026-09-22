@@ -34,6 +34,8 @@ def _clean():
     ("GET", "/wp-login.php", "GET /{x}"),   # a scanner's probe is not a route family
     ("BREW", "/heartbeat", "OTHER /heartbeat"),
     ("get", "/heartbeat?x=1", "GET /heartbeat"),
+    # ffmpeg's private reader: named, so a probe of it shows -- and never with its secret
+    ("GET", f"/_embedded-ass-read/s3cr3t/{IH}/0", "GET /_embedded-ass-read/*"),
 ])
 def test_shape_keeps_the_route_and_drops_every_value(method, path, want):
     assert unmatched.shape(method, path) == want

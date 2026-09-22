@@ -39,8 +39,8 @@ KNOWN_FIRST_SEGMENTS = frozenset({
     "status", "stream", "subtitleSignature", "subtitles.srt", "subtitles.vtt", "subtitlesTracks",
     "tar", "tgz", "thumb.jpg", "tracks", "transcode", "yt", "zip",
     # this server's own
-    "_unmatched", "active.json", "cache", "cache.json", "health", "library", "netcheck.json",
-    "pins.json", "transcode.json",
+    "_embedded-ass-read", "_unmatched", "active.json", "cache", "cache.json", "health",
+    "library", "netcheck.json", "pins.json", "transcode.json",
 })
 
 _lock = threading.Lock()

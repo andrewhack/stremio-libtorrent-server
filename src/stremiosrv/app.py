@@ -8,7 +8,17 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from stremiosrv import health, unmatched
 from stremiosrv.api import cache as cache_api
-from stremiosrv.api import casting, handshake, hls, netcheck, pins, playback, proxy, subs
+from stremiosrv.api import (
+    casting,
+    embedded_ass,
+    handshake,
+    hls,
+    netcheck,
+    pins,
+    playback,
+    proxy,
+    subs,
+)
 from stremiosrv.config import Settings
 from stremiosrv.library import addon as library_addon
 from stremiosrv.library import api as library_api
@@ -157,6 +167,7 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     app.include_router(cache_api.router)
     app.include_router(hls.router)
     app.include_router(subs.router)
+    app.include_router(embedded_ass.router)
     app.include_router(casting.router)
     app.include_router(unmatched.router)
     # Opt-in. Registering nothing when off means an unset flag cannot be probed for, and the
