@@ -1,13 +1,20 @@
-"""ffmpeg's private reader for the embedded-ASS routes: who may use it, and what it must not do.
+"""Embedded ASS subtitles for TV players: the routes. What they compute is subs/embedded_ass.py.
 
-The reader serves a torrent file the TV is already playing. Going through the stream route instead
-would `refocus()` the torrent on every request and take the TV's playhead priority away.
+A TV plays a torrent's file directly. With the "ASS subtitles styling" setting on, stremio-video
+0.0.97+ asks which ASS tracks and fonts the file has, then fetches the selected track 60 s at a
+time as playback moves, and draws it with libass over the video. Only this server's own torrent
+streams are answered: every route here reads a file the engine already holds, and never a URL a
+client sent.
+
+ffmpeg reads that file through a private reader, never through the stream route (/{ih}/{idx}).
+The stream route calls `refocus()` on every request -- dropping the viewer's playhead deadlines --
+and `focus_file()`, marks the torrent watched, and counts stalls. A subtitle reader going through
+it every 30 s would take the TV's own playhead priority away.
 """
 from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Generator
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import StreamingResponse
@@ -18,111 +25,73 @@ from stremiosrv.stream.ranges import parse_range
 
 router = APIRouter()
 
+# --- the private reader: ffmpeg's way into a torrent file ---
+
 READER_PREFIX = "/_embedded-ass-read"
+# Made per process, never logged and never sent to a client: only an ffmpeg this process starts is
+# handed a URL carrying it.
+_SECRET = secrets.token_urlsafe(32)
+# Later than any deadline the viewer's own reads set, so the TV's playhead pieces come first. The
+# reader still asks for its pieces: after a seek its window starts up to 40 s behind the TV's new
+# position, where nothing has downloaded.
 READER_DEADLINE_OFFSET_MS = 2000
 READER_FIRST_TIMEOUT = 20.0
 READER_TIMEOUT = 10.0
-
-# Per-process secret: unique to this running process, lost on restart.
-_SECRET = secrets.token_urlsafe(32)
-_INFOHASH = re.compile(r"^[0-9a-f]{40}$")
-
-
-def _engine(request: Request):
-    return getattr(request.app.state, "engine", None)
+_INFOHASH = re.compile(r"[0-9a-f]{40}")
 
 
 def reader_url(request: Request, info_hash: str, idx: int) -> str:
-    """Build the private reader's URL for ffmpeg to fetch from.
+    """The URL ffmpeg reads file `idx` of torrent `info_hash` from."""
+    port = request.app.state.settings.http_port
+    return f"http://127.0.0.1:{port}{READER_PREFIX}/{_SECRET}/{info_hash}/{idx}"
 
-    Arguments:
-        request: FastAPI request (carries request.app.state.settings.http_port)
-        info_hash: the torrent's 40-char hex infohash
-        idx: file index in the torrent
 
-    Returns:
-        URL like http://127.0.0.1:11470/_embedded-ass-read/<secret>/<ih>/<idx>
-    """
-    http_port = request.app.state.settings.http_port
-    return f"http://127.0.0.1:{http_port}{READER_PREFIX}/{_SECRET}/{info_hash}/{idx}"
+def _is_own_ffmpeg(request: Request, secret: str) -> bool:
+    """Only an ffmpeg this process started: the right secret, from loopback, not through nginx.
+
+    nginx always sets X-Forwarded-For (docker/nginx-locations.inc), so a loopback peer without it
+    connected directly; a LAN client on :11470 is not loopback; and the secret makes the caller
+    this process's own."""
+    peer = request.client.host if request.client else ""
+    return (secrets.compare_digest(secret.encode(), _SECRET.encode())
+            and netguard._is_loopback(peer) and "x-forwarded-for" not in request.headers)
 
 
 def _playing(request: Request, info_hash: str, idx: int):
-    """The engine's handle if this torrent is loaded with metadata; None otherwise."""
-    if not _INFOHASH.fullmatch(info_hash):
-        return None
-    eng = _engine(request)
-    if eng is None:
+    """The torrent's handle when the engine holds it, with metadata and a file `idx`; else None.
+
+    Nothing here ever adds a torrent: the TV is playing this file, so the stream route has."""
+    eng = getattr(request.app.state, "engine", None)
+    if eng is None or not _INFOHASH.fullmatch(info_hash):
         return None
     h = eng.get(info_hash)
-    if h is None or not h.has_metadata():
-        return None
-    if idx < 0 or idx >= h.num_files():
+    if h is None or not h.has_metadata() or not 0 <= idx < h.num_files():
         return None
     return h
 
 
-def _is_own_ffmpeg(request: Request, secret: str) -> bool:
-    """Is this request from this process's ffmpeg, at loopback, with the right secret?
+@router.get(READER_PREFIX + "/{secret}/{info_hash}/{idx}", include_in_schema=False)
+def private_reader(secret: str, info_hash: str, idx: int, request: Request) -> Response:
+    """Byte ranges of a torrent file for ffmpeg, waiting for pieces like the stream route does.
 
-    The private reader answers only a loopback peer with the per-process secret, and rejects
-    any X-Forwarded-For (a sign the request came through a proxy, not from the local process).
-    The secret is compared in constant time to prevent timing attacks.
-    """
-    peer = request.client.host if request.client else ""
-    if not netguard._is_loopback(peer) or "x-forwarded-for" in request.headers:
-        return False
-    return secrets.compare_digest(secret.encode(), _SECRET.encode())
-
-
-@router.get(READER_PREFIX + "/{secret}/{info_hash}/{idx}", include_in_schema=False, name="private_reader")
-def read(secret: str, info_hash: str, idx: int, request: Request):
-    """Byte-range reader for ffmpeg extracting embedded subtitles from a playing torrent.
-
-    Returns 206 with byte ranges, 416 for out-of-range, 404 for auth/validation failures.
-    Waits for pieces with every deadline 2s after the TV's viewer, and never refocuses,
-    changes focus, or marks the torrent watched.
-    """
-    # Guard: loopback + secret in constant time + no X-Forwarded-For
-    if not _is_own_ffmpeg(request, secret):
-        return Response(status_code=404)
-
-    # Get torrent, validate it exists and has metadata
-    h = _playing(request, info_hash, idx)
+    Unlike it: never `refocus()` or `focus_file()`, no stall or timeout counted, the torrent never
+    marked watched, and every deadline 2 s later than the viewer's own."""
+    h = _playing(request, info_hash, idx) if _is_own_ffmpeg(request, secret) else None
     if h is None:
         return Response(status_code=404)
-
-    eng = _engine(request)
-    if eng is None:
-        return Response(status_code=503, content=b"engine unavailable")
-
     total = h.file_size(idx)
     start, end = parse_range(request.headers.get("Range"), total)
-
-    # Out-of-range: start >= total means no valid range (RFC 7233 4.4)
     if start >= total:
         return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
-
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Range": f"bytes {start}-{end}/{total}",
         "Content-Length": str(end - start + 1),
         "Content-Type": content_type_for(h.file_path(idx)),
     }
-
-    def reader_stream() -> Generator[bytes, None, None]:
-        """Serve bytes [start, end] (inclusive) using wait_and_read with reader settings."""
-        stream = wait_and_read(
-            eng.save_path(), h, idx, start, end,
-            timeout=READER_TIMEOUT,
-            first_timeout=READER_FIRST_TIMEOUT,
-            count=False,
-            deadline_offset_ms=READER_DEADLINE_OFFSET_MS,
-            info_hash=info_hash,
-        )
-        try:
-            yield from stream
-        finally:
-            stream.close()
-
-    return StreamingResponse(reader_stream(), status_code=206, headers=headers)
+    body = wait_and_read(
+        request.app.state.engine.save_path(), h, idx, start, end,
+        timeout=READER_TIMEOUT, first_timeout=READER_FIRST_TIMEOUT, info_hash=info_hash,
+        count=False, deadline_offset_ms=READER_DEADLINE_OFFSET_MS,
+    )
+    return StreamingResponse(body, status_code=206, headers=headers)
