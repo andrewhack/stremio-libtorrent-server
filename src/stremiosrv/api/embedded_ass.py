@@ -13,16 +13,35 @@ it every 30 s would take the TV's own playhead priority away.
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 import secrets
+import shutil
+import subprocess
+import tempfile
+import threading
+from collections import OrderedDict
 
-from fastapi import APIRouter, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, StreamingResponse
 
+from stremiosrv import metrics
+from stremiosrv.api.subs import parse_stream_url
 from stremiosrv.library import netguard
 from stremiosrv.stream.fileserver import content_type_for, wait_and_read
 from stremiosrv.stream.ranges import parse_range
+from stremiosrv.subs.embedded_ass import (
+    Discovery,
+    discover,
+    font_dump_argv,
+    parse_window,
+    probe_argv,
+    window_argv,
+)
 
+logger = logging.getLogger("stremiosrv.embedded_ass")
 router = APIRouter()
 
 # --- the private reader: ffmpeg's way into a torrent file ---
@@ -95,3 +114,172 @@ def private_reader(secret: str, info_hash: str, idx: int, request: Request) -> R
         count=False, deadline_offset_ms=READER_DEADLINE_OFFSET_MS,
     )
     return StreamingResponse(body, status_code=206, headers=headers)
+
+
+# --- the three routes the TV calls ---
+
+PROBE_TIMEOUT = 30
+FFMPEG_TIMEOUT = 30
+# At most this many extractions and font dumps at once. The client aborts a window it no longer
+# needs, but a sync route cannot see that, so its ffmpeg runs to the end.
+_WORK = threading.BoundedSemaphore(2)
+_WORK_WAIT = 10.0
+_FOUND_KEEP = 16   # files whose track list is remembered
+_FONTS_KEEP = 8    # files whose fonts stay on disk
+# Outside cache_root on purpose: the evictor and the transcode GC never see it.
+FONT_ROOT = os.path.join(tempfile.gettempdir(), "stremiosrv-embedded-ass")
+
+_lock = threading.Lock()
+_found: OrderedDict[tuple[str, int], Discovery] = OrderedDict()
+_file_locks: dict[tuple[str, int], threading.Lock] = {}
+_fonts_used: OrderedDict[tuple[str, int], None] = OrderedDict()
+_font_root_ready = False
+
+
+def reset() -> None:
+    """Test helper -- forget every cached track list and font set."""
+    global _font_root_ready
+    with _lock:
+        _found.clear()
+        _file_locks.clear()
+        _fonts_used.clear()
+        _font_root_ready = False
+
+
+def _fail(status: int, detail: str, info_hash: str, idx: int) -> HTTPException:
+    """A 5xx: counted, and logged by infohash and file index only -- never a name or a line."""
+    metrics.record_embedded_ass("failure")
+    logger.warning("embedded ASS: %s [%s file %d]", detail, info_hash, idx)
+    return HTTPException(status_code=status, detail=detail)
+
+
+def _file_lock(key: tuple[str, int]) -> threading.Lock:
+    with _lock:
+        return _file_locks.setdefault(key, threading.Lock())
+
+
+def _resolve(request: Request, media_url: str | None) -> tuple[str, int]:
+    """The torrent and file a client's mediaURL names -- when it is this server's own stream of a
+    torrent the engine holds. The URL itself is never fetched."""
+    parsed = parse_stream_url(media_url or "")
+    if parsed is None or _playing(request, *parsed) is None:
+        raise HTTPException(status_code=404, detail="not a torrent stream this server is playing")
+    return parsed
+
+
+def _discovery(request: Request, info_hash: str, idx: int) -> Discovery:
+    """The file's tracks and fonts, probed once and remembered for the last _FOUND_KEEP files."""
+    key = (info_hash, idx)
+    with _file_lock(key):
+        with _lock:
+            if key in _found:
+                _found.move_to_end(key)
+                return _found[key]
+        try:
+            proc = subprocess.run(probe_argv(reader_url(request, info_hash, idx)),
+                                  capture_output=True, timeout=PROBE_TIMEOUT)
+        except subprocess.TimeoutExpired as e:
+            raise _fail(504, "probe timed out", info_hash, idx) from e
+        try:
+            if proc.returncode != 0:
+                raise ValueError(proc.returncode)
+            found = discover(json.loads(proc.stdout or b"{}"))
+        except ValueError as e:
+            raise _fail(502, "probe failed", info_hash, idx) from e
+        with _lock:
+            _found[key] = found
+            while len(_found) > _FOUND_KEEP:
+                _found.popitem(last=False)
+        return found
+
+
+def _run(argv: list[str], info_hash: str, idx: int) -> bytes:
+    """One ffmpeg run, under the extraction limit."""
+    if not _WORK.acquire(timeout=_WORK_WAIT):
+        raise _fail(503, "subtitle extraction busy", info_hash, idx)
+    try:
+        proc = subprocess.run(argv, capture_output=True, timeout=FFMPEG_TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        raise _fail(504, "subtitle extraction timed out", info_hash, idx) from e
+    finally:
+        _WORK.release()
+    if proc.returncode != 0:
+        raise _fail(502, "subtitle extraction failed", info_hash, idx)
+    return proc.stdout
+
+
+@router.get("/embedded-ass")
+def embedded_ass(request: Request, mediaURL: str | None = None) -> dict:
+    """`{"tracks": [{number, codec, lang, label}], "fonts": [{id}]}` for the file being played."""
+    info_hash, idx = _resolve(request, mediaURL)
+    found = _discovery(request, info_hash, idx)
+    metrics.record_embedded_ass("ask")
+    return found.answer()
+
+
+@router.get("/embedded-ass/{number:int}.ass")
+def embedded_ass_window(
+    number: int, request: Request, mediaURL: str | None = None,
+    from_: str | None = Query(None, alias="from"), to: str | None = None,
+) -> Response:
+    """One window of an ASS track: its header and styles, then its events at the file's own
+    times. The client asks for `from`..`to` in milliseconds, 60 s at a time."""
+    window = parse_window(from_, to)
+    if window is None:
+        raise HTTPException(status_code=400,
+                            detail="from and to are whole milliseconds, 0 < to - from <= 300000")
+    info_hash, idx = _resolve(request, mediaURL)
+    if not _discovery(request, info_hash, idx).has_track(number):
+        raise HTTPException(status_code=404, detail="no such ASS track")
+    text = _run(window_argv(reader_url(request, info_hash, idx), number, *window), info_hash, idx)
+    metrics.record_embedded_ass("window")
+    return Response(content=text, media_type="text/x-ssa; charset=utf-8")
+
+
+def _font_root() -> str:
+    """The font cache, emptied the first time this process uses it: what a previous process left
+    behind is not trusted."""
+    global _font_root_ready
+    with _lock:
+        if not _font_root_ready:
+            shutil.rmtree(FONT_ROOT, ignore_errors=True)
+            os.makedirs(FONT_ROOT, exist_ok=True)
+            _font_root_ready = True
+    return FONT_ROOT
+
+
+def _fonts_dir(request: Request, info_hash: str, idx: int, found: Discovery) -> str:
+    """The directory holding every font of the file, dumped in one ffmpeg run on first use. Only
+    the last _FONTS_KEEP files' fonts are kept."""
+    key = (info_hash, idx)
+    d = os.path.join(_font_root(), f"{info_hash}-{idx}")
+    done = os.path.join(d, ".done")
+    with _file_lock(key):
+        if not os.path.exists(done):
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            _run(font_dump_argv(reader_url(request, info_hash, idx), sorted(found.fonts), d),
+                 info_hash, idx)
+            if not all(os.path.exists(os.path.join(d, f"{i}.font")) for i in found.fonts):
+                raise _fail(502, "font dump incomplete", info_hash, idx)
+            open(done, "wb").close()
+    with _lock:
+        _fonts_used[key] = None
+        _fonts_used.move_to_end(key)
+        stale = []
+        while len(_fonts_used) > _FONTS_KEEP:
+            stale.append(_fonts_used.popitem(last=False)[0])
+    for ih, i in stale:
+        shutil.rmtree(os.path.join(FONT_ROOT, f"{ih}-{i}"), ignore_errors=True)
+    return d
+
+
+@router.get("/embedded-ass/font/{font_id:int}")
+def embedded_ass_font(font_id: int, request: Request, mediaURL: str | None = None) -> Response:
+    """One font attachment's bytes."""
+    info_hash, idx = _resolve(request, mediaURL)
+    found = _discovery(request, info_hash, idx)
+    if font_id not in found.fonts:
+        raise HTTPException(status_code=404, detail="no such font")
+    d = _fonts_dir(request, info_hash, idx, found)
+    return FileResponse(os.path.join(d, f"{font_id}.font"), media_type=found.fonts[font_id])

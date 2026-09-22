@@ -32,7 +32,12 @@ location = /subtitleSignature  { proxy_pass http://127.0.0.1:11470; }
 # (Android/ExoPlayer), `.vtt` for the browser. Route every /subtitles.<ext> to the proxy, else a
 # `.srt` request falls through to the web-player index.html (HTML, not a subtitle).
 location /subtitles.           { proxy_pass http://127.0.0.1:11470; }
-location = /removeAll          { proxy_pass http://127.0.0.1:11470; }
+# A TV's styled embedded subtitles (stremio-video 0.0.97+): /embedded-ass, /embedded-ass/<n>.ass
+# and /embedded-ass/font/<id>. The TV drops a failed answer without a word, so a miss here would
+# only ever show as a counted 404. ffmpeg's own reader, /_embedded-ass-read/, is deliberately
+# absent: it answers loopback only, and must never be reachable through this proxy.
+location ^~ /embedded-ass      { proxy_pass http://127.0.0.1:11470; }
+location = /removeAll         { proxy_pass http://127.0.0.1:11470; }
 location ^~ /hlsv2/            { proxy_pass http://127.0.0.1:11470; }
 # Torrent routes are /<40-hex-infohash>/<idx|-1|stats.json|remove|create>. The second segment MUST
 # be anchored: the bundled web build serves its JS/CSS from a 40-hex-named dir

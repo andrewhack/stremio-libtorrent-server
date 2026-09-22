@@ -3,8 +3,9 @@
 Counts re-buffer **stalls** (a read that had to wait for a not-yet-downloaded piece), piece
 **timeouts** (a piece that never arrived within the read timeout), next-episode **prefetch**
 arms (how often the opt-in prefetch fired, and how many bytes it asked for), **hlsv2 jobs**
-split by whether ffmpeg re-encoded anything, and the library addon's **subtitles** route (asked,
-reported a file, learned a title). Exposed via GET /stats.json and consumed by the appliance's
+split by whether ffmpeg re-encoded anything, the library addon's **subtitles** route (asked,
+reported a file, learned a title), and a TV's **embedded-ASS** routes (asked, windows served,
+failed). Exposed via GET /stats.json and consumed by the appliance's
 config-web advisor to suggest raising the download rate limit when playback is starved.
 Process-local counters (the server is single-process); reset on restart.
 """
@@ -24,6 +25,7 @@ _hls_reencodes = 0
 _library_subtitles_asks = 0
 _library_subtitles_reports = 0
 _library_labels_learned = 0
+_embedded_ass = {"ask": 0, "window": 0, "failure": 0}
 
 
 def record_stall(seconds: float) -> None:
@@ -78,6 +80,16 @@ def record_library_subtitles(reported: bool, learned: int) -> None:
         _library_labels_learned += learned
 
 
+def record_embedded_ass(kind: str) -> None:
+    """A TV's embedded-ASS routes (api/embedded_ass.py): `ask` a discovery answered, `window` a
+    window of subtitles served, `failure` any 5xx from the three routes.
+
+    The first `ask` a box ever records is the evidence that a client runs stremio-video >= 0.0.97
+    with ASS styling on. No stremio-web release carried that when these routes shipped."""
+    with _lock:
+        _embedded_ass[kind] += 1
+
+
 def record_hls_session(decision: dict) -> None:
     """A NEW hlsv2 job was started. Recorded behind `Converter.ensure_job`'s live-job check, so it
     follows jobs rather than requests — a player re-fetches `master.m3u8` several times per
@@ -117,6 +129,9 @@ def playback_stats() -> dict:
             "librarySubtitlesAsks": _library_subtitles_asks,
             "librarySubtitlesReports": _library_subtitles_reports,
             "libraryLabelsLearned": _library_labels_learned,
+            "embeddedAssAsks": _embedded_ass["ask"],
+            "embeddedAssWindows": _embedded_ass["window"],
+            "embeddedAssFailures": _embedded_ass["failure"],
         }
 
 
@@ -131,3 +146,5 @@ def reset() -> None:
         _subtitle_signature_asks = 0
         _hls_sessions, _hls_reencodes = 0, 0
         _library_subtitles_asks, _library_subtitles_reports, _library_labels_learned = 0, 0, 0
+        for kind in _embedded_ass:
+            _embedded_ass[kind] = 0

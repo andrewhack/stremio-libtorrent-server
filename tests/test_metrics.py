@@ -17,6 +17,7 @@ def test_record_stall_and_timeout_snapshot():
         "prefetches": 0, "prefetchBytes": 0, "subtitleSignatureAsks": 0,
         "hlsSessions": 0, "hlsReencodes": 0,
         "librarySubtitlesAsks": 0, "librarySubtitlesReports": 0, "libraryLabelsLearned": 0,
+        "embeddedAssAsks": 0, "embeddedAssWindows": 0, "embeddedAssFailures": 0,
     }
 
 
@@ -53,6 +54,7 @@ def test_hls_counters_reset():
         "prefetches": 0, "prefetchBytes": 0, "subtitleSignatureAsks": 0,
         "hlsSessions": 0, "hlsReencodes": 0,
         "librarySubtitlesAsks": 0, "librarySubtitlesReports": 0, "libraryLabelsLearned": 0,
+        "embeddedAssAsks": 0, "embeddedAssWindows": 0, "embeddedAssFailures": 0,
     }
 
 

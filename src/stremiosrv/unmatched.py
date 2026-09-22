@@ -38,6 +38,8 @@ KNOWN_FIRST_SEGMENTS = frozenset({
     "nzb", "opensubHash", "probe", "proxy", "rar", "removeAll", "settings", "stats.json",
     "status", "stream", "subtitleSignature", "subtitles.srt", "subtitles.vtt", "subtitlesTracks",
     "tar", "tgz", "thumb.jpg", "tracks", "transcode", "yt", "zip",
+    # asked by stremio-video 0.0.97+ on TVs; no published stock server has it
+    "embedded-ass",
     # this server's own
     "_embedded-ass-read", "_unmatched", "active.json", "cache", "cache.json", "health",
     "library", "netcheck.json", "pins.json", "transcode.json",

@@ -202,6 +202,14 @@ def test_the_embedded_ass_reader_is_never_proxied():
     assert not any(_matches(path, mod, val) for mod, val in _proxied_matchers())
 
 
+def test_the_tv_embedded_ass_routes_are_proxied():
+    """The TV drops a failed answer without a word, so an unproxied route would only ever show as
+    a counted 404 -- never as a failure anyone sees."""
+    matchers = _proxied_matchers()
+    for path in ("/embedded-ass", "/embedded-ass/3.ass", "/embedded-ass/font/4"):
+        assert any(_matches(path, mod, val) for mod, val in matchers), path
+
+
 def test_the_proxy_route_reaches_the_app_with_its_raw_path():
     """stremio-video's /proxy URLs carry the destination percent-encoded in the path. A prefix
     location with a bare proxy_pass (no URI part) forwards the request URI as the client sent it."""

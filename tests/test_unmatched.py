@@ -36,6 +36,8 @@ def _clean():
     ("get", "/heartbeat?x=1", "GET /heartbeat"),
     # ffmpeg's private reader: named, so a probe of it shows -- and never with its secret
     ("GET", f"/_embedded-ass-read/s3cr3t/{IH}/0", "GET /_embedded-ass-read/*"),
+    # a TV's embedded-ASS route asked with a method it does not answer
+    ("HEAD", "/embedded-ass?mediaURL=x", "HEAD /embedded-ass"),
 ])
 def test_shape_keeps_the_route_and_drops_every_value(method, path, want):
     assert unmatched.shape(method, path) == want
