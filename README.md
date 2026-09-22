@@ -131,6 +131,13 @@ by `docker logs stremio`.
 >
 > **TVs are unaffected** — Samsung/LG accept the `:12470` URL directly and it sticks.
 
+**Styled subtitles on the TV.** A Stremio TV app built on stremio-video 0.0.97 or later can draw a
+file's own ASS/SSA subtitles with their styling and fonts, instead of as plain text. Turn on the
+player's ASS subtitles styling setting: each styled track then shows as a second entry, marked
+**(styled)**, next to the TV's plain one. The server reads only the stretch being watched, a minute
+at a time, and the TV's own playback keeps priority over it. Older TV apps keep their plain
+subtitles.
+
 ---
 
 ## 🌍 Want the *full* swarm? Forward one port.

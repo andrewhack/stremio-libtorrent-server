@@ -104,6 +104,9 @@ Query params observed on hlsv2 requests (from live logs): `mediaURL`, `videoCode
 | GET | `/opensubHash` | 46706 | **OpenSubtitles hash** — must match algorithm exactly |
 | GET | `/tracks/:url` | 46644 | track extraction |
 | GET | `/subtitleSignature` | *(absent)* | embedded-subtitle signature — **client-only, no reference** |
+| GET | `/embedded-ass` | *(absent)* | a file's ASS tracks and fonts, for a TV's styled subtitles — **client-only** |
+| GET | `/embedded-ass/:number.ass` | *(absent)* | one ASS track, a window of events at a time |
+| GET | `/embedded-ass/font/:id` | *(absent)* | one font attachment |
 
 ### `/subtitleSignature` — the one route the reference does not define
 
@@ -124,6 +127,35 @@ the client accepts any string, so a fabricated one would start being used the da
 upstream, and wrong subtitle matching is far harder to trace than absent subtitle matching. Revisit
 when a server release defines the algorithm — `subtitleSignatureAsks` in `/stats.json` counts the
 demand in the meantime.
+
+### `/embedded-ass` — a TV's styled subtitles, also without a reference
+
+`stremio-video` 0.0.97 (2026-09-17) lets a TV draw a file's embedded ASS/SSA tracks with their own
+styles and fonts. A TV never transcodes (`supportsTranscoding()` is false on Tizen and webOS), so
+with the player's ASS styling setting on, a direct play asks:
+
+- `GET /embedded-ass?mediaURL=<stream>` →
+  `{"tracks":[{"number","codec","lang","label"}],"fonts":[{"id"}]}`. The player lists each track as
+  `EMBEDDED_ASS_<number>` beside its own native entry, and fetches every font when one is selected.
+- `GET /embedded-ass/<number>.ass?mediaURL=<stream>&from=<ms>&to=<ms>` → the track's header and
+  styles, then its events in that window at the file's own times. The player asks for 60 s windows
+  on a 30 s grid and swaps each one in whole.
+- `GET /embedded-ass/font/<id>?mediaURL=<stream>` → one font attachment's bytes.
+
+`server.reference.js` (v4.21.1) has none of the three, so the client's code
+(`withStreamingServer.js`, `withHTMLSubtitles.js`) is the contract, and the numbering is ours:
+`number` and `id` are ffprobe stream indices, the numbering the reference uses for
+`subtitle<id>.m3u8`. We answer only this server's own torrent streams (anything else is a 404,
+which the client drops silently), offer only `ass`/`ssa` tracks, and label each
+`<title or language> (styled)`. Each window includes events that start up to 10 s before it, so a
+line still on screen when a window begins stays. ffmpeg reads the file through a loopback-only
+reader that never refocuses the torrent, so the TV's playhead keeps its priority.
+`embeddedAssAsks`, `embeddedAssWindows` and `embeddedAssFailures` in `/stats.json` show when a
+client starts asking.
+
+Not served: the browser half of the same protocol. That is WebVTT subtitle renditions in `/hlsv2`
+(which the reference does serve, as `subtitle<id>.m3u8`), and `/hlsv2/<id>/source/subtitle/<id>.ass`
+with `/source/attachment/<id>` on top of them.
 
 ## 5. Built-in addon (manifest) — 91xxx
 
