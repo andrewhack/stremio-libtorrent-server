@@ -13,6 +13,8 @@ it every 30 s would take the TV's own playhead priority away.
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import json
 import logging
 import os
@@ -23,6 +25,7 @@ import subprocess
 import tempfile
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -120,8 +123,13 @@ def private_reader(secret: str, info_hash: str, idx: int, request: Request) -> R
 PROBE_TIMEOUT = 30
 FFMPEG_TIMEOUT = 30
 # At most this many extractions and font dumps at once. The client aborts a window it no longer
-# needs, but a sync route cannot see that, so its ffmpeg runs to the end.
+# needs, but the work runs on a thread that cannot see that, so its ffmpeg runs to the end.
 _WORK = threading.BoundedSemaphore(2)
+# The routes' blocking work -- a per-file lock, the extraction limit, ffprobe, ffmpeg -- runs on
+# threads of its own, never on the server's shared worker pool. A TV loading a styled track asks
+# for every font at once; blocked on the shared pool, those requests would starve the private
+# reader their own ffmpeg reads through, and the TV's video stream, which uses the same pool.
+_TV_THREADS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="embedded-ass")
 _WORK_WAIT = 10.0
 _FOUND_KEEP = 16   # files whose track list is remembered
 _FONTS_KEEP = 8    # files whose fonts stay on disk
@@ -157,6 +165,12 @@ def _file_lock(key: tuple[str, int]) -> threading.Lock:
         return _file_locks.setdefault(key, threading.Lock())
 
 
+async def _off_pool(fn, *args):
+    """Run `fn(*args)` on the routes' own threads, and wait for it without holding a thread."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_TV_THREADS, functools.partial(fn, *args))
+
+
 def _resolve(request: Request, media_url: str | None) -> tuple[str, int]:
     """The torrent and file a client's mediaURL names -- when it is this server's own stream of a
     torrent the engine holds. The URL itself is never fetched."""
@@ -169,6 +183,10 @@ def _resolve(request: Request, media_url: str | None) -> tuple[str, int]:
 def _discovery(request: Request, info_hash: str, idx: int) -> Discovery:
     """The file's tracks and fonts, probed once and remembered for the last _FOUND_KEEP files."""
     key = (info_hash, idx)
+    with _lock:  # a remembered file never waits on its file lock, which a font dump may hold
+        if key in _found:
+            _found.move_to_end(key)
+            return _found[key]
     with _file_lock(key):
         with _lock:
             if key in _found:
@@ -208,26 +226,35 @@ def _run(argv: list[str], info_hash: str, idx: int) -> bytes:
 
 
 @router.get("/embedded-ass")
-def embedded_ass(request: Request, mediaURL: str | None = None) -> dict:
+async def embedded_ass(request: Request, mediaURL: str | None = None) -> dict:
     """`{"tracks": [{number, codec, lang, label}], "fonts": [{id}]}` for the file being played."""
-    info_hash, idx = _resolve(request, mediaURL)
+    return await _off_pool(_embedded_ass, request, mediaURL)
+
+
+def _embedded_ass(request: Request, media_url: str | None) -> dict:
+    info_hash, idx = _resolve(request, media_url)
     found = _discovery(request, info_hash, idx)
     metrics.record_embedded_ass("ask")
     return found.answer()
 
 
 @router.get("/embedded-ass/{number:int}.ass")
-def embedded_ass_window(
+async def embedded_ass_window(
     number: int, request: Request, mediaURL: str | None = None,
     from_: str | None = Query(None, alias="from"), to: str | None = None,
 ) -> Response:
     """One window of an ASS track: its header and styles, then its events at the file's own
     times. The client asks for `from`..`to` in milliseconds, 60 s at a time."""
-    window = parse_window(from_, to)
+    return await _off_pool(_window, number, request, mediaURL, from_, to)
+
+
+def _window(number: int, request: Request, media_url: str | None, from_q: str | None,
+            to_q: str | None) -> Response:
+    window = parse_window(from_q, to_q)
     if window is None:
         raise HTTPException(status_code=400,
                             detail="from and to are whole milliseconds, 0 < to - from <= 300000")
-    info_hash, idx = _resolve(request, mediaURL)
+    info_hash, idx = _resolve(request, media_url)
     if not _discovery(request, info_hash, idx).has_track(number):
         raise HTTPException(status_code=404, detail="no such ASS track")
     text = _run(window_argv(reader_url(request, info_hash, idx), number, *window), info_hash, idx)
@@ -274,9 +301,15 @@ def _fonts_dir(request: Request, info_hash: str, idx: int, found: Discovery) -> 
 
 
 @router.get("/embedded-ass/font/{font_id:int}")
-def embedded_ass_font(font_id: int, request: Request, mediaURL: str | None = None) -> Response:
+async def embedded_ass_font(
+    font_id: int, request: Request, mediaURL: str | None = None,
+) -> Response:
     """One font attachment's bytes."""
-    info_hash, idx = _resolve(request, mediaURL)
+    return await _off_pool(_font, font_id, request, mediaURL)
+
+
+def _font(font_id: int, request: Request, media_url: str | None) -> Response:
+    info_hash, idx = _resolve(request, media_url)
     found = _discovery(request, info_hash, idx)
     if font_id not in found.fonts:
         raise HTTPException(status_code=404, detail="no such font")

@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,6 +56,7 @@ class Tools:
         self.runs: list[list[str]] = []
         self.probe_rc, self.ffmpeg_rc = 0, 0
         self.timeout = None  # "ffprobe" or "ffmpeg": that tool times out
+        self.dump_delay = 0.0  # seconds a font dump takes
 
     def __call__(self, argv, capture_output=True, timeout=None):
         self.runs.append(argv)
@@ -63,6 +65,7 @@ class Tools:
         if argv[0] == "ffprobe":
             return subprocess.CompletedProcess(argv, self.probe_rc, json.dumps(PROBE).encode(), b"")
         if any(a.startswith("-dump_attachment:") for a in argv):
+            time.sleep(self.dump_delay)
             for i, a in enumerate(argv):
                 if a.startswith("-dump_attachment:"):
                     with open(argv[i + 1], "wb") as f:
@@ -236,3 +239,20 @@ def test_the_font_cache_starts_empty_in_each_process(client, tools, tmp_path):
     r = client.get("/embedded-ass/font/3", params=_media())
     assert r.content == b"font 3"
     assert len(tools.of("ffmpeg")) == 1
+
+
+def test_a_window_never_waits_behind_a_font_dump(client, tools):
+    """The TV fetches windows while its fonts are still being dumped, and a dump holds the file's
+    lock. A window for a file whose track list is known must not queue behind it."""
+    client.get("/embedded-ass", params=_media())  # the track list is now known
+    tools.dump_delay = 1.5
+    font = threading.Thread(target=client.get, args=("/embedded-ass/font/3",),
+                            kwargs={"params": _media()})
+    font.start()
+    time.sleep(0.3)  # the dump is running, holding the file lock
+    started = time.monotonic()
+    r = client.get("/embedded-ass/1.ass", params={**_media(), "from": "0", "to": "60000"})
+    took = time.monotonic() - started
+    font.join()
+    assert r.status_code == 200
+    assert took < 0.8, f"the window waited {took:.1f} s behind the font dump"
