@@ -480,12 +480,20 @@ class Handle:
         except Exception:  # noqa: BLE001
             pass
 
-    def boost_piece(self, piece: int, deadline_ms: int) -> None:
+    def boost_piece(self, piece: int, deadline_ms: int, keep_existing: bool = False) -> None:
         """Mark a playhead piece as top priority + urgent, and remember it so a later seek can
-        drop it (refocus)."""
-        self._h.piece_priority(piece, 7)
-        self.set_piece_deadline(piece, deadline_ms)
+        drop it (refocus).
+
+        `keep_existing` is for a second reader of a file someone is watching (the embedded-ASS
+        extractor): it leaves alone a piece that is already boosted. libtorrent keeps ONE deadline
+        per piece and the last call wins, so without it the second reader's later deadlines would
+        replace the viewer's on the viewer's own playhead pieces. The check and the boost happen
+        under one lock, so a viewer's boost cannot slip in between them."""
         with self._boosted_lock:
+            if keep_existing and piece in self._boosted:
+                return
+            self._h.piece_priority(piece, 7)
+            self.set_piece_deadline(piece, deadline_ms)
             self._boosted.add(piece)
 
     def refocus(self) -> None:

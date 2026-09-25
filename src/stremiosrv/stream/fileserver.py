@@ -46,11 +46,16 @@ def file_disk_path(save_path: str, handle, idx: int) -> str:
     return os.path.join(save_path, handle.file_path(idx))
 
 
+# How much of the viewer's own read-ahead always comes before anything a second reader asks for
+# (see wait_and_read's `yield_to_viewer`). Bytes, not pieces, so it means the same on every torrent.
+VIEWER_FIRST_BYTES = 32 * 2**20
+
+
 def wait_and_read(
     save_path: str, handle, idx: int, start: int, end: int,
     timeout: float = 30.0, first_timeout: float = 120.0,
     chunk: int = 262144, window_bytes: int = 50_331_648, step_ms: int = 50,
-    info_hash: str = "", count: bool = True, deadline_offset_ms: int = 0,
+    info_hash: str = "", count: bool = True, yield_to_viewer: bool = False,
 ) -> Generator[bytes, None, None]:
     """Yield bytes [start, end] (inclusive, file-relative) of file `idx`, blocking per chunk
     until the covering piece is available.
@@ -76,14 +81,17 @@ def wait_and_read(
     ASGI layer, and `handle.status().info_hashes.v1` is one more call that could — on a handle the
     evictor has just removed, precisely when the stream is failing and the log matters most.
 
-    `count` and `deadline_offset_ms` are for a second reader of a file someone is already watching:
+    `count` and `yield_to_viewer` are for a second reader of a file someone is already watching:
     the embedded-ASS extractor (api/embedded_ass.py), whose ffmpeg reads the TV's file while the TV
     plays it. Its waits are not playback stalls, so `count=False` keeps them out of the stall and
-    timeout counters. `deadline_offset_ms` makes every deadline it sets later than the viewer's
-    own, so the pieces under the viewer's playhead are always fetched first."""
+    timeout counters. `yield_to_viewer=True` keeps the viewer first in two ways. It never touches a
+    piece that is already boosted: libtorrent keeps one deadline per piece and the last call wins,
+    so re-deadlining would push the viewer's playhead pieces behind the reader's. And every deadline
+    it does set comes after the viewer's next VIEWER_FIRST_BYTES, whatever the piece size."""
     pos = start  # bound before the try so the except handler can always report where it stopped
     try:
         plen = handle.piece_length()
+        offset_ms = max(1, VIEWER_FIRST_BYTES // plen) * step_ms if yield_to_viewer else 0
         base = handle.file_offset(idx)
         path = file_disk_path(save_path, handle, idx)
         total = handle.num_pieces()
@@ -96,8 +104,11 @@ def wait_and_read(
             far = min(gp + window, total - 1)
             while deadlined_to < far:
                 deadlined_to += 1
-                handle.boost_piece(
-                    deadlined_to, deadline_offset_ms + max(0, deadlined_to - gp) * step_ms)
+                delay = offset_ms + max(0, deadlined_to - gp) * step_ms
+                if yield_to_viewer:
+                    handle.boost_piece(deadlined_to, delay, keep_existing=True)
+                else:  # the viewer's own boosts always win, so they replace whatever is there
+                    handle.boost_piece(deadlined_to, delay)
             budget = timeout if yielded else first_timeout
             deadline = time.time() + budget
             wait_start = time.time()

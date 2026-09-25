@@ -50,10 +50,6 @@ READER_PREFIX = "/_embedded-ass-read"
 # Made per process, never logged and never sent to a client: only an ffmpeg this process starts is
 # handed a URL carrying it.
 _SECRET = secrets.token_urlsafe(32)
-# Later than any deadline the viewer's own reads set, so the TV's playhead pieces come first. The
-# reader still asks for its pieces: after a seek its window starts up to 40 s behind the TV's new
-# position, where nothing has downloaded.
-READER_DEADLINE_OFFSET_MS = 2000
 READER_FIRST_TIMEOUT = 20.0
 READER_TIMEOUT = 10.0
 _INFOHASH = re.compile(r"[0-9a-f]{40}")
@@ -94,7 +90,10 @@ def private_reader(secret: str, info_hash: str, idx: int, request: Request) -> R
     """Byte ranges of a torrent file for ffmpeg, waiting for pieces like the stream route does.
 
     Unlike it: never `refocus()` or `focus_file()`, no stall or timeout counted, the torrent never
-    marked watched, and every deadline 2 s later than the viewer's own."""
+    marked watched, and it yields to the viewer (wait_and_read's `yield_to_viewer`): it never moves
+    a deadline the viewer set, and its own come after the viewer's next 32 MiB. It still asks for
+    its pieces: after a seek its window starts up to 40 s behind the TV's new position, where
+    nothing has downloaded."""
     h = _playing(request, info_hash, idx) if _is_own_ffmpeg(request, secret) else None
     if h is None:
         return Response(status_code=404)
@@ -111,7 +110,7 @@ def private_reader(secret: str, info_hash: str, idx: int, request: Request) -> R
     body = wait_and_read(
         request.app.state.engine.save_path(), h, idx, start, end,
         timeout=READER_TIMEOUT, first_timeout=READER_FIRST_TIMEOUT, info_hash=info_hash,
-        count=False, deadline_offset_ms=READER_DEADLINE_OFFSET_MS,
+        count=False, yield_to_viewer=True,
     )
     return StreamingResponse(body, status_code=206, headers=headers)
 

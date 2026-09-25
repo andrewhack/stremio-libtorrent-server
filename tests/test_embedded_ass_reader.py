@@ -43,7 +43,7 @@ class Handle:
     def have_piece(self, i):
         return True
 
-    def boost_piece(self, p, ms):
+    def boost_piece(self, p, ms, keep_existing=False):
         pass
 
     def refocus(self):
@@ -123,7 +123,7 @@ def test_a_torrent_without_metadata_is_not_read(tmp_path):
 
 
 def test_it_reads_as_a_second_reader(engine, monkeypatch):
-    """Uncounted, with deadlines 2 s after the viewer's, and short piece waits."""
+    """Uncounted, yielding to the viewer's deadlines, and with short piece waits."""
     seen = {}
 
     def fake_read(save_path, handle, idx, start, end, **kw):
@@ -133,7 +133,7 @@ def test_it_reads_as_a_second_reader(engine, monkeypatch):
     monkeypatch.setattr(embedded_ass, "wait_and_read", fake_read)
     assert _client(engine).get(_path()).status_code == 206
     assert seen["count"] is False
-    assert seen["deadline_offset_ms"] == embedded_ass.READER_DEADLINE_OFFSET_MS == 2000
+    assert seen["yield_to_viewer"] is True
     assert (seen["first_timeout"], seen["timeout"]) == (20.0, 10.0)
     assert seen["info_hash"] == IH
 

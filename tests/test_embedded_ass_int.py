@@ -59,7 +59,7 @@ class Handle:
     def have_piece(self, i):
         return True
 
-    def boost_piece(self, p, ms):
+    def boost_piece(self, p, ms, keep_existing=False):
         pass
 
 
