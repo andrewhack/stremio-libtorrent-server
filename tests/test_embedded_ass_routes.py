@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from stremiosrv import metrics
 from stremiosrv.api import embedded_ass
 from stremiosrv.app import create_app
+from stremiosrv.config import Settings
 
 IH, IH2 = "ab" * 20, "cd" * 20
 PROBE = {"streams": [
@@ -34,16 +35,34 @@ ASS = b"[Script Info]\n...\n[Events]\nDialogue: 0,0:00:30.00,0:00:31.50,Default,
 
 
 class Handle:
+    """One file with metadata. Its first piece is there after `head_after` looks (0: at once)."""
+
+    def __init__(self):
+        self.head_after, self.asked = 0, 0
+
     def has_metadata(self):
         return True
 
     def num_files(self):
         return 1
 
+    def piece_length(self):
+        return 1 << 20
+
+    def file_offset(self, idx):
+        return 0
+
+    def have_piece(self, i):
+        self.asked += 1
+        return self.asked > self.head_after
+
 
 class Engine:
+    def __init__(self):
+        self.handles = {IH: Handle(), IH2: Handle()}
+
     def get(self, info_hash):
-        return Handle() if info_hash in (IH, IH2) else None
+        return self.handles.get(info_hash)
 
     def add(self, *a, **k):
         raise AssertionError("an embedded-ASS route must never add a torrent")
@@ -57,13 +76,15 @@ class Tools:
         self.probe_rc, self.ffmpeg_rc = 0, 0
         self.timeout = None  # "ffprobe" or "ffmpeg": that tool times out
         self.dump_delay = 0.0  # seconds a font dump takes
+        self.ready = None  # when set: ffprobe fails, as on a file with no data, unless ready()
 
     def __call__(self, argv, capture_output=True, timeout=None):
         self.runs.append(argv)
         if argv[0] == self.timeout:
             raise subprocess.TimeoutExpired(argv, timeout)
         if argv[0] == "ffprobe":
-            return subprocess.CompletedProcess(argv, self.probe_rc, json.dumps(PROBE).encode(), b"")
+            rc = 1 if self.ready is not None and not self.ready() else self.probe_rc
+            return subprocess.CompletedProcess(argv, rc, json.dumps(PROBE).encode(), b"")
         if any(a.startswith("-dump_attachment:") for a in argv):
             time.sleep(self.dump_delay)
             for i, a in enumerate(argv):
@@ -140,6 +161,31 @@ def test_a_file_is_probed_once_whatever_is_asked(client, tools):
     client.get("/embedded-ass/1.ass", params={**_media(), "from": "0", "to": "60000"})
     client.get("/embedded-ass/font/3", params=_media())
     assert len(tools.of("ffprobe")) == 1
+
+
+def test_discovery_waits_for_the_files_first_piece(tools, monkeypatch):
+    """The TV asks the moment it starts playing, and only once -- often before the torrent has
+    delivered a byte, when ffprobe would read nothing. Discovery waits for the head first."""
+    monkeypatch.setattr(embedded_ass, "HEAD_POLL", 0.01)
+    engine = Engine()
+    head = engine.handles[IH]
+    head.head_after = 5  # the first piece arrives at the sixth look
+    tools.ready = lambda: head.asked > 5
+    r = TestClient(create_app(engine=engine)).get("/embedded-ass", params=_media())
+    assert r.status_code == 200
+    assert len(tools.of("ffprobe")) == 1
+
+
+def test_a_head_that_never_arrives_is_a_counted_504(tools, monkeypatch):
+    """No longer than the TV's own first read may wait (stream_first_piece_timeout)."""
+    monkeypatch.setattr(embedded_ass, "HEAD_POLL", 0.01)
+    engine = Engine()
+    engine.handles[IH].head_after = 10**9
+    app = create_app(settings=Settings(stream_first_piece_timeout=0.2), engine=engine)
+    r = TestClient(app).get("/embedded-ass", params=_media())
+    assert r.status_code == 504
+    assert tools.of("ffprobe") == []
+    assert metrics.playback_stats()["embeddedAssFailures"] == 1
 
 
 @pytest.mark.parametrize(("setup", "status"), [("timeout", 504), ("rc", 502)])

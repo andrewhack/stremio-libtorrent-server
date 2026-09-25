@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -122,6 +123,7 @@ def private_reader(secret: str, info_hash: str, idx: int, request: Request) -> R
 
 PROBE_TIMEOUT = 30
 FFMPEG_TIMEOUT = 30
+HEAD_POLL = 0.2  # seconds between looks while discovery waits for a file's first piece
 # At most this many extractions and font dumps at once. The client aborts a window it no longer
 # needs, but the work runs on a thread that cannot see that, so its ffmpeg runs to the end.
 _WORK = threading.BoundedSemaphore(2)
@@ -180,6 +182,25 @@ def _resolve(request: Request, media_url: str | None) -> tuple[str, int]:
     return parsed
 
 
+def _wait_for_head(request: Request, info_hash: str, idx: int) -> None:
+    """Wait for the file's first piece before ffprobe reads it.
+
+    The TV asks for discovery the moment it starts playing -- often before the torrent has
+    delivered a byte -- and asks only once. ffprobe reads through the private reader, whose waits
+    are short, so on a cold torrent it would find nothing and the TV would keep plain subtitles for
+    the whole playback. So wait here, on the routes' own threads, as long as the TV's own first read
+    may (stream_first_piece_timeout). Nothing is boosted: the TV's own read asks for that piece."""
+    h = _playing(request, info_hash, idx)
+    if h is None:  # the engine dropped it since the request was resolved
+        raise HTTPException(status_code=404, detail="not a torrent stream this server is playing")
+    first = h.file_offset(idx) // h.piece_length()
+    give_up = time.monotonic() + request.app.state.settings.stream_first_piece_timeout
+    while not h.have_piece(first):
+        if time.monotonic() > give_up:
+            raise _fail(504, "the file's first piece did not arrive", info_hash, idx)
+        time.sleep(HEAD_POLL)
+
+
 def _discovery(request: Request, info_hash: str, idx: int) -> Discovery:
     """The file's tracks and fonts, probed once and remembered for the last _FOUND_KEEP files."""
     key = (info_hash, idx)
@@ -192,6 +213,7 @@ def _discovery(request: Request, info_hash: str, idx: int) -> Discovery:
             if key in _found:
                 _found.move_to_end(key)
                 return _found[key]
+        _wait_for_head(request, info_hash, idx)
         try:
             proc = subprocess.run(probe_argv(reader_url(request, info_hash, idx)),
                                   capture_output=True, timeout=PROBE_TIMEOUT)
