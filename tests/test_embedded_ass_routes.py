@@ -39,6 +39,7 @@ class Handle:
 
     def __init__(self):
         self.head_after, self.asked = 0, 0
+        self.gone_after = None  # when set: removed from the engine after that many looks
 
     def has_metadata(self):
         return True
@@ -54,6 +55,8 @@ class Handle:
 
     def have_piece(self, i):
         self.asked += 1
+        if self.gone_after is not None and self.asked > self.gone_after:
+            raise RuntimeError("invalid torrent handle used")  # what libtorrent raises
         return self.asked > self.head_after
 
 
@@ -184,6 +187,18 @@ def test_a_head_that_never_arrives_is_a_counted_504(tools, monkeypatch):
     app = create_app(settings=Settings(stream_first_piece_timeout=0.2), engine=engine)
     r = TestClient(app).get("/embedded-ass", params=_media())
     assert r.status_code == 504
+    assert tools.of("ffprobe") == []
+    assert metrics.playback_stats()["embeddedAssFailures"] == 1
+
+
+def test_a_torrent_removed_while_discovery_waits_is_a_counted_502(tools, monkeypatch):
+    """The wait can last up to two minutes; the engine may remove the torrent meanwhile, and its
+    handle then raises. That must be a counted failure, not an uncounted 500."""
+    monkeypatch.setattr(embedded_ass, "HEAD_POLL", 0.01)
+    engine = Engine()
+    engine.handles[IH].head_after, engine.handles[IH].gone_after = 10**9, 3
+    r = TestClient(create_app(engine=engine)).get("/embedded-ass", params=_media())
+    assert r.status_code == 502
     assert tools.of("ffprobe") == []
     assert metrics.playback_stats()["embeddedAssFailures"] == 1
 

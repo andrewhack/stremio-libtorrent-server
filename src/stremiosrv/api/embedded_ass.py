@@ -195,7 +195,12 @@ def _wait_for_head(request: Request, info_hash: str, idx: int) -> None:
         raise HTTPException(status_code=404, detail="not a torrent stream this server is playing")
     first = h.file_offset(idx) // h.piece_length()
     give_up = time.monotonic() + request.app.state.settings.stream_first_piece_timeout
-    while not h.have_piece(first):
+    while True:
+        try:
+            if h.have_piece(first):
+                return
+        except Exception as e:  # a torrent removed mid-wait: its libtorrent handle raises
+            raise _fail(502, "the torrent was removed while waiting", info_hash, idx) from e
         if time.monotonic() > give_up:
             raise _fail(504, "the file's first piece did not arrive", info_hash, idx)
         time.sleep(HEAD_POLL)
