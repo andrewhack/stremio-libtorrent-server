@@ -73,12 +73,14 @@ def test_pinning_marks_every_file_wanted_not_just_every_piece():
 
 from stremiosrv.pins import select_wanted_file  # noqa: E402
 
+EP = 4 << 30  # an episode's size; only the order of sizes matters here
+
 SEASON_PACK = [
-    "Show.S01E01.Title.1080p.WEB-DL.mkv",
-    "Show.S01E02.Title.1080p.WEB-DL.mkv",
-    "Show.S01E05.Worldless.1080p.WEB-DL.mkv",
-    "Show.S01E09.Title.1080p.WEB-DL.mkv",
-    "NEW upcoming releases.txt",
+    ("Show.S01E01.Title.1080p.WEB-DL.mkv", EP),
+    ("Show.S01E02.Title.1080p.WEB-DL.mkv", EP),
+    ("Show.S01E05.Worldless.1080p.WEB-DL.mkv", EP),
+    ("Show.S01E09.Title.1080p.WEB-DL.mkv", EP),
+    ("NEW upcoming releases.txt", 1 << 10),
 ]
 
 
@@ -102,26 +104,44 @@ def test_season_and_episode_pick_the_one_file():
 
 def test_episode_numbers_do_not_bleed_into_each_other():
     """S01E1 must not match S01E10 — off-by-a-digit here silently downloads the wrong episode."""
-    pack = ["Show.S01E10.mkv", "Show.S01E01.mkv"]
+    pack = [("Show.S01E10.mkv", EP), ("Show.S01E01.mkv", EP)]
     assert select_wanted_file(pack, {"season": 1, "episode": 1}) == 1
     assert select_wanted_file(pack, {"season": 1, "episode": 10}) == 0
 
 
 def test_alternate_numbering_style():
-    assert select_wanted_file(["Show 1x05 Title.mkv", "Show 1x06 Title.mkv"],
+    assert select_wanted_file([("Show 1x05 Title.mkv", EP), ("Show 1x06 Title.mkv", EP)],
                               {"season": 1, "episode": 5}) == 0
 
 
 def test_non_video_matches_are_not_preferred():
-    """Packs carry .nfo/.srt/.txt named after the episode; the video is what was asked for."""
-    pack = ["Show.S01E05.nfo", "Show.S01E05.srt", "Show.S01E05.mkv"]
+    """Packs carry .nfo/.srt/.txt named after the episode; the video is what was asked for -- even
+    when a non-video is the larger file, so size never lets a subtitle win."""
+    pack = [("Show.S01E05.nfo", 1 << 10), ("Show.S01E05.srt", 2 * EP), ("Show.S01E05.mkv", EP)]
     assert select_wanted_file(pack, {"season": 1, "episode": 5}) == 2
+
+
+def test_a_sample_sorting_first_does_not_stand_in_for_its_episode():
+    """A release's `Sample/` folder sorts before its episode whenever the show's name starts from
+    `T` on, or is lowercase. Taking the first match fetched the sample, never the episode, and the
+    page then showed the episode as downloaded. The episode is the largest video that names it --
+    the rule playback (guess_file_idx) and the addon (episode_index) already use."""
+    pack = [("Sample/the.show.s01e05.sample.mkv", 40 << 20),
+            ("the.show.s01e05.1080p.mkv", EP),
+            ("the.show.s01e06.1080p.mkv", EP)]
+    assert select_wanted_file(pack, {"season": 1, "episode": 5}) == 1
+
+
+def test_equal_sizes_keep_the_first_match():
+    pack = [("a/Show.S01E05.mkv", EP), ("b/Show.S01E05.mkv", EP)]
+    assert select_wanted_file(pack, {"season": 1, "episode": 5}) == 0
 
 
 def test_no_match_means_every_file():
     """A film in a folder, or a pack that names episodes some other way: better to fetch it all
     than to fetch nothing and leave the owner with an empty directory."""
-    assert select_wanted_file(["Some.Film.2019.1080p.mkv"], {"season": 1, "episode": 5}) is None
+    assert select_wanted_file([("Some.Film.2019.1080p.mkv", EP)],
+                              {"season": 1, "episode": 5}) is None
 
 
 # --- which file a stream wants when the addon does not say -------------------------------------
@@ -220,6 +240,9 @@ def test_a_deferred_choice_is_applied_once_metadata_arrives():
         def file_paths(self):
             return ["Show.S01E01.mkv", "Show.S01E02.mkv", "Show.S01E03.mkv"]
 
+        def file_size(self, idx):
+            return EP
+
         def want_file(self, idx):
             self.only = idx
 
@@ -248,6 +271,39 @@ def test_a_deferred_choice_is_applied_once_metadata_arrives():
     h.only = None
     e._apply_pending_wanted()
     assert h.only is None, "re-applied a choice already made; the sweep must settle"
+
+
+def test_a_download_by_episode_wants_the_episode_not_its_sample():
+    """Through the engine, the way a page download arrives: season and episode, no fileIdx. The
+    sizes have to reach the choice from the handle, or the sample sorting first still wins."""
+    from stremiosrv.torrent.engine import Engine
+
+    files = [("Sample/the.show.s01e05.sample.mkv", 40 << 20),
+             ("the.show.s01e05.1080p.mkv", EP),
+             ("the.show.s01e06.1080p.mkv", EP)]
+
+    class FakeHandle:
+        def __init__(self):
+            self.wanted = []
+
+        def file_paths(self):
+            return [p for p, _ in files]
+
+        def file_size(self, idx):
+            return files[idx][1]
+
+        def want_file(self, idx):
+            self.wanted.append(idx)
+
+    class FakeEngine:
+        _apply_wanted = Engine._apply_wanted
+
+        def _full_priority(self, h):
+            raise AssertionError("wanted one file, not all of them")
+
+    h = FakeHandle()
+    FakeEngine()._apply_wanted(h, [{"season": 1, "episode": 5}])
+    assert h.wanted == [1]
 
 
 def test_the_choice_is_not_driven_by_an_alert_that_never_arrives():

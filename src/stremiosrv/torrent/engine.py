@@ -902,8 +902,8 @@ class Engine:
         do not recognise -- means the whole torrent, because half a film on disk is worse than all
         of it.
         """
-        paths = h.file_paths()
-        resolved = [pinsmod.select_wanted_file(paths, spec) for spec in specs]
+        files = [(p, h.file_size(i)) for i, p in enumerate(h.file_paths())]
+        resolved = [pinsmod.select_wanted_file(files, spec) for spec in specs]
         narrowed = [i for i in resolved if i is not None]
         if not specs or len(narrowed) != len(resolved):
             self._full_priority(h)

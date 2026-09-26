@@ -418,7 +418,7 @@ def test_a_lone_episode_file_reads_as_the_download_path_reads_it(name, season):
     """The guard reads an episode name in the forms pins.select_wanted_file reads -- a title ending
     in a digit and a dot included -- so a lone file of episode 5 is never offered on episode 1's
     page: the file the label was learned from may simply have no bytes yet."""
-    assert pinsmod.select_wanted_file([name], {"season": season, "episode": 5}) == 0
+    assert pinsmod.select_wanted_file([(name, 4 * GB)], {"season": season, "episode": 5}) == 0
     e = _entry(label={"type": "series", "metaId": "tt0000016", "season": season, "episode": 1,
                       "name": "Pack"}, numFiles=2,
                files=[{"index": 1, "name": name, "size": 4 * GB, "downloaded": 4 * GB,

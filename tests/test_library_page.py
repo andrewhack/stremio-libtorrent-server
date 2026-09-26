@@ -845,6 +845,42 @@ def test_every_episode_a_pack_holds_is_ticked_not_just_one():
     assert "EPISODE_RE" in page
 
 
+_ONDISK_SRC = re.compile(r"(function onDiskEpisodes\(data\) \{[\s\S]*?\n  \})")
+
+
+def _on_disk_src():
+    page = _page()
+    ep, fn = _EPRE_SRC.search(page), _ONDISK_SRC.search(page)
+    assert ep and fn, "onDiskEpisodes not found in the page"
+    # The client-side labels are another test's business; here the entries are the whole story.
+    return "const withClientLabels = entries => entries;\n" + ep.group(1) + "\n" + fn.group(1)
+
+
+# Episode 5 is 30% down while its sample is complete; episode 6 is complete. The children carry the
+# bytes each file holds, the files each file's own size -- which is why the ticks read the files.
+_TICK_PACK = ("{entries: [{infoHash: 'aa', progress: 0.5, files: ["
+              "{index: 0, name: 'the.show.s01e05.sample.mkv', size: 40e6, progress: 1},"
+              "{index: 1, name: 'the.show.s01e05.1080p.mkv', size: 4e9, progress: 0.3},"
+              "{index: 2, name: 'the.show.s01e06.1080p.mkv', size: 4e9, progress: 1},"
+              "{index: 3, name: 'the.show.s01e07.en.srt', size: 50e3, progress: 1}],"
+              " children: ["
+              "{name: 'the.show.s01e05.sample.mkv', size: 40e6, progress: 1},"
+              "{name: 'the.show.s01e05.1080p.mkv', size: 1.2e9, progress: 0.3},"
+              "{name: 'the.show.s01e06.1080p.mkv', size: 4e9, progress: 1}]}]}")
+
+
+def test_a_complete_sample_does_not_tick_its_episode():
+    """"Already on this server" sends someone away from a download they still need, so it has to
+    be the episode's own file that is complete -- the largest file that names the episode, the rule
+    the addon's episode_index already uses. A finished sample ticked an episode at 30%."""
+    src = _on_disk_src()
+    assert _run_js(src, f"onDiskEpisodes({_TICK_PACK}).has('1:5')") is False
+    assert _run_js(src, f"onDiskEpisodes({_TICK_PACK}).has('1:6')") is True
+    # Only what the card lists as watchable ticks: a subtitle completed by the pieces it shares
+    # with its neighbours is not episode 7.
+    assert _run_js(src, f"onDiskEpisodes({_TICK_PACK}).has('1:7')") is False
+
+
 def test_a_download_already_running_is_counted_against_the_next_one():
     """Space a download has claimed but not written is in neither `df` nor the cache total. Judging
     the next download on those alone approves things there will be no room for once everything
@@ -937,6 +973,17 @@ def test_a_film_on_disk_is_still_recognised():
     src = _release_file_src()
     film = "{filesFrom: 'disk', files: [{index: null, name: 'Film.2019.mkv', progress: 1}]}"
     assert _run_js(src, f"releaseFile({film}, {{}}, {{}}).name") == "Film.2019.mkv"
+
+
+def test_a_sample_listed_first_does_not_stand_in_for_its_episode():
+    """A release's sample names the episode too. Taking the first match read the sample's state --
+    complete, so "On server" -- while the episode itself was a third of the way down. The episode is
+    the largest file that names it, as the download path (pins.select_wanted_file) decides."""
+    src = _release_file_src()
+    pack = ("{numFiles: 3, files: ["
+            "{index: 0, name: 'the.show.s01e05.sample.mkv', size: 40e6, progress: 1, wanted: false},"
+            "{index: 1, name: 'the.show.s01e05.1080p.mkv', size: 4e9, progress: 0.3, wanted: true}]}")
+    assert _run_js(src, f"releaseFile({pack}, {{}}, {{season:1, episode:5}}).index") == 1
 
 
 def test_a_torrent_with_no_per_file_record_falls_back_to_itself():

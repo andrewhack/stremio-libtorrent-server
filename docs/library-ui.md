@@ -122,6 +122,11 @@ rather than emptying the list.
 
 A magnet box is there for anything an addon does not serve.
 
+**Which file a download fetches.** When the addon names the file, that file. When it names only the
+season and episode, the largest video whose name reads as that episode, so a release's sample, which
+carries the episode's name too, is never fetched in its place. When nothing narrows it, a film for
+example, the whole torrent. The page's buttons and its episode ticks read the same file.
+
 A download is a **pin**: fully downloaded, never evicted, kept, and seeding. The existing disk guard
 applies, so a download that would leave no room for normal streaming is refused with a message
 saying how much space is needed. While anything is being watched, background downloads yield the

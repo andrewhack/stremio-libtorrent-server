@@ -849,10 +849,22 @@ const LIB = (() => {
     withClientLabels((data && data.entries) || []).forEach(e => {
       const kids = e.children || [];
       if (kids.length) {
-        kids.forEach(k => {
-          if ((k.progress || 0) < 1) return;
-          const m = EPISODE_RE.exec(k.name || '');
-          if (m) add(m[1], m[2]);
+        // An episode is here when ITS file is complete, and its file is the largest one that names
+        // it -- the rule the download path and the addon's episode_index use. Any complete match
+        // used to do, so a finished sample ticked an episode that was 30% down. The sizes come
+        // from `files`: a child's size is what it holds so far, a file's is the file's own.
+        const main = {};
+        ((e.files && e.files.length) ? e.files : kids).forEach(f => {
+          const m = EPISODE_RE.exec(f.name || '');
+          if (!m) return;
+          const key = Number(m[1]) + ':' + Number(m[2]);
+          if (!main[key] || (f.size || 0) > (main[key].size || 0)) main[key] = f;
+        });
+        // Only what the card lists as watchable ticks, as before: a subtitle completed by the
+        // pieces it shares with its neighbours is not an episode anyone has.
+        Object.keys(main).forEach(key => {
+          const f = main[key];
+          if ((f.progress || 0) >= 1 && kids.some(k => k.name === f.name)) out.add(key);
         });
         return;
       }
@@ -1175,10 +1187,17 @@ const LIB = (() => {
     const sn = want && want.season, ep = want && want.episode;
     // Nothing to match on -- a film, say. One file is unambiguous; several are not.
     if (sn == null || ep == null) return files.length === 1 ? files[0] : undefined;
-    return files.find(f => {
+    // The episode is the largest file that names it, the first on a tie -- the download path's
+    // rule (pins.select_wanted_file). The first match read a release's sample, which sorts before
+    // its episode whenever the show's name does, and so said "On server" for an episode a third of
+    // the way down.
+    let best = null;
+    files.forEach(f => {
       const m = EPISODE_RE.exec(f.name || '');
-      return m && Number(m[1]) === Number(sn) && Number(m[2]) === Number(ep);
-    }) || null;
+      if (m && Number(m[1]) === Number(sn) && Number(m[2]) === Number(ep)
+          && (!best || (f.size || 0) > (best.size || 0))) best = f;
+    });
+    return best;
   };
 
   async function showReleases(type, videoId, extra) {

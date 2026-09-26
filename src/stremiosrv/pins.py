@@ -59,26 +59,32 @@ def pin_fits(disk_free: int, pinned_remaining: int, candidate_remaining: int,
 VIDEO_EXT = (".mkv", ".mp4", ".avi", ".m4v", ".mov", ".ts", ".webm", ".m2ts")
 
 
-def select_wanted_file(paths: list[str], want: dict | None) -> int | None:
-    """Index of the single file this pin wants, or None meaning "all of them".
+def select_wanted_file(files: list[tuple[str, int]], want: dict | None) -> int | None:
+    """Index of the single file this pin wants among `(path, size)` pairs, or None meaning "all of
+    them".
 
     None is the safe answer, not a failure: a film in a folder, or a pack that numbers its
     episodes some way we do not recognise, must still land on disk in full rather than leave the
     owner with an empty directory.
+
+    Of the files whose names read as the episode, the largest video is the episode -- the first on
+    a tie. Taking the first match fetched a release's sample whenever its `Sample/` folder sorted
+    before the episode, and the page then showed the episode as downloaded. Largest is the rule
+    playback (guess_file_idx) and the addon (library.addon_model.episode_index) already use.
     """
     if not want:
         return None
     idx = want.get("fileIdx")
-    if isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < len(paths):
+    if isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < len(files):
         return idx
     is_episode = _episode_matcher(want)
     if is_episode is None:
         return None
-    hits = [i for i, path in enumerate(paths) if is_episode(path)]
+    hits = [i for i, (path, _size) in enumerate(files) if is_episode(path)]
     if not hits:
         return None
-    videos = [i for i in hits if paths[i].lower().endswith(VIDEO_EXT)]
-    return (videos or hits)[0]
+    videos = [i for i in hits if files[i][0].lower().endswith(VIDEO_EXT)]
+    return max(videos or hits, key=lambda i: files[i][1])
 
 
 def _episode_matcher(want: dict | None):
