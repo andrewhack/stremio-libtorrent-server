@@ -16,10 +16,11 @@ import urllib.parse
 from collections import OrderedDict
 from threading import Lock
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 
 from stremiosrv.library import netguard
-from stremiosrv.proxy import client, dest
+from stremiosrv.proxy import client, dest, playlist, upstream
 
 router = APIRouter()
 
@@ -121,3 +122,77 @@ def resolve_media_input(request: Request, media_url: str) -> str:
     except OSError as e:  # name does not resolve
         raise HTTPException(status_code=502, detail="media source unreachable") from e
     return reader_url(request, register(media_url, home))
+
+
+_MAX_PLAYLIST_BYTES = 4 << 20
+_CHUNK = 64 << 10
+
+
+def _segment_mapper(request: Request, base: str, home: bool):
+    """Map each URL in a fetched playlist to a fresh reader ticket, so ffmpeg fetches its segments
+    and keys through the guard too. Relatives are absolutised against the playlist's real URL, not
+    the reader URL, because the reader URL carries no path to resolve against."""
+    def mapper(url: str) -> str:
+        if url.startswith("#") or not url.strip():
+            return url
+        absolute = urllib.parse.urljoin(base, url)
+        u = urllib.parse.urlsplit(absolute)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            return url  # not fetchable by us; leave it (ffmpeg's protocol whitelist blocks non-http)
+        return reader_url(request, register(absolute, home))
+    return mapper
+
+
+@router.get(READER_PREFIX + "/{secret}/{ticket}", include_in_schema=False)
+def media_reader(secret: str, ticket: str, request: Request) -> Response:
+    """Fetch a ticket's external URL through the destination guard and hand the body to ffmpeg.
+
+    Only our own ffmpeg reaches this (secret + loopback + no X-Forwarded-For). The fetch re-checks
+    the destination on every redirect (upstream.open_url) with the ticket's original-client home
+    flag. A playlist body is rewritten so its segments and keys come back through the reader too;
+    any other body is streamed through as it arrives."""
+    hit = resolve_ticket(ticket) if _is_own_ffmpeg(request, secret) else None
+    if hit is None:
+        return Response(status_code=404)
+    url, home = hit
+    fwd = {"user-agent": "Mozilla/5.0"}
+    rng = request.headers.get("range")
+    if rng:
+        fwd["range"] = rng
+    deadline = upstream.Deadline(upstream.DEADLINE)
+    try:
+        resp, conn = upstream.open_url(url, "GET", fwd, home, deadline)
+    except Exception:  # noqa: BLE001 — refused/unreachable/malformed/timeout: one clean 502
+        return Response(status_code=502, content=b"media source unreachable")
+    ctype = resp.getheader("Content-Type", "") or ""
+    if playlist.is_playlist(urllib.parse.urlsplit(url).path, ctype):
+        try:
+            raw = resp.read(_MAX_PLAYLIST_BYTES + 1)
+        finally:
+            resp.close()
+            conn.close()
+        if len(raw) > _MAX_PLAYLIST_BYTES:
+            return Response(status_code=502, content=b"playlist too large")
+        try:
+            rewritten = playlist.rewrite_lines(raw, _segment_mapper(request, url, home),
+                                               limit=_MAX_PLAYLIST_BYTES)
+        except playlist.TooLarge:
+            return Response(status_code=502, content=b"playlist too large")
+        return Response(content=rewritten, status_code=resp.status,
+                        media_type="application/vnd.apple.mpegurl")
+
+    def body():
+        try:
+            while chunk := resp.read1(_CHUNK):
+                yield chunk
+        finally:
+            resp.close()
+            conn.close()
+
+    headers = {}
+    for name in ("content-type", "content-length", "content-range", "accept-ranges"):
+        value = resp.getheader(name)
+        if value is not None:
+            headers[name] = value
+    deadline.stop()
+    return StreamingResponse(body(), status_code=resp.status, headers=headers)
