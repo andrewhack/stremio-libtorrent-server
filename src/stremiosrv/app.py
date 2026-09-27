@@ -13,6 +13,7 @@ from stremiosrv.api import (
     embedded_ass,
     handshake,
     hls,
+    media_fetch,
     netcheck,
     pins,
     playback,
@@ -168,6 +169,7 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     app.include_router(hls.router)
     app.include_router(subs.router)
     app.include_router(embedded_ass.router)
+    app.include_router(media_fetch.router)
     app.include_router(casting.router)
     app.include_router(unmatched.router)
     # Opt-in. Registering nothing when off means an unset flag cannot be probed for, and the

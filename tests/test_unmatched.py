@@ -105,3 +105,8 @@ def test_first_sighting_is_logged_once_without_the_path(caplog):
     unmatched.record("GET", f"/{IH}/Other.Title.mkv")
     lines = [r.getMessage() for r in caplog.records if r.name == "stremiosrv.unmatched"]
     assert lines == ["no route for GET /{ih}/{name} -- counted in /stats.json unmatchedRoutes"]
+
+
+def test_media_reader_prefix_is_known():
+    from stremiosrv.unmatched import KNOWN_FIRST_SEGMENTS
+    assert "_hls-media-read" in KNOWN_FIRST_SEGMENTS

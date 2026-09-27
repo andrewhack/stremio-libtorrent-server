@@ -41,8 +41,8 @@ KNOWN_FIRST_SEGMENTS = frozenset({
     # asked by stremio-video 0.0.97+ on TVs; no published stock server has it
     "embedded-ass",
     # this server's own
-    "_embedded-ass-read", "_unmatched", "active.json", "cache", "cache.json", "health",
-    "library", "netcheck.json", "pins.json", "transcode.json",
+    "_embedded-ass-read", "_hls-media-read", "_unmatched", "active.json", "cache", "cache.json",
+    "health", "library", "netcheck.json", "pins.json", "transcode.json",
 })
 
 _lock = threading.Lock()

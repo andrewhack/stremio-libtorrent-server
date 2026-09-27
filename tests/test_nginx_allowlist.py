@@ -36,6 +36,9 @@ ORIGIN_ONLY = {
     "/transcode.json": "diagnostics; no client requests it through the player origin",
     "/_embedded-ass-read/{secret}/{info_hash}/{idx}":
         "ffmpeg's private reader: loopback only, a per-process secret in the path",
+    "/_hls-media-read/{secret}/{ticket}":
+        "ffmpeg's loopback reader for an external media URL; per-process secret + ticket, "
+        "never proxied so no client can reach it",
 }
 
 
