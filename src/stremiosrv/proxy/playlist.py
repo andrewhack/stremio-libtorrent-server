@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from stremiosrv.proxy.opts import ProxyOpts, serialize
 
@@ -45,16 +45,6 @@ def _rewrite_url(url: str, root: str, o: ProxyOpts) -> str:
     return url
 
 
-def _rewrite_line(line: str, root: str, o: ProxyOpts) -> str:
-    """One line without its line ending: a tag's first URI attribute, or a URL line."""
-    if line.startswith("#"):
-        m = _URI_ATTR.search(line)
-        if not m:
-            return line
-        return line[:m.start(1)] + _rewrite_url(m.group(1), root, o) + line[m.end(1):]
-    return _rewrite_url(line, root, o) if line else line
-
-
 class TooLarge(Exception):
     """The rewritten playlist would pass the caller's limit."""
 
@@ -69,21 +59,35 @@ def _lines(body: bytes) -> Iterator[bytes]:
     yield body[start:]
 
 
-def rewrite(body: bytes, o: ProxyOpts, limit: int | None = None) -> bytes:
-    """The playlist with its URLs routed back through /proxy; line endings, and bytes that are not
-    UTF-8, kept as they came.
+def rewrite_lines(body: bytes, map_url: Callable[[str], str], limit: int | None = None) -> bytes:
+    """The playlist with every URL passed through `map_url`; line endings and non-UTF-8 bytes kept.
 
-    Raises TooLarge as soon as the output would pass `limit` bytes: every rewritten line grows by
-    the whole proxy prefix, so a small playlist of many short lines can grow a great deal. Raises
-    ValueError for a URL that cannot be parsed or written back."""
-    root = "/proxy/" + serialize(o)
+    Raises TooLarge as soon as the output would pass `limit` bytes. `map_url` receives each bare URL
+    line and each tag's first URI="..." value (relative or absolute) and returns its replacement."""
     out = bytearray()
     for i, raw in enumerate(_lines(body)):
         line = raw.decode("utf-8", "surrogateescape")
         text = line.rstrip("\r")
-        piece = ("\n" if i else "") + _rewrite_line(text, root, o) + line[len(text):]
+        piece = ("\n" if i else "") + _map_line(text, map_url) + line[len(text):]
         encoded = piece.encode("utf-8", "surrogateescape")
         if limit is not None and len(out) + len(encoded) > limit:
             raise TooLarge
         out += encoded
     return bytes(out)
+
+
+def _map_line(line: str, map_url: Callable[[str], str]) -> str:
+    """One line without its ending: a tag's first URI attribute, or a URL line, through map_url."""
+    if line.startswith("#"):
+        m = _URI_ATTR.search(line)
+        if not m:
+            return line
+        return line[:m.start(1)] + map_url(m.group(1)) + line[m.end(1):]
+    return map_url(line) if line else line
+
+
+def rewrite(body: bytes, o: ProxyOpts, limit: int | None = None) -> bytes:
+    """The playlist with its URLs routed back through /proxy (see rewrite_lines). Raises ValueError
+    for a URL that cannot be parsed or written back."""
+    root = "/proxy/" + serialize(o)
+    return rewrite_lines(body, lambda url: _rewrite_url(url, root, o), limit)

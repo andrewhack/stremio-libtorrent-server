@@ -88,3 +88,24 @@ def test_memory_follows_bytes_not_characters():
     finally:
         tracemalloc.stop()
     assert peak < 2 * limit
+
+
+def test_rewrite_lines_applies_the_mapper_to_every_url():
+    body = (b"#EXTM3U\n"
+            b'#EXT-X-KEY:METHOD=AES-128,URI="https://cdn.example/k1"\n'
+            b"#EXTINF:1.0,\n"
+            b"https://cdn.example/seg1.ts\n"
+            b"seg2.ts\n")
+    out = playlist.rewrite_lines(body, lambda u: "MAP(" + u + ")").decode()
+    assert 'URI="MAP(https://cdn.example/k1)"' in out
+    assert "MAP(https://cdn.example/seg1.ts)" in out
+    assert "MAP(seg2.ts)" in out  # relatives go through the mapper too
+
+
+def test_rewrite_still_targets_proxy_for_proxyopts():
+    # the existing entry point is unchanged: an absolute other-origin URL gets its own /proxy/
+    from stremiosrv.proxy.opts import ProxyOpts
+    o = ProxyOpts("https://dest.example")
+    body = b"#EXTM3U\nhttps://other.example/seg.ts\n"
+    out = playlist.rewrite(body, o).decode()
+    assert "/proxy/d=" in out
