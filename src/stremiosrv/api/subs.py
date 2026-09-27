@@ -8,12 +8,12 @@ import re
 import subprocess
 import tempfile
 import time
-import urllib.request
 import zlib
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from stremiosrv import metrics
+from stremiosrv.proxy import client, dest, upstream
 from stremiosrv.stream.fileserver import file_disk_path
 from stremiosrv.subs.opensub import opensubtitles_hash_and_size
 from stremiosrv.transcode.probe import ProbeTimeoutError, probe_media
@@ -118,7 +118,7 @@ _FETCH_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
 
 
 @router.get("/subtitles.{ext}")
-def subtitles_proxy(ext: str, source: str = Query(alias="from")) -> Response:
+def subtitles_proxy(ext: str, request: Request, source: str = Query(alias="from")) -> Response:
     """Fetch an external subtitle (Stremio passes `?from=<url>`) and serve it on our own origin —
     CORS-safe and format-normalized. Mirrors the stock server's `/subtitles.:ext`: **the client asks
     for the extension it wants.** Android/native players request **`.srt`** (SubRip, for ExoPlayer);
@@ -130,16 +130,24 @@ def subtitles_proxy(ext: str, source: str = Query(alias="from")) -> Response:
     and the bare `urlopen` was 403'd by subs5.strem.io -> 502. See `_FETCH_UA`."""
     if not source.lower().startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="only http(s) subtitle sources are allowed")
-    req = urllib.request.Request(source, headers={"User-Agent": _FETCH_UA})
+    home = client.is_home_client(request)
+    deadline = upstream.Deadline(upstream.DEADLINE)
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            raw = r.read()
-            content_encoding = r.headers.get("Content-Encoding", "")
+        resp, conn = upstream.open_url(source, "GET", {"user-agent": _FETCH_UA}, home, deadline)
+    except dest.Refused as e:
+        raise HTTPException(status_code=403, detail="subtitle source not allowed") from e
+    except Exception as e:  # unreachable, too slow, too many redirects, bad upstream
+        raise HTTPException(status_code=502, detail="failed to fetch subtitle") from e
+    try:
+        raw = resp.read()
+        content_encoding = resp.getheader("Content-Encoding", "") or ""
     except Exception as e:
         raise HTTPException(status_code=502, detail="failed to fetch subtitle") from e
+    finally:
+        resp.close()
+        conn.close()
     text = decode_subtitle(_decompress(raw, content_encoding))
     if ext.lower() == "vtt":
-        # charset=utf-8 so strict players (ExoPlayer) don't second-guess the encoding.
         return Response(content=to_webvtt(text), media_type="text/vtt; charset=utf-8")
     return Response(content=text, media_type="application/x-subrip; charset=utf-8")
 

@@ -8,20 +8,26 @@ from stremiosrv.stream.fileserver import content_type_for
 
 
 class _FakeResp:
-    """Minimal stand-in for urllib's response (context manager + read + headers)."""
+    """Minimal stand-in for the http.client.HTTPResponse upstream.open_url returns."""
 
     def __init__(self, body: bytes) -> None:
         self._body = body
-        self.headers = {"Content-Encoding": ""}
 
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self):
-        return self
+    def getheader(self, name: str, default: str = "") -> str:
+        return default
 
-    def __exit__(self, *a):
-        return False
+    def close(self) -> None:
+        pass
+
+
+class _FakeConn:
+    """Minimal stand-in for the connection upstream.open_url returns alongside the response."""
+
+    def close(self) -> None:
+        pass
 
 
 def test_content_type_known_containers():
@@ -57,12 +63,12 @@ def test_subtitles_proxy_srt_serves_subrip_with_browser_ua(monkeypatch):
     # HTML), and the fetch must send a browser UA (subs5.strem.io 403s the default urllib agent).
     seen = {}
 
-    def fake_urlopen(req, timeout=None):
-        seen["ua"] = req.get_header("User-agent")
-        seen["url"] = req.full_url
-        return _FakeResp(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+    def fake_open_url(url, method, headers, home_client, deadline):
+        seen["ua"] = headers.get("user-agent")
+        seen["url"] = url
+        return _FakeResp(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n"), _FakeConn()
 
-    monkeypatch.setattr(subs.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(subs.upstream, "open_url", fake_open_url)
     client = TestClient(create_app(engine=None))
     r = client.get("/subtitles.srt", params={"from": "https://subs5.strem.io/en/download/x"})
     assert r.status_code == 200
@@ -74,8 +80,9 @@ def test_subtitles_proxy_srt_serves_subrip_with_browser_ua(monkeypatch):
 
 def test_subtitles_proxy_vtt_still_normalizes_to_webvtt(monkeypatch):
     monkeypatch.setattr(
-        subs.urllib.request, "urlopen",
-        lambda req, timeout=None: _FakeResp(b"1\n00:00:01,000 --> 00:00:02,000\nHi\n"),
+        subs.upstream, "open_url",
+        lambda url, method, headers, home_client, deadline: (
+            _FakeResp(b"1\n00:00:01,000 --> 00:00:02,000\nHi\n"), _FakeConn()),
     )
     client = TestClient(create_app(engine=None))
     r = client.get("/subtitles.vtt", params={"from": "https://host/sub"})

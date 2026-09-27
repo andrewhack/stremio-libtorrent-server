@@ -141,3 +141,16 @@ def test_subtitles_list_answers_its_empty_shape_when_the_probe_times_out(monkeyp
     assert r.status_code == 200
     assert r.json() == {"subtitles": []}
     assert "timed out" in caplog.text
+
+
+def test_subtitles_from_a_refused_destination_is_403():
+    c = TestClient(create_app())
+    # link-local (cloud-metadata range) is refused to everyone, home or not
+    r = c.get("/subtitles.srt", params={"from": "http://169.254.169.254/latest/meta-data/"})
+    assert r.status_code == 403
+
+
+def test_subtitles_from_non_http_is_400():
+    c = TestClient(create_app())
+    r = c.get("/subtitles.vtt", params={"from": "file:///etc/hostname"})
+    assert r.status_code == 400
