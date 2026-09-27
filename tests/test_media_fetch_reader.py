@@ -70,3 +70,60 @@ def test_reader_surfaces_a_refused_hop(monkeypatch):
     t = media_fetch.register("https://public.example/v.mkv", False)
     r = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}")
     assert r.status_code == 502
+
+
+def test_reader_turns_a_mid_read_failure_into_502(monkeypatch):
+    # the connect succeeds and headers arrive, but the upstream drops while the playlist body is
+    # being read -- must still be a clean 502 (never an unhandled 500), and resp/conn must close.
+    from stremiosrv.proxy import upstream
+    media_fetch.reset()
+    closed = {"resp": False, "conn": False}
+
+    class FakeResp:
+        status = 200
+        def getheader(self, n, d=None):
+            return "application/vnd.apple.mpegurl" if n.lower() == "content-type" else d
+        def read(self, *a):
+            raise ConnectionResetError("peer closed the connection")
+        def close(self):
+            closed["resp"] = True
+
+    class FakeConn:
+        def close(self):
+            closed["conn"] = True
+
+    def fake_open(url, method, headers, home, deadline):
+        return FakeResp(), FakeConn()
+    monkeypatch.setattr(upstream, "open_url", fake_open)
+
+    t = media_fetch.register("https://cdn.example/hls/index.m3u8", False)
+    r = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}")
+    assert r.status_code == 502
+    assert closed == {"resp": True, "conn": True}
+
+
+def test_reader_reports_an_oversized_playlist_as_502(monkeypatch):
+    # the size guard must actually bite: shrink the cap so a small canned body already overflows it,
+    # rather than allocating a multi-MiB body just to cross the real default.
+    from stremiosrv.proxy import upstream
+    media_fetch.reset()
+    monkeypatch.setattr(media_fetch, "_MAX_PLAYLIST_BYTES", 10)
+
+    class FakeResp:
+        status = 200
+        def getheader(self, n, d=None):
+            return "application/vnd.apple.mpegurl" if n.lower() == "content-type" else d
+        def read(self, *a):
+            return b"#EXTM3U\n" * 5  # well over the shrunk 10-byte cap
+        def close(self): pass
+
+    class FakeConn:
+        def close(self): pass
+
+    def fake_open(url, method, headers, home, deadline):
+        return FakeResp(), FakeConn()
+    monkeypatch.setattr(upstream, "open_url", fake_open)
+
+    t = media_fetch.register("https://cdn.example/hls/index.m3u8", False)
+    r = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}")
+    assert r.status_code == 502

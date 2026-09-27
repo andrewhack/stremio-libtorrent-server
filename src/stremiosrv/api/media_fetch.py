@@ -11,8 +11,10 @@ from the ORIGINAL client request -- never from ffmpeg's own loopback call.
 """
 from __future__ import annotations
 
+import http.client
 import secrets
 import urllib.parse
+import weakref
 from collections import OrderedDict
 from threading import Lock
 
@@ -143,6 +145,27 @@ def _segment_mapper(request: Request, base: str, home: bool):
     return mapper
 
 
+def _close(resp: http.client.HTTPResponse, conn: http.client.HTTPConnection) -> None:
+    """Close both ends of an upstream fetch. Safe to call twice -- http.client's close() is a no-op
+    once already closed -- so this may run as a backstop after the streamed body's own finally."""
+    resp.close()
+    conn.close()
+
+
+def _playlist_response(resp: http.client.HTTPResponse, raw: bytes, request: Request, url: str,
+                       home: bool) -> Response:
+    """The answer for an already-read playlist body: too large, unrewritable, or rewritten."""
+    if len(raw) > _MAX_PLAYLIST_BYTES:
+        return Response(status_code=502, content=b"playlist too large")
+    try:
+        rewritten = playlist.rewrite_lines(raw, _segment_mapper(request, url, home),
+                                           limit=_MAX_PLAYLIST_BYTES)
+    except playlist.TooLarge:
+        return Response(status_code=502, content=b"playlist too large")
+    return Response(content=rewritten, status_code=resp.status,
+                    media_type="application/vnd.apple.mpegurl")
+
+
 @router.get(READER_PREFIX + "/{secret}/{ticket}", include_in_schema=False)
 def media_reader(secret: str, ticket: str, request: Request) -> Response:
     """Fetch a ticket's external URL through the destination guard and hand the body to ffmpeg.
@@ -168,26 +191,24 @@ def media_reader(secret: str, ticket: str, request: Request) -> Response:
     if playlist.is_playlist(urllib.parse.urlsplit(url).path, ctype):
         try:
             raw = resp.read(_MAX_PLAYLIST_BYTES + 1)
+        except (OSError, http.client.HTTPException):
+            answer = Response(status_code=502, content=b"media source unreachable")
+        else:
+            answer = _playlist_response(resp, raw, request, url, home)
         finally:
-            resp.close()
-            conn.close()
-        if len(raw) > _MAX_PLAYLIST_BYTES:
-            return Response(status_code=502, content=b"playlist too large")
-        try:
-            rewritten = playlist.rewrite_lines(raw, _segment_mapper(request, url, home),
-                                               limit=_MAX_PLAYLIST_BYTES)
-        except playlist.TooLarge:
-            return Response(status_code=502, content=b"playlist too large")
-        return Response(content=rewritten, status_code=resp.status,
-                        media_type="application/vnd.apple.mpegurl")
+            _close(resp, conn)
+        # A playlist the deadline cut short (a stalled upstream, most likely) is never served --
+        # matches api/proxy.py's _proxied(), which gates its own playlist answer the same way.
+        if not deadline.stop():
+            return Response(status_code=504, content=b"media source too slow")
+        return answer
 
     def body():
         try:
             while chunk := resp.read1(_CHUNK):
                 yield chunk
         finally:
-            resp.close()
-            conn.close()
+            _close(resp, conn)
 
     headers = {}
     for name in ("content-type", "content-length", "content-range", "accept-ranges"):
@@ -195,4 +216,10 @@ def media_reader(secret: str, ticket: str, request: Request) -> Response:
         if value is not None:
             headers[name] = value
     deadline.stop()
-    return StreamingResponse(body(), status_code=resp.status, headers=headers)
+    streamed = body()
+    # Backstop for the one case the generator's own finally cannot cover: Starlette never starting
+    # to iterate it at all (e.g. the client is already gone). Same pattern as api/proxy.py's
+    # weakref.finalize(body, _abandon, resp, conn, slot) -- and _close() tolerates running twice,
+    # so this racing with the generator's own finally is harmless either way.
+    weakref.finalize(streamed, _close, resp, conn)
+    return StreamingResponse(streamed, status_code=resp.status, headers=headers)
