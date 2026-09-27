@@ -496,6 +496,63 @@ def test_an_addon_host_header_replaces_ours_exactly_once(upstream):
     assert upstream.seen[-1][2].get_all("Host") == ["other.example"]
 
 
+def test_a_cross_origin_redirect_drops_credentials_but_same_origin_keeps_them():
+    # A cross-origin redirect must not carry the request's credentials (Authorization/Cookie) to a
+    # host the client never authenticated to -- browser behaviour; stock re-applies every `h` header,
+    # which is the leak we decline. A SAME-origin redirect must still carry them, or an authenticated
+    # redirect chain breaks. Server A: /start -> /next (same origin), /next -> B (cross origin).
+    a_seen: list[dict[str, str]] = []
+    b_seen: list[dict[str, str]] = []
+
+    class B(BaseHTTPRequestHandler):
+        def do_GET(self):
+            b_seen.append({k.lower(): v for k, v in self.headers.items()})
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *a):
+            pass
+
+    b_srv = ThreadingHTTPServer(("127.0.0.1", 0), B)
+
+    class A(BaseHTTPRequestHandler):
+        def do_GET(self):
+            a_seen.append({k.lower(): v for k, v in self.headers.items()})
+            loc = "/next" if self.path == "/start" else f"http://127.0.0.1:{b_srv.server_address[1]}/x"
+            self.send_response(302)
+            self.send_header("Location", loc)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    a_srv = ThreadingHTTPServer(("127.0.0.1", 0), A)
+    for s in (a_srv, b_srv):
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        deadline = upstream_mod.Deadline(upstream_mod.DEADLINE)
+        resp, conn = upstream_mod.open_url(
+            f"http://127.0.0.1:{a_srv.server_address[1]}/start", "GET",
+            {"Authorization": "Bearer secret", "Cookie": "sid=1", "User-Agent": "x"}, True, deadline)
+        resp.read()
+        resp.close()
+        conn.close()
+    finally:
+        a_srv.shutdown()
+        b_srv.shutdown()
+        a_srv.server_close()
+        b_srv.server_close()
+
+    assert len(a_seen) == 2 and len(b_seen) == 1
+    assert all(h.get("authorization") == "Bearer secret" for h in a_seen)  # same origin -> kept
+    assert all(h.get("cookie") == "sid=1" for h in a_seen)
+    assert "authorization" not in b_seen[0]   # cross origin -> credential dropped
+    assert "cookie" not in b_seen[0]
+    assert b_seen[0].get("user-agent") == "x"  # a non-credential header is still forwarded
+
+
 def test_a_relayed_405_is_not_counted_as_a_missing_route(upstream):
     unmatched.reset()
     assert _client().get(f"/proxy/{_opts(upstream)}/m405").status_code == 405

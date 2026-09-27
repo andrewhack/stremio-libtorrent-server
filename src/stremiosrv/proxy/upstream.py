@@ -1,10 +1,13 @@
 """One upstream request for `/proxy`, redirects followed by hand the way the stock server does.
 
 Stock resolves a redirect's Location against the current destination's ORIGIN, re-applies the `h`
-headers, and treats a fifth redirect as an error. Every hop here goes through dest.pick and
-connects to the address that passed. TLS certificates are not verified: the stock proxy does not
-verify them either, and matching it was the owner's decision (2026-09-11) -- the destination rule,
-not the certificate, is what keeps the proxy off the LAN.
+headers, and treats a fifth redirect as an error. We match that with one deliberate divergence:
+credential headers (Authorization, Cookie, Proxy-Authorization) are dropped on a cross-origin
+redirect, so a hop to a host the client never authenticated to cannot carry its token -- what a
+browser does at a cross-origin redirect, and what stock does not. Every hop here goes through
+dest.pick and connects to the address that passed. TLS certificates are not verified: the stock
+proxy does not verify them either, and matching it was the owner's decision (2026-09-11) -- the
+destination rule, not the certificate, is what keeps the proxy off the LAN.
 
 The whole answer -- every hop's connect, TLS handshake and headers, and a playlist's body -- has
 DEADLINE to arrive (owner's decision, 2026-09-13): each blocking step waits no longer than what is
@@ -171,6 +174,17 @@ def _hop_headers(headers: dict[str, str], u: urllib.parse.SplitResult) -> dict[s
     return out
 
 
+# Dropped on a cross-origin redirect (see the module docstring): a token or cookie belongs to the
+# origin it was sent to, not to wherever a Location points next.
+_CREDENTIAL_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
+
+
+def _origin(u: urllib.parse.SplitResult) -> tuple[str, str, int]:
+    """A URL's origin -- scheme, lowercased host, and port with its scheme default filled in --
+    the tuple two URLs share iff a redirect between them stays same-origin."""
+    return (u.scheme, (u.hostname or "").lower(), u.port or (443 if u.scheme == "https" else 80))
+
+
 def open_url(url: str, method: str, headers: dict[str, str], home_client: bool,
              deadline: Deadline) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
     """(response, connection) for `url` after any redirects; the caller closes both, and stops
@@ -207,7 +221,15 @@ def open_url(url: str, method: str, headers: dict[str, str], home_client: bool,
         resp.close()
         conn.close()
         try:
-            url = urllib.parse.urljoin(f"{u.scheme}://{_host_header(u)}/", location)
-        except ValueError:  # a Location that is not a URL, e.g. a broken IPv6 literal
+            new_url = urllib.parse.urljoin(f"{u.scheme}://{_host_header(u)}/", location)
+            crossed = _origin(urllib.parse.urlsplit(new_url)) != _origin(u)
+        except ValueError:  # a Location that is not a URL / an out-of-range port: not requestable
             raise BadUpstream from None
+        if crossed:
+            # A cross-origin redirect must not carry the request's credentials to a host the client
+            # never authenticated to: drop them for this hop and every later one. Browsers strip
+            # Authorization here; stock re-applies every `h` header, which is the leak we decline.
+            # Monotonic -- a later hop back to the original origin does not resurrect them.
+            headers = {k: v for k, v in headers.items() if k.lower() not in _CREDENTIAL_HEADERS}
+        url = new_url
     raise TooManyRedirects

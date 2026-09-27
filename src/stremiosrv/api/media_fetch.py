@@ -219,10 +219,10 @@ def _segment_mapper(request: Request, base: str, home: bool,
     authenticated HLS/debrid stream does not 401 per segment. They are deliberately NOT attached to
     a segment on a different origin -- a different host (a third-party CDN), a plain-HTTP downgrade
     of an HTTPS playlist, or a different port would each hand the token somewhere the client never
-    authenticated. This governs only the header we ATTACH here; open_url still re-applies a ticket's
-    headers across a cross-origin *redirect* -- deliberate stock behaviour shared with /proxy (see
-    upstream.py), not decided here. `counter[0]` counts registered segments so the caller can warn
-    past TICKET_CAP."""
+    authenticated. This governs the header we ATTACH here; open_url in turn drops credential headers
+    across a cross-origin *redirect* (see upstream.py), so neither path hands a token to an origin
+    the client never authenticated to. `counter[0]` counts registered segments so the caller can
+    warn past TICKET_CAP."""
     def _origin(u: urllib.parse.SplitResult) -> tuple[str, str, int]:
         return (u.scheme, (u.hostname or "").lower(), u.port or (443 if u.scheme == "https" else 80))
 
