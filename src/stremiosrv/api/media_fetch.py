@@ -78,9 +78,16 @@ def _is_own_ffmpeg(request: Request, secret: str) -> bool:
 def is_own_media_url(request: Request, media_url: str) -> bool:
     """Whether `media_url` points at THIS server -- so ffmpeg may read it directly.
 
-    Our own when its host is a loopback address, the host the request was sent to, or the host
-    SERVER_URL names. Judged on the real hostname (urlsplit drops any userinfo), at any port and
-    either scheme. Everything else is external and must go through the reader."""
+    Our own when its host is a loopback address, or the host SERVER_URL names -- both signals the
+    caller cannot forge. Judged on the real hostname (urlsplit drops any userinfo), at any port and
+    either scheme. Everything else is external and must go through the reader.
+
+    The request's own Host header is deliberately NOT consulted: nginx forwards it verbatim from
+    the client (no server_name / TrustedHostMiddleware), so an internet caller could set Host to
+    match an external mediaURL and have this return True -- skipping the guard entirely. A
+    legitimate mediaURL is built either against SERVER_URL (stays "own") or, from a LAN page's own
+    origin, against that origin -- which then simply counts as external and goes through the
+    reader, still dest-checked for the original client, so nothing legitimate breaks."""
     try:
         host = urllib.parse.urlsplit(media_url).hostname or ""
     except ValueError:
@@ -89,8 +96,7 @@ def is_own_media_url(request: Request, media_url: str) -> bool:
         return False
     host = host.lower()
     settings = request.app.state.settings
-    own = {client.host_of("//" + request.headers.get("host", "")), client.host_of(settings.server_url)}
-    return netguard._is_loopback(host) or host in own
+    return netguard._is_loopback(host) or host == client.host_of(settings.server_url)
 
 
 def resolve_media_input(request: Request, media_url: str) -> str:
@@ -100,7 +106,10 @@ def resolve_media_input(request: Request, media_url: str) -> str:
     for the original client, then returned as a loopback reader URL. Anything else: 403."""
     if is_own_media_url(request, media_url):
         return media_url
-    u = urllib.parse.urlsplit(media_url)
+    try:
+        u = urllib.parse.urlsplit(media_url)
+    except ValueError as e:  # malformed (e.g. an unbalanced IPv6 literal): reject, don't 500
+        raise HTTPException(status_code=403, detail="media source not allowed") from e
     if u.scheme not in ("http", "https") or not u.hostname:
         raise HTTPException(status_code=403, detail="media source not allowed")
     home = client.is_home_client(request)

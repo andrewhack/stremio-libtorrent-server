@@ -26,9 +26,17 @@ def test_register_round_trips_and_is_unguessable():
 def test_registry_is_bounded_but_keeps_recently_used():
     media_fetch.reset()
     first = media_fetch.register("https://cdn.example/0", True)
-    for i in range(1, media_fetch.TICKET_CAP + 5):
+    oldest_untouched = media_fetch.register("https://cdn.example/1", True)
+    for i in range(2, media_fetch.TICKET_CAP):
         media_fetch.register(f"https://cdn.example/{i}", True)
-    assert media_fetch.resolve_ticket(first) is None  # evicted (oldest, never used)
+    # registry is now exactly at TICKET_CAP; refresh `first` so it is no longer the LRU entry --
+    # a plain FIFO cap (no refresh-on-read) would pass the old version of this test too, since
+    # `first` was also the very first entry inserted. This makes the refresh load-bearing.
+    media_fetch.resolve_ticket(first)
+    for i in range(media_fetch.TICKET_CAP, media_fetch.TICKET_CAP + 5):
+        media_fetch.register(f"https://cdn.example/{i}", True)
+    assert media_fetch.resolve_ticket(first) == ("https://cdn.example/0", True)  # survived
+    assert media_fetch.resolve_ticket(oldest_untouched) is None  # evicted instead: never refreshed
 
 
 def test_our_own_url_passes_through():
@@ -84,4 +92,22 @@ def test_non_http_raises_403():
     r = _req()
     with pytest.raises(HTTPException) as ei:
         media_fetch.resolve_media_input(r, "file:///etc/hostname")
+    assert ei.value.status_code == 403
+
+
+def test_spoofed_host_header_does_not_pass_an_external_url_through():
+    # nginx forwards Host verbatim (no server_name / TrustedHostMiddleware) -- an internet caller
+    # can set Host to match the mediaURL's host, hoping is_own_media_url treats "matches Host" as
+    # "ours" and returns the URL unchanged, skipping the guard entirely. It must still be
+    # dest-checked: here that means a LAN address refused to an internet-classified caller.
+    r = _req(host="192.168.1.10", peer="8.8.8.8")
+    with pytest.raises(HTTPException) as ei:
+        media_fetch.resolve_media_input(r, "http://192.168.1.10/v.mkv")
+    assert ei.value.status_code == 403
+
+
+def test_malformed_url_is_403():
+    r = _req()
+    with pytest.raises(HTTPException) as ei:
+        media_fetch.resolve_media_input(r, "http://[::1:80/evil")
     assert ei.value.status_code == 403
