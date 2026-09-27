@@ -199,16 +199,18 @@ def test_the_master_playlist_answers_504_when_ffprobe_times_out(monkeypatch):
 
 
 def test_probe_resolves_the_media_url():
-    """probe_media must never see the raw client mediaURL directly -- resolve_media_input decides
-    whether ffprobe reads it as-is (our own URL) or through the loopback reader (an external one).
-    """
+    """probe_media must receive the RESOLVED URL, never the raw client mediaURL. Asserting only
+    that resolve_media_input was called (`m.called`) is vacuous: a regression back to
+    `probe_media(mediaURL)` -- the raw value, the exact SSRF bug this task closes -- would still
+    call resolve_media_input (its return value would just be discarded) and this test would keep
+    passing. The sentinel + assert_called_once_with proves probe_media got THAT value."""
     c = TestClient(create_app())
-    with patch("stremiosrv.api.hls.resolve_media_input",
-               return_value="http://127.0.0.1:1/x") as m, \
+    resolved = "http://127.0.0.1:11470/RESOLVED"
+    with patch("stremiosrv.api.hls.resolve_media_input", return_value=resolved), \
          patch("stremiosrv.api.hls.probe_media",
-               return_value={"format": {"name": "matroska"}, "streams": [], "samples": {}}):
+               return_value={"format": {"name": "matroska"}, "streams": [], "samples": {}}) as pm:
         c.get("/hlsv2/probe", params={"mediaURL": "https://cdn.example/v.mkv"})
-    assert m.called  # the raw client URL never reaches probe_media directly
+    pm.assert_called_once_with(resolved)  # not the raw client URL
 
 
 def test_master_refuses_hls_format_input():

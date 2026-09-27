@@ -1,4 +1,5 @@
 import os
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -168,6 +169,25 @@ def test_subtitles_list_resolves_the_media_url(monkeypatch):
     assert r.status_code == 200
     assert seen_by_resolve == ["https://cdn.example/v.mkv"]
     assert seen_by_probe == ["http://127.0.0.1:1/resolved"]
+
+
+def test_subtitles_list_refuses_hls_format_input():
+    """A torrent whose bytes are themselves an HLS playlist must not be handed to ffprobe's HLS
+    demuxer here either -- same Minor-8 concern as hls.py's probe/master, and the same fix: refuse
+    a *successful* probe that reports an hls format. ProbeTimeoutError's separate
+    `{"subtitles": []}` branch (a slow/failed probe) is untouched -- this is only for a probe that
+    succeeded and found a playlist.
+
+    For an own mediaURL (the normal torrent case), resolve_media_input returns it unchanged and
+    ffprobe's HLS demuxer can then open absolute LAN segment URLs a malicious torrent's playlist
+    names -- the protocol whitelist permits http/https, so it does not stop this on its own."""
+    c = TestClient(create_app())
+    with patch("stremiosrv.api.subs.resolve_media_input", side_effect=lambda r, u: u), \
+         patch("stremiosrv.api.subs.probe_media",
+               return_value={"format": {"name": "hls"}, "streams": [], "samples": {}}):
+        r = c.get("/" + "a" * 40 + "/0/subtitles.json",
+                  params={"mediaURL": "http://127.0.0.1:11470/aabb/0"})
+    assert r.status_code == 415
 
 
 def test_subtitles_vtt_resolves_the_media_url_and_whitelists_protocols(monkeypatch):

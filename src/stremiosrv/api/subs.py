@@ -253,6 +253,8 @@ def subtitles_list(info_hash: str, idx: int, mediaURL: str, request: Request) ->
     except ProbeTimeoutError:
         logger.warning("subtitle probe timed out; answering with no tracks")
         return {"subtitles": []}
+    if "hls" in (pr.get("format", {}).get("name") or ""):
+        raise HTTPException(status_code=415, detail="playlist inputs are not accepted")
     subs = [
         {"id": s.get("id"), "track": s.get("index"), "codec": s.get("codec"), "lang": s.get("lang")}
         for s in pr["streams"]
