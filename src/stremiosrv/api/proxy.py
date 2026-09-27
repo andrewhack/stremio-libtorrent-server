@@ -19,7 +19,6 @@ from __future__ import annotations
 import http.client
 import re
 import threading
-import urllib.parse
 import weakref
 import zlib
 from collections.abc import Iterator
@@ -28,8 +27,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from stremiosrv.library import netguard
-from stremiosrv.proxy import dest, opts, playlist, upstream
+from stremiosrv.proxy import client, dest, opts, playlist, upstream
 
 router = APIRouter()
 
@@ -57,13 +55,6 @@ _NOT_SETTABLE = frozenset({"content-length", "transfer-encoding", "connection", 
 # of its own and no scripts. Browsers apply the policy to documents only; media, subtitle and
 # fetch/XHR loads -- the player's own -- ignore it (final review of 1.6.7).
 SANDBOX = "sandbox"
-# Web origins of the official Stremio web app. A page on another site -- or one that hides its
-# origin ("null") -- is judged like an internet client: every origin can read /proxy answers (CORS
-# is open, as in stock), so without this any website a home viewer opens could read the LAN through
-# the viewer's own server (owner's decision, 2026-09-12). Which pages count as this server's own,
-# not another site, is _foreign_page's rule (1.6.9). The bundled player's same-origin requests and
-# native apps send no Origin, so both keep the home rule.
-STREMIO_WEB_ORIGINS = frozenset({"https://web.stremio.com", "https://app.strem.io"})
 # http.client keeps an obs-fold -- a header value continued on the next line -- as CR LF plus the
 # continuation's leading whitespace. The ASGI servers refuse a value with a line break in it and
 # drop the response, so it becomes one space first, as RFC 9112 5.2 says.
@@ -149,51 +140,6 @@ class RefuseOwnRequests:
             await send({"type": "http.response.body", "body": b"proxy loop"})
             return
         await self.app(scope, receive, send)
-
-
-def _host_of(url: str) -> str:
-    """The host a URL names, lowercase; "" when it names none or cannot be parsed."""
-    try:
-        return urllib.parse.urlsplit(url).hostname or ""
-    except ValueError:
-        return ""
-
-
-def _foreign_page(request: Request) -> bool:
-    """Whether a web page on another site than this server or the Stremio web app sent this.
-
-    A page is the server's own when its host -- at any port, over either scheme -- is the host the
-    request was sent to, the host SERVER_URL names, or an address on the home network
-    (STREMIOSRV_LIBRARY_ADDON_ALLOW). The bundled player is often opened on another address than
-    the one it streams from -- `http://<home address>:8080` pointed at SERVER_URL's
-    `https://<name>:12470` -- and a cross-origin request carries its page's Origin (1.6.9)."""
-    origin = request.headers.get("origin")
-    if origin is None or origin in STREMIO_WEB_ORIGINS:
-        return False
-    try:
-        u = urllib.parse.urlsplit(origin)
-        host = u.hostname or ""
-    except ValueError:
-        return True
-    if u.scheme not in ("http", "https") or not host:
-        return True
-    settings = request.app.state.settings
-    own = {_host_of("//" + request.headers.get("host", "")), _host_of(settings.server_url)}
-    if host in own:
-        return False
-    return not netguard.is_allowed(host, netguard.parse_allow(settings.library_addon_allow))
-
-
-def _home_client(request: Request) -> bool:
-    """Whether this request gets the home rule: a client on the home network -- the same rule, and
-    the same operator setting (STREMIOSRV_LIBRARY_ADDON_ALLOW), that the library addon applies --
-    and not a web page on another site."""
-    if _foreign_page(request):
-        return False
-    peer = request.client.host if request.client else ""
-    ip = netguard.client_ip(peer, request.headers.get("x-forwarded-for", ""))
-    allow = netguard.parse_allow(request.app.state.settings.library_addon_allow)
-    return netguard.is_allowed(ip, allow)
 
 
 def _request_headers(request: Request, o: opts.ProxyOpts) -> dict[str, str]:
@@ -290,7 +236,7 @@ def proxy(rest: str, request: Request) -> Response:
     parsed = opts.parse(raw[len("/proxy/"):]) if raw.startswith("/proxy/") else None
     if parsed is None:
         return Response(status_code=400, content=b"bad proxy options")
-    home = _home_client(request)
+    home = client.is_home_client(request)
     slot = _admit(home)
     if slot is None:
         return Response(status_code=503, content=b"too many proxied requests")
