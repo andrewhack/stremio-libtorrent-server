@@ -54,6 +54,12 @@ Query params observed on hlsv2 requests (from live logs): `mediaURL`, `videoCode
 `audioCodecs` (repeatable), `maxAudioChannels`, `maxWidth`. **master.m3u8** is requested too
 (legacy route family below also exists).
 
+`mediaURL` here — and on the subtitle routes in section 4 (`/subtitles.:ext`, `/opensubHash`) — is
+never opened by ffprobe/ffmpeg directly once it points outside this server: the server fetches it
+through `/_hls-media-read/<secret>/<ticket>`, ffmpeg's own loopback reader. That route is
+origin-only, deliberately absent from the nginx allowlist, so no client can reach it; it applies the
+same destination rule `/proxy` does and re-checks it on every redirect.
+
 ### Legacy/alt HLS family (top-level `/:first/:second/…`, 46625+)
 `master.m3u8` (46626), `hls.m3u8` (46625), `stream.m3u8` (46627), `stream-q-:quality.m3u8` (46628),
 `stream-:stream.m3u8` (46629), `stream-q-:quality/:seg.ts` (46630), `stream-:stream/:seg.ts` (46631),
