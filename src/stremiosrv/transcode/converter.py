@@ -23,7 +23,8 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
     out_dir = str(out_dir)
     v = decision.get("video", {})
     a = decision.get("audio")
-    argv = ["ffmpeg", "-hide_banner", "-y"]
+    argv = ["ffmpeg", "-hide_banner", "-y",
+            "-protocol_whitelist", "file,crypto,data,http,tcp,tls,https"]
 
     if v.get("action") == "transcode":
         if profile == "nvenc-linux":

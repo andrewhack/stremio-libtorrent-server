@@ -13,6 +13,7 @@ import zlib
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from stremiosrv import metrics
+from stremiosrv.api.media_fetch import resolve_media_input
 from stremiosrv.proxy import client, dest, upstream
 from stremiosrv.stream.fileserver import file_disk_path
 from stremiosrv.subs.opensub import opensubtitles_hash_and_size
@@ -242,12 +243,13 @@ def subtitle_signature(videoUrl: str | None = None, container: str | None = None
 
 
 @router.get("/{info_hash}/{idx:int}/subtitles.json")
-def subtitles_list(info_hash: str, idx: int, mediaURL: str) -> dict:
+def subtitles_list(info_hash: str, idx: int, mediaURL: str, request: Request) -> dict:
     # Unlike the playback routes, this one has an ordinary answer for "no tracks" and the player
     # asks for it on every playback. A slow probe must not turn that into a 500 -- but it is still
     # said out loud, because an empty list on a file that does have subtitles is otherwise silent.
+    media = resolve_media_input(request, mediaURL)
     try:
-        pr = probe_media(mediaURL)
+        pr = probe_media(media)
     except ProbeTimeoutError:
         logger.warning("subtitle probe timed out; answering with no tracks")
         return {"subtitles": []}
@@ -260,9 +262,13 @@ def subtitles_list(info_hash: str, idx: int, mediaURL: str) -> dict:
 
 
 @router.get("/{info_hash}/{idx:int}/subtitles.vtt")
-def subtitles_vtt(info_hash: str, idx: int, mediaURL: str, track: int = 0) -> Response:
-    argv = ["ffmpeg", "-hide_banner", "-y", "-i", mediaURL,
-            "-map", f"0:s:{track}", "-f", "webvtt", "pipe:1"]
+def subtitles_vtt(
+    info_hash: str, idx: int, mediaURL: str, request: Request, track: int = 0,
+) -> Response:
+    media = resolve_media_input(request, mediaURL)
+    argv = ["ffmpeg", "-hide_banner", "-y",
+            "-protocol_whitelist", "file,crypto,data,http,tcp,tls,https",
+            "-i", media, "-map", f"0:s:{track}", "-f", "webvtt", "pipe:1"]
     proc = subprocess.run(argv, capture_output=True, timeout=60)
     if proc.returncode != 0:
         raise HTTPException(status_code=404, detail="subtitle track not found")

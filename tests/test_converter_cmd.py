@@ -44,3 +44,14 @@ def test_copy_hls_has_no_decode_accel():
 def test_no_audio_stream():
     cmd = build_hls_cmd("http://x/0", {"video": {"action": "copy"}}, None, "/tmp/j")
     assert "0:a:0?" not in cmd
+
+
+def test_build_hls_cmd_has_a_protocol_whitelist_before_input():
+    """ffmpeg must not be free to follow whatever scheme a redirect throws at it -- only the
+    handful this server actually serves media over (Minor 8's protocol whitelist), and it has to
+    precede -i to guard the input it names."""
+    argv = build_hls_cmd("http://127.0.0.1:1/x", DEC_COPY, None, "/tmp/j")
+    assert "-protocol_whitelist" in argv
+    i = argv.index("-protocol_whitelist")
+    assert argv[i + 1] == "file,crypto,data,http,tcp,tls,https"
+    assert i < argv.index("-i")

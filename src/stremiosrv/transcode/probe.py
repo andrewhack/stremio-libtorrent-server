@@ -83,8 +83,9 @@ def map_probe(ffprobe_json: dict) -> dict:
 
 
 def probe_media(media_url: str, ffprobe: str = "ffprobe", timeout: int = 30) -> dict:
-    argv = [ffprobe, "-v", "quiet", "-print_format", "json",
-            "-show_format", "-show_streams", media_url]
+    argv = [ffprobe, "-v", "quiet",
+            "-protocol_whitelist", "file,crypto,data,http,tcp,tls,https",
+            "-print_format", "json", "-show_format", "-show_streams", media_url]
     try:
         proc = subprocess.run(argv, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:

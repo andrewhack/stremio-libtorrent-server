@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
+from stremiosrv.api.media_fetch import resolve_media_input
 from stremiosrv.transcode.fingerprint import decide
 from stremiosrv.transcode.probe import ProbeTimeoutError, probe_media
 
@@ -47,11 +48,15 @@ def _wait_file(path: Path, timeout: float) -> bool:
 # gives when a transcode fails to start.
 
 @router.api_route("/probe", methods=["GET", "HEAD"])
-def probe(mediaURL: str) -> dict:
+def probe(mediaURL: str, request: Request) -> dict:
+    media = resolve_media_input(request, mediaURL)
     try:
-        return probe_media(mediaURL)
+        pr = probe_media(media)
     except ProbeTimeoutError as e:
         raise HTTPException(status_code=504, detail="probe timed out") from e
+    if "hls" in (pr.get("format", {}).get("name") or ""):
+        raise HTTPException(status_code=415, detail="playlist inputs are not accepted")
+    return pr
 
 
 @router.api_route("/{job_id}/master.m3u8", methods=["GET", "HEAD"])
@@ -67,13 +72,16 @@ def master(
     conv = _converter(request)
     if conv is None:
         raise HTTPException(status_code=503, detail="transcoder unavailable")
+    media = resolve_media_input(request, mediaURL)
     try:
-        pr = probe_media(mediaURL)
+        pr = probe_media(media)
     except ProbeTimeoutError as e:
         raise HTTPException(status_code=504, detail="probe timed out") from e
+    if "hls" in (pr.get("format", {}).get("name") or ""):
+        raise HTTPException(status_code=415, detail="playlist inputs are not accepted")
     dec = decide(pr, videoCodecs or ["h264"], audioCodecs or ["aac"], maxAudioChannels, maxWidth)
     try:
-        d = conv.ensure_job(job_id, mediaURL, dec)
+        d = conv.ensure_job(job_id, media, dec)
     except ValueError as e:
         raise HTTPException(status_code=400, detail="invalid job id") from e
     if not _wait_file(d / "master.m3u8", 25):

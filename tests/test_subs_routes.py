@@ -135,12 +135,69 @@ def test_subtitles_list_answers_its_empty_shape_when_the_probe_times_out(monkeyp
         raise ProbeTimeoutError("ffprobe did not answer within 30s")
 
     monkeypatch.setattr(subs_api, "probe_media", _times_out)
+    monkeypatch.setattr(subs_api, "resolve_media_input", lambda request, url: url)
     c = TestClient(create_app())
     with caplog.at_level(logging.WARNING):
         r = c.get("/" + "a" * 40 + "/0/subtitles.json", params={"mediaURL": "http://x/y"})
     assert r.status_code == 200
     assert r.json() == {"subtitles": []}
     assert "timed out" in caplog.text
+
+
+def test_subtitles_list_resolves_the_media_url(monkeypatch):
+    """probe_media must receive the resolved (own-or-reader) URL, never the raw client mediaURL --
+    the same contract hls.py's probe route gets (Task 7 / Minor 8)."""
+    from stremiosrv.api import subs as subs_api
+
+    seen_by_resolve = []
+    seen_by_probe = []
+
+    def fake_resolve(request, url):
+        seen_by_resolve.append(url)
+        return "http://127.0.0.1:1/resolved"
+
+    def fake_probe(url):
+        seen_by_probe.append(url)
+        return {"format": {"name": "matroska"}, "streams": []}
+
+    monkeypatch.setattr(subs_api, "resolve_media_input", fake_resolve)
+    monkeypatch.setattr(subs_api, "probe_media", fake_probe)
+    c = TestClient(create_app())
+    r = c.get("/" + "a" * 40 + "/0/subtitles.json",
+              params={"mediaURL": "https://cdn.example/v.mkv"})
+    assert r.status_code == 200
+    assert seen_by_resolve == ["https://cdn.example/v.mkv"]
+    assert seen_by_probe == ["http://127.0.0.1:1/resolved"]
+
+
+def test_subtitles_vtt_resolves_the_media_url_and_whitelists_protocols(monkeypatch):
+    """subtitles_vtt builds its own ffmpeg argv (it doesn't go through probe_media/build_hls_cmd),
+    so both the resolve wiring and the protocol whitelist have to be proven here directly."""
+    from stremiosrv.api import subs as subs_api
+
+    seen = {}
+
+    class P:
+        returncode = 0
+        stdout = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n"
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        return P()
+
+    monkeypatch.setattr(subs_api, "resolve_media_input",
+                        lambda request, url: "http://127.0.0.1:1/resolved")
+    monkeypatch.setattr(subs_api.subprocess, "run", fake_run)
+    c = TestClient(create_app())
+    r = c.get("/" + "a" * 40 + "/0/subtitles.vtt", params={"mediaURL": "https://cdn.example/v.mkv"})
+    assert r.status_code == 200
+    argv = seen["argv"]
+    assert "http://127.0.0.1:1/resolved" in argv
+    assert "https://cdn.example/v.mkv" not in argv  # the raw client URL never reaches ffmpeg
+    assert "-protocol_whitelist" in argv
+    i = argv.index("-protocol_whitelist")
+    assert argv[i + 1] == "file,crypto,data,http,tcp,tls,https"
+    assert i < argv.index("-i")
 
 
 def test_subtitles_from_a_refused_destination_is_403():

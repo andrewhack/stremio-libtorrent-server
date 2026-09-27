@@ -45,6 +45,25 @@ def test_no_hdr_for_sdr():
     assert s["isHdr"] is False and s["isDoVi"] is False
 
 
+def test_probe_argv_has_a_protocol_whitelist(monkeypatch):
+    """ffprobe must not be free to follow whatever scheme a redirect throws at it -- only the
+    handful this server actually serves media over (Minor 8's protocol whitelist)."""
+    seen = {}
+
+    class P:
+        stdout = b'{"format":{},"streams":[]}'
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        return P()
+
+    monkeypatch.setattr(probe_mod.subprocess, "run", fake_run)
+    probe_mod.probe_media("http://127.0.0.1:1/x")
+    assert "-protocol_whitelist" in seen["argv"]
+    i = seen["argv"].index("-protocol_whitelist")
+    assert seen["argv"][i + 1] == "file,crypto,data,http,tcp,tls,https"
+
+
 def test_a_hanging_ffprobe_becomes_a_named_error(monkeypatch):
     """subprocess.TimeoutExpired escaping probe_media is a 500 at every call site, and nothing can
     tell it apart from a genuine fault. The callers need to."""
