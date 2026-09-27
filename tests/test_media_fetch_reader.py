@@ -102,6 +102,73 @@ def test_reader_turns_a_mid_read_failure_into_502(monkeypatch):
     assert closed == {"resp": True, "conn": True}
 
 
+def test_reader_applies_ticket_headers_to_the_outbound_fetch(monkeypatch):
+    # C1: a ticket carrying request headers (a proxied mediaURL's `h=` options) must have them
+    # reach the upstream fetch -- otherwise an authenticated CDN/debrid stream would 401/403.
+    from stremiosrv.proxy import upstream
+    media_fetch.reset()
+
+    class FakeResp:
+        status = 200
+        def getheader(self, n, d=None):
+            return d
+        def read1(self, n):
+            return b""
+        def close(self): pass
+
+    class FakeConn:
+        def close(self): pass
+
+    seen = {}
+    def fake_open(url, method, headers, home, deadline):
+        seen["headers"] = headers
+        return FakeResp(), FakeConn()
+    monkeypatch.setattr(upstream, "open_url", fake_open)
+
+    t = media_fetch.register("https://cdn.example/v.mkv", True, (("Authorization", "tok"),))
+    r = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}")
+    assert r.status_code == 200
+    assert seen["headers"]["Authorization"] == "tok"
+    assert seen["headers"]["user-agent"] == "Mozilla/5.0"  # the default is kept, not replaced
+
+
+def test_reader_stream_ends_gracefully_on_a_mid_stream_failure(monkeypatch):
+    # M1: a plain (non-playlist) stream whose upstream drops mid-body must end the stream
+    # gracefully instead of propagating an OSError through ASGI -- mirrors proxy.py::_relay's own
+    # `except (OSError, http.client.HTTPException): return`.
+    from stremiosrv.proxy import upstream
+    media_fetch.reset()
+    closed = {"resp": False, "conn": False}
+
+    class FakeResp:
+        status = 200
+        def __init__(self):
+            self._n = 0
+        def getheader(self, n, d=None):
+            return d
+        def read1(self, n):
+            self._n += 1
+            if self._n == 1:
+                return b"partial-bytes"
+            raise ConnectionResetError("peer closed the connection")
+        def close(self):
+            closed["resp"] = True
+
+    class FakeConn:
+        def close(self):
+            closed["conn"] = True
+
+    def fake_open(url, method, headers, home, deadline):
+        return FakeResp(), FakeConn()
+    monkeypatch.setattr(upstream, "open_url", fake_open)
+
+    t = media_fetch.register("https://cdn.example/v.mkv", False)
+    r = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}")
+    assert r.status_code == 200
+    assert r.content == b"partial-bytes"
+    assert closed == {"resp": True, "conn": True}
+
+
 def test_reader_reports_an_oversized_playlist_as_502(monkeypatch):
     # the size guard must actually bite: shrink the cap so a small canned body already overflows it,
     # rather than allocating a multi-MiB body just to cross the real default.

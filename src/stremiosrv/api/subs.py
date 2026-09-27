@@ -149,6 +149,7 @@ def subtitles_proxy(ext: str, request: Request, source: str = Query(alias="from"
         conn.close()
     text = decode_subtitle(_decompress(raw, content_encoding))
     if ext.lower() == "vtt":
+        # charset=utf-8 so strict players (ExoPlayer) don't second-guess the encoding.
         return Response(content=to_webvtt(text), media_type="text/vtt; charset=utf-8")
     return Response(content=text, media_type="application/x-subrip; charset=utf-8")
 

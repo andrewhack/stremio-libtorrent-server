@@ -4,6 +4,11 @@ import pytest
 from fastapi import HTTPException
 
 from stremiosrv.api import media_fetch
+from stremiosrv.proxy import opts as proxy_opts
+
+# A real 40-hex-char infohash shape (test_library_download_api.py uses the same literal) -- the
+# torrent-stream passthrough regex requires the full 40 characters, unlike the old "aabb" shorthand.
+IH = "aabbccddeeff00112233445566778899aabbccdd"
 
 
 def _req(server_url="https://box.example:12470", host="box.example:12470", peer="127.0.0.1",
@@ -19,8 +24,16 @@ def _req(server_url="https://box.example:12470", host="box.example:12470", peer=
 def test_register_round_trips_and_is_unguessable():
     media_fetch.reset()
     t = media_fetch.register("https://cdn.example/v.mkv", True)
-    assert len(t) >= 16 and media_fetch.resolve_ticket(t) == ("https://cdn.example/v.mkv", True)
+    assert len(t) >= 16
+    assert media_fetch.resolve_ticket(t) == ("https://cdn.example/v.mkv", True, ())
     assert media_fetch.resolve_ticket("nope") is None
+
+
+def test_register_carries_optional_request_headers():
+    media_fetch.reset()
+    t = media_fetch.register("https://cdn.example/v.mkv", True, (("Authorization", "tok"),))
+    assert media_fetch.resolve_ticket(t) == (
+        "https://cdn.example/v.mkv", True, (("Authorization", "tok"),))
 
 
 def test_registry_is_bounded_but_keeps_recently_used():
@@ -35,22 +48,35 @@ def test_registry_is_bounded_but_keeps_recently_used():
     media_fetch.resolve_ticket(first)
     for i in range(media_fetch.TICKET_CAP, media_fetch.TICKET_CAP + 5):
         media_fetch.register(f"https://cdn.example/{i}", True)
-    assert media_fetch.resolve_ticket(first) == ("https://cdn.example/0", True)  # survived
+    assert media_fetch.resolve_ticket(first) == ("https://cdn.example/0", True, ())  # survived
     assert media_fetch.resolve_ticket(oldest_untouched) is None  # evicted instead: never refreshed
 
 
-def test_our_own_url_passes_through():
+def test_our_own_url_passes_through(monkeypatch):
+    # The torrent-stream shape -- the only thing ffmpeg may ever be handed directly -- still passes
+    # through unchanged, at our loopback address or the SERVER_URL host, any port.
     r = _req()
-    for url in ("https://box.example:12470/aabb/0",
-                "http://127.0.0.1:11470/aabb/0",
-                "https://box.example:12470/proxy/d=x/seg.ts"):
+    for url in (f"https://box.example:12470/{IH}/0",
+                f"http://127.0.0.1:11470/{IH}/-1"):
         assert media_fetch.resolve_media_input(r, url) == url
+
+    # C1: an own-host /proxy/... mediaURL must NEVER pass through unchanged. ffmpeg handed that URL
+    # would re-enter /proxy over loopback, where is_home_client sees only the loopback caller and
+    # classifies it HOME -- letting an internet client's own mediaURL escalate to a home-classified
+    # fetch. It must become a reader URL instead (still fetching the same destination, but
+    # dest-checked for the ORIGINAL client -- see the two tests below).
+    media_fetch.reset()
+    _stub_public_dns(monkeypatch)
+    proxy_url = "https://box.example:12470/proxy/d=https%3A%2F%2Fcdn.example/seg.ts"
+    out = media_fetch.resolve_media_input(r, proxy_url)
+    assert out != proxy_url
+    assert out.startswith("http://127.0.0.1:11470" + media_fetch.READER_PREFIX + "/")
 
 
 def test_resolve_own_host_other_port_is_passthrough():
     # our own name, a different port: still our box, not the LAN -- passed through unchanged
     r = _req()
-    url = "http://box.example:9999/aabb/0"
+    url = f"http://box.example:9999/{IH}/0"
     assert media_fetch.resolve_media_input(r, url) == url
 
 
@@ -79,6 +105,39 @@ def test_resolve_userinfo_host_is_not_ours(monkeypatch):
     r = _req()
     out = media_fetch.resolve_media_input(r, "http://box.example@evil.example/v.mkv")
     assert out.startswith("http://127.0.0.1:11470" + media_fetch.READER_PREFIX + "/")
+
+
+def test_internet_client_cannot_reenter_proxy_to_reach_lan():
+    # C1: an internet client cannot use its own mediaURL to make the loopback reader re-enter
+    # /proxy with a LAN destination. The /proxy URL's INNER destination (192.168.1.10, built the
+    # way a real client would -- percent-encoded `d=`, via opts.serialize) is dest-checked for the
+    # ORIGINAL client, an internet peer, so it is refused exactly as a direct /proxy call would be.
+    # A literal IP needs no DNS stub (getaddrinfo resolves it locally, like test_proxy_dest.py).
+    media_fetch.reset()
+    r = _req(peer="8.8.8.8")  # internet client
+    segment = proxy_opts.serialize(proxy_opts.ProxyOpts(dest="http://192.168.1.10"))
+    url = f"http://127.0.0.1:11470/proxy/{segment}/seg.ts"
+    with pytest.raises(HTTPException) as ei:
+        media_fetch.resolve_media_input(r, url)
+    assert ei.value.status_code == 403
+
+
+def test_home_client_proxy_mediaurl_routes_inner_dest_through_reader(monkeypatch):
+    # C1's legitimate path: a home client's own /proxy/... mediaURL (built the way a real client
+    # would, with `d=` and `h=` percent-encoded via opts.serialize) still reaches its destination --
+    # through the reader, keyed on the INNER url, carrying the proxy's own request headers so an
+    # authenticated CDN/debrid stream still works.
+    media_fetch.reset()
+    _stub_public_dns(monkeypatch)
+    r = _req()  # home client (peer 127.0.0.1)
+    segment = proxy_opts.serialize(
+        proxy_opts.ProxyOpts("https://cdn.example", (("Authorization", "tok"),)))
+    url = f"https://box.example:12470/proxy/{segment}/v.mkv"
+    out = media_fetch.resolve_media_input(r, url)
+    assert out.startswith("http://127.0.0.1:11470" + media_fetch.READER_PREFIX + "/")
+    ticket = out.rsplit("/", 1)[-1]
+    assert media_fetch.resolve_ticket(ticket) == (
+        "https://cdn.example/v.mkv", True, (("Authorization", "tok"),))
 
 
 def test_refused_destination_raises_403():

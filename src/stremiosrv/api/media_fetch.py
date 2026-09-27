@@ -1,17 +1,22 @@
 """ffmpeg's guarded way to read an EXTERNAL media URL.
 
 The transcode routes (/hlsv2, /{ih}/{idx}/subtitles.*) get a `mediaURL` from the client. When it is
-one of our own URLs -- a torrent stream /{ih}/{idx}, an already-proxied /proxy/... URL, or loopback
--- ffmpeg may read it directly. When it is an external http(s) URL (a plain debrid/HTTP stream), the
-server must not let ffmpeg fetch it: ffmpeg 4.4.1 follows redirects itself, so a public URL that
-302s into the LAN would slip past a one-shot check. Instead the URL is registered as a ticket and
-ffmpeg is handed a loopback reader URL (Task 6's route); the reader fetches through the same
-destination guard /proxy uses, re-checking every redirect, with the home-vs-internet decision taken
-from the ORIGINAL client request -- never from ffmpeg's own loopback call.
+our own torrent-stream URL -- /{ih}/{idx}, at our loopback address or the SERVER_URL host -- ffmpeg
+may read it directly. Everything else must NOT be handed to ffmpeg directly, including our own
+`/proxy/...` URL: ffmpeg 4.4.1 follows redirects itself, so a public URL that 302s into the LAN
+would slip past a one-shot check, and a /proxy URL would have ffmpeg re-enter /proxy over loopback,
+where the destination guard sees only the loopback caller and classifies it HOME -- an internet
+client's own mediaURL escalating to a home-classified fetch (C1). Instead the URL -- or, for a
+/proxy URL, its INNER destination, parsed out with the same opts.parse /proxy itself uses -- is
+registered as a ticket and ffmpeg is handed a loopback reader URL (Task 6's route); the reader
+fetches through the same destination guard /proxy uses, re-checking every redirect, with the
+home-vs-internet decision taken from the ORIGINAL client request -- never from ffmpeg's own loopback
+call.
 """
 from __future__ import annotations
 
 import http.client
+import re
 import secrets
 import urllib.parse
 import weakref
@@ -22,7 +27,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from stremiosrv.library import netguard
-from stremiosrv.proxy import client, dest, playlist, upstream
+from stremiosrv.proxy import client, dest, opts, playlist, upstream
 
 router = APIRouter()
 
@@ -31,11 +36,14 @@ READER_PREFIX = "/_hls-media-read"
 # URL carrying it. The reader also requires a valid ticket, so the secret is one of two factors.
 _SECRET = secrets.token_urlsafe(32)
 
-# Recently-registered external fetches: ticket id -> (url, home). Bounded, most-recently-used kept
-# (an active transcode reads its input repeatedly, refreshing recency, so a live ticket is never the
-# oldest; a finished probe's ticket falls out). No explicit lifecycle, so no coupling to Converter.
+# Recently-registered external fetches: ticket id -> (url, home, headers). Bounded, most-recently-
+# used kept (an active transcode reads its input repeatedly, refreshing recency, so a live ticket is
+# never the oldest; a finished probe's ticket falls out). No explicit lifecycle, so no coupling to
+# Converter. `headers` carries a proxied mediaURL's own `h=` request headers (C1) -- empty for a
+# plain external fetch.
 TICKET_CAP = 64
-_tickets: OrderedDict[str, tuple[str, bool]] = OrderedDict()
+_Ticket = tuple[str, bool, tuple[tuple[str, str], ...]]
+_tickets: OrderedDict[str, _Ticket] = OrderedDict()
 _tickets_lock = Lock()
 
 
@@ -45,19 +53,19 @@ def reset() -> None:
         _tickets.clear()
 
 
-def register(url: str, home: bool) -> str:
+def register(url: str, home: bool, headers: tuple[tuple[str, str], ...] | None = None) -> str:
     """Record an external fetch and return its unguessable ticket id."""
     ticket = secrets.token_urlsafe(16)
     with _tickets_lock:
-        _tickets[ticket] = (url, home)
+        _tickets[ticket] = (url, home, tuple(headers or ()))
         _tickets.move_to_end(ticket)
         while len(_tickets) > TICKET_CAP:
             _tickets.popitem(last=False)
     return ticket
 
 
-def resolve_ticket(ticket: str) -> tuple[str, bool] | None:
-    """The (url, home) a ticket names, refreshing its recency; None if unknown."""
+def resolve_ticket(ticket: str) -> _Ticket | None:
+    """The (url, home, headers) a ticket names, refreshing its recency; None if unknown."""
     with _tickets_lock:
         hit = _tickets.get(ticket)
         if hit is not None:
@@ -78,12 +86,31 @@ def _is_own_ffmpeg(request: Request, secret: str) -> bool:
             and netguard._is_loopback(peer) and "x-forwarded-for" not in request.headers)
 
 
+# The inert torrent-stream shape -- /<40-hex-infohash>/<idx> (idx may be signed, e.g. -1 for core's
+# default), optionally with a trailing subpath. The ONLY shape ffmpeg may ever be handed directly.
+_TORRENT_STREAM_PATH = re.compile(r"/[0-9a-fA-F]{40}/-?\d+(/.*)?$")
+
+
+def _is_own_host(request: Request, host: str) -> bool:
+    """Whether `host` (already lowercased) is a loopback address or the host SERVER_URL names --
+    both signals the caller cannot forge."""
+    settings = request.app.state.settings
+    return netguard._is_loopback(host) or host == client.host_of(settings.server_url)
+
+
 def is_own_media_url(request: Request, media_url: str) -> bool:
-    """Whether `media_url` points at THIS server -- so ffmpeg may read it directly.
+    """Whether `media_url` is our own inert torrent-stream URL -- so ffmpeg may read it directly.
 
     Our own when its host is a loopback address, or the host SERVER_URL names -- both signals the
-    caller cannot forge. Judged on the real hostname (urlsplit drops any userinfo), at any port and
-    either scheme. Everything else is external and must go through the reader.
+    caller cannot forge -- AND its path is the torrent-stream shape (see _TORRENT_STREAM_PATH).
+    Judged on the real hostname (urlsplit drops any userinfo), at any port and either scheme.
+
+    Deliberately narrower than "any own-host URL": an own-host `/proxy/...` URL (or any other own
+    path) is NOT "own" here, so it never passes through unchanged. Handing ffmpeg a /proxy URL would
+    have it re-enter /proxy over loopback, where the destination guard sees only the loopback caller
+    and classifies it HOME -- an internet client's own mediaURL escalating to a home-classified
+    fetch (C1). `resolve_media_input` routes an own-host /proxy URL through the reader by its INNER
+    destination instead, still dest-checked for the original client.
 
     The request's own Host header is deliberately NOT consulted: nginx forwards it verbatim from
     the client (no server_name / TrustedHostMiddleware), so an internet caller could set Host to
@@ -92,27 +119,59 @@ def is_own_media_url(request: Request, media_url: str) -> bool:
     origin, against that origin -- which then simply counts as external and goes through the
     reader, still dest-checked for the original client, so nothing legitimate breaks."""
     try:
-        host = urllib.parse.urlsplit(media_url).hostname or ""
+        u = urllib.parse.urlsplit(media_url)
     except ValueError:
         return False
+    host = (u.hostname or "").lower()
     if not host:
         return False
-    host = host.lower()
-    settings = request.app.state.settings
-    return netguard._is_loopback(host) or host == client.host_of(settings.server_url)
+    return _is_own_host(request, host) and bool(_TORRENT_STREAM_PATH.match(u.path))
+
+
+def _resolve_own_proxy_url(request: Request, u: urllib.parse.SplitResult) -> str:
+    """The reader URL for an own-host `/proxy/...` mediaURL, routed by its INNER destination (C1).
+
+    ffmpeg must never open a /proxy URL directly (see is_own_media_url's docstring). Instead the
+    inner destination is parsed out with the same opts.parse /proxy itself uses -- from `u.path`,
+    which urlsplit leaves percent-encoded, exactly what opts.parse expects, the same way
+    api/proxy.py reads it from raw_path -- and dest-checked for the ORIGINAL client. A
+    proxied/debrid transcode still works (the inner CDN is public, so dest.pick allows it for
+    either a home or an internet client); an internet client's inner-LAN target is refused exactly
+    as a direct /proxy call would refuse it. The `r=` response headers are ignored: those are for
+    the browser, not ffmpeg."""
+    parsed = opts.parse(u.path[len("/proxy/"):])
+    if parsed is None:
+        raise HTTPException(status_code=403, detail="media source not allowed")
+    o, inner_path = parsed
+    inner_url = o.dest + inner_path + (f"?{u.query}" if u.query else "")
+    home = client.is_home_client(request)
+    iu = urllib.parse.urlsplit(inner_url)
+    port = iu.port or (443 if iu.scheme == "https" else 80)
+    try:
+        dest.pick(iu.hostname, port, home)  # early, clean refusal; the reader re-checks every hop
+    except dest.Refused as e:
+        raise HTTPException(status_code=403, detail="media source not allowed") from e
+    except OSError as e:  # name does not resolve
+        raise HTTPException(status_code=502, detail="media source unreachable") from e
+    return reader_url(request, register(inner_url, home, o.req_headers))
 
 
 def resolve_media_input(request: Request, media_url: str) -> str:
     """The URL ffmpeg should actually open for this `mediaURL`.
 
-    Our own URL: returned unchanged (ffmpeg reads it directly). An external http(s) URL: dest-checked
-    for the original client, then returned as a loopback reader URL. Anything else: 403."""
+    Our own torrent-stream URL: returned unchanged (ffmpeg reads it directly). Our own `/proxy/...`
+    URL: never handed to ffmpeg -- routed through the reader by its INNER destination instead (C1;
+    see _resolve_own_proxy_url). Any other external http(s) URL: dest-checked directly for the
+    original client, then returned as a loopback reader URL. Anything else: 403."""
     if is_own_media_url(request, media_url):
         return media_url
     try:
         u = urllib.parse.urlsplit(media_url)
     except ValueError as e:  # malformed (e.g. an unbalanced IPv6 literal): reject, don't 500
         raise HTTPException(status_code=403, detail="media source not allowed") from e
+    host = (u.hostname or "").lower()
+    if host and _is_own_host(request, host) and u.path.startswith("/proxy/"):
+        return _resolve_own_proxy_url(request, u)
     if u.scheme not in ("http", "https") or not u.hostname:
         raise HTTPException(status_code=403, detail="media source not allowed")
     home = client.is_home_client(request)
@@ -177,8 +236,10 @@ def media_reader(secret: str, ticket: str, request: Request) -> Response:
     hit = resolve_ticket(ticket) if _is_own_ffmpeg(request, secret) else None
     if hit is None:
         return Response(status_code=404)
-    url, home = hit
+    url, home, ticket_headers = hit
     fwd = {"user-agent": "Mozilla/5.0"}
+    for name, value in ticket_headers:  # a proxied mediaURL's own `h=` headers (C1), e.g. auth
+        fwd[name] = value
     rng = request.headers.get("range")
     if rng:
         fwd["range"] = rng
@@ -207,6 +268,8 @@ def media_reader(secret: str, ticket: str, request: Request) -> Response:
         try:
             while chunk := resp.read1(_CHUNK):
                 yield chunk
+        except (OSError, http.client.HTTPException):
+            return  # the upstream died mid-body: end the stream; the player re-requests
         finally:
             _close(resp, conn)
 
