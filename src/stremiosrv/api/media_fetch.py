@@ -86,9 +86,16 @@ def _is_own_ffmpeg(request: Request, secret: str) -> bool:
             and netguard._is_loopback(peer) and "x-forwarded-for" not in request.headers)
 
 
-# The inert torrent-stream shape -- /<40-hex-infohash>/<idx> (idx may be signed, e.g. -1 for core's
-# default), optionally with a trailing subpath. The ONLY shape ffmpeg may ever be handed directly.
-_TORRENT_STREAM_PATH = re.compile(r"/[0-9a-fA-F]{40}/-?\d+(/.*)?$")
+# The inert torrent-stream shape -- exactly /<40-hex-infohash>/<idx> (idx may be signed, e.g. -1 for
+# core's default), nothing more. The ONLY shape ffmpeg may ever be handed directly. No trailing
+# subpath: a legitimate own stream URL never carries one (playback.py's stream routes are exactly
+# /{info_hash}/{idx:int} and /{info_hash}/-1), and allowing one here previously let an own-host
+# mediaURL like /<ih>/<idx>/subtitles.json?mediaURL=<LAN> pass through unchanged too -- subs.py's
+# subtitles routes take their own `mediaURL` and re-invoke resolve_media_input, so ffprobe/ffmpeg
+# opening that URL over loopback made the INNER re-invocation see a loopback (home) request,
+# regardless of the original client (residual C1, re-review). Anchored at both ends so `.search`
+# could never widen it back out even by accident.
+_TORRENT_STREAM_PATH = re.compile(r"^/[0-9a-fA-F]{40}/-?\d+$")
 
 
 def _is_own_host(request: Request, host: str) -> bool:

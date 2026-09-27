@@ -140,6 +140,25 @@ def test_home_client_proxy_mediaurl_routes_inner_dest_through_reader(monkeypatch
         "https://cdn.example/v.mkv", True, (("Authorization", "tok"),))
 
 
+def test_internet_client_cannot_reenter_via_a_subtitle_subpath():
+    # Residual C1 (re-review): the torrent-stream regex's old `(/.*)?` trailing-subpath allowance
+    # also matched /<ih>/<idx>/subtitles.json and .../subtitles.vtt -- routes that themselves take a
+    # `mediaURL` query param and re-invoke resolve_media_input (subs.py). An internet client's own
+    # mediaURL pointing at one of those, carrying a nested mediaURL query string, would pass through
+    # unchanged here; ffprobe/ffmpeg then opens it over loopback, and the INNER subtitles route sees
+    # a LOOPBACK (home) request -- dest-checking the nested LAN target as home. Same internet-to-home
+    # escalation as the /proxy door, through a different one. The legitimate own shape carries no
+    # subpath (playback.py's stream routes are exactly /<ih>/<idx>), so the outer URL here must not
+    # pass through unchanged: it falls through to a plain dest-check on the outer (loopback) host,
+    # refused for an internet-classified caller.
+    media_fetch.reset()
+    r = _req(peer="8.8.8.8")  # internet client
+    url = f"http://127.0.0.1:11470/{IH}/0/subtitles.json?mediaURL=http://192.168.1.10/x"
+    with pytest.raises(HTTPException) as ei:
+        media_fetch.resolve_media_input(r, url)
+    assert ei.value.status_code == 403
+
+
 def test_refused_destination_raises_403():
     r = _req(peer="8.8.8.8")  # internet client
     with pytest.raises(HTTPException) as ei:
