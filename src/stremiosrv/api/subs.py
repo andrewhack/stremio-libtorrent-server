@@ -136,6 +136,7 @@ def subtitles_proxy(ext: str, request: Request, source: str = Query(alias="from"
     try:
         resp, conn = upstream.open_url(source, "GET", {"user-agent": _FETCH_UA}, home, deadline)
     except dest.Refused as e:
+        logger.warning("subtitle source refused by destination guard: %s", e)
         raise HTTPException(status_code=403, detail="subtitle source not allowed") from e
     except Exception as e:  # unreachable, too slow, too many redirects, bad upstream
         raise HTTPException(status_code=502, detail="failed to fetch subtitle") from e

@@ -41,6 +41,36 @@ def test_opensubhash_rejects_a_bare_existing_directory():
     assert r.json() == {"error": None, "result": None}
 
 
+def test_opensub_hash_returns_size_and_hash_on_engine_success(monkeypatch):
+    # The engine-success envelope: a resolvable own stream URL, metadata present and the edge pieces
+    # in, returns {"error": null, "result": {"size", "hash"}} -- the shape the OpenSubtitles addon
+    # needs (moviehash AND moviebytesize). The null cases are covered above; this covers the hit.
+    from stremiosrv.api import subs
+
+    class FakeHandle:
+        def has_metadata(self):
+            return True
+
+    class FakeEngine:
+        def get(self, info_hash):
+            return FakeHandle()
+
+        def add(self, info_hash):
+            return FakeHandle()
+
+        def save_path(self):
+            return "/data"
+
+    monkeypatch.setattr(subs, "_ensure_edges", lambda *a, **k: True)
+    monkeypatch.setattr(subs, "file_disk_path", lambda *a, **k: "/data/movie.mkv")
+    monkeypatch.setattr(subs, "opensubtitles_hash_and_size", lambda path: ("deadbeefdeadbeef", 4242))
+    app = create_app()
+    app.state.engine = FakeEngine()
+    r = TestClient(app).get("/opensubHash", params={"videoUrl": "https://h:12470/" + "a" * 40 + "/6"})
+    assert r.status_code == 200
+    assert r.json() == {"error": None, "result": {"size": 4242, "hash": "deadbeefdeadbeef"}}
+
+
 def test_casting_returns_empty_list():
     c = TestClient(create_app())
     r = c.get("/casting")

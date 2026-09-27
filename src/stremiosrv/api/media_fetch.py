@@ -16,6 +16,7 @@ call.
 from __future__ import annotations
 
 import http.client
+import logging
 import re
 import secrets
 import urllib.parse
@@ -30,6 +31,7 @@ from stremiosrv.library import netguard
 from stremiosrv.proxy import client, dest, opts, playlist, upstream
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 READER_PREFIX = "/_hls-media-read"
 # Per process, never logged, never sent to a client: only an ffmpeg this process starts is handed a
@@ -39,9 +41,17 @@ _SECRET = secrets.token_urlsafe(32)
 # Recently-registered external fetches: ticket id -> (url, home, headers). Bounded, most-recently-
 # used kept (an active transcode reads its input repeatedly, refreshing recency, so a live ticket is
 # never the oldest; a finished probe's ticket falls out). No explicit lifecycle, so no coupling to
-# Converter. `headers` carries a proxied mediaURL's own `h=` request headers (C1) -- empty for a
-# plain external fetch.
-TICKET_CAP = 64
+# Converter. `headers` carries a proxied mediaURL's own `h=` request headers -- empty for a plain
+# external fetch.
+#
+# The cap must exceed the segment count of one VOD playlist: rewriting a playlist registers a ticket
+# for EVERY segment in a single burst, before ffmpeg fetches the first, so LRU-by-recency cannot
+# protect a not-yet-fetched early segment -- too small a cap evicts the earliest segments before
+# ffmpeg asks for them and it gets a 404 (the bug this size closes). A few thousand covers a
+# multi-hour VOD (8192 ~ 4 h of 2 s segments); a live playlist re-fetched in windows only ever
+# evicts its oldest, already-consumed segments, which is correct. A playlist still longer than this
+# logs a loud warning (see _playlist_response) rather than dropping segments silently.
+TICKET_CAP = 8192
 _Ticket = tuple[str, bool, tuple[tuple[str, str], ...]]
 _tickets: OrderedDict[str, _Ticket] = OrderedDict()
 _tickets_lock = Lock()
@@ -157,6 +167,7 @@ def _resolve_own_proxy_url(request: Request, u: urllib.parse.SplitResult) -> str
     try:
         dest.pick(iu.hostname, port, home)  # early, clean refusal; the reader re-checks every hop
     except dest.Refused as e:
+        logger.warning("media source refused by destination guard: %s", e)
         raise HTTPException(status_code=403, detail="media source not allowed") from e
     except OSError as e:  # name does not resolve
         raise HTTPException(status_code=502, detail="media source unreachable") from e
@@ -186,6 +197,7 @@ def resolve_media_input(request: Request, media_url: str) -> str:
     try:
         dest.pick(u.hostname, port, home)  # early, clean refusal; the reader re-checks every hop
     except dest.Refused as e:
+        logger.warning("media source refused by destination guard: %s", e)
         raise HTTPException(status_code=403, detail="media source not allowed") from e
     except OSError as e:  # name does not resolve
         raise HTTPException(status_code=502, detail="media source unreachable") from e
@@ -196,10 +208,26 @@ _MAX_PLAYLIST_BYTES = 4 << 20
 _CHUNK = 64 << 10
 
 
-def _segment_mapper(request: Request, base: str, home: bool):
+def _segment_mapper(request: Request, base: str, home: bool,
+                    headers: tuple[tuple[str, str], ...], counter: list[int]):
     """Map each URL in a fetched playlist to a fresh reader ticket, so ffmpeg fetches its segments
     and keys through the guard too. Relatives are absolutised against the playlist's real URL, not
-    the reader URL, because the reader URL carries no path to resolve against."""
+    the reader URL, because the reader URL carries no path to resolve against.
+
+    A proxied playlist's own request headers (its `h=` options, e.g. an Authorization token) ride
+    onto the tickets of segments on the SAME ORIGIN (scheme + host + port) as the playlist, so an
+    authenticated HLS/debrid stream does not 401 per segment. They are deliberately NOT attached to
+    a segment on a different origin -- a different host (a third-party CDN), a plain-HTTP downgrade
+    of an HTTPS playlist, or a different port would each hand the token somewhere the client never
+    authenticated. This governs only the header we ATTACH here; open_url still re-applies a ticket's
+    headers across a cross-origin *redirect* -- deliberate stock behaviour shared with /proxy (see
+    upstream.py), not decided here. `counter[0]` counts registered segments so the caller can warn
+    past TICKET_CAP."""
+    def _origin(u: urllib.parse.SplitResult) -> tuple[str, str, int]:
+        return (u.scheme, (u.hostname or "").lower(), u.port or (443 if u.scheme == "https" else 80))
+
+    base_origin = _origin(urllib.parse.urlsplit(base))
+
     def mapper(url: str) -> str:
         if url.startswith("#") or not url.strip():
             return url
@@ -207,7 +235,9 @@ def _segment_mapper(request: Request, base: str, home: bool):
         u = urllib.parse.urlsplit(absolute)
         if u.scheme not in ("http", "https") or not u.hostname:
             return url  # not fetchable by us; leave it (ffmpeg's protocol whitelist blocks non-http)
-        return reader_url(request, register(absolute, home))
+        counter[0] += 1
+        seg_headers = headers if _origin(u) == base_origin else ()
+        return reader_url(request, register(absolute, home, seg_headers))
     return mapper
 
 
@@ -219,15 +249,21 @@ def _close(resp: http.client.HTTPResponse, conn: http.client.HTTPConnection) -> 
 
 
 def _playlist_response(resp: http.client.HTTPResponse, raw: bytes, request: Request, url: str,
-                       home: bool) -> Response:
-    """The answer for an already-read playlist body: too large, unrewritable, or rewritten."""
+                       home: bool, headers: tuple[tuple[str, str], ...]) -> Response:
+    """The answer for an already-read playlist body: too large, unrewritable, or rewritten. `headers`
+    are the fetch's own request headers, carried onto same-host segment tickets (see
+    _segment_mapper)."""
     if len(raw) > _MAX_PLAYLIST_BYTES:
         return Response(status_code=502, content=b"playlist too large")
+    segments = [0]
+    mapper = _segment_mapper(request, url, home, headers, segments)
     try:
-        rewritten = playlist.rewrite_lines(raw, _segment_mapper(request, url, home),
-                                           limit=_MAX_PLAYLIST_BYTES)
+        rewritten = playlist.rewrite_lines(raw, mapper, limit=_MAX_PLAYLIST_BYTES)
     except playlist.TooLarge:
         return Response(status_code=502, content=b"playlist too large")
+    if segments[0] > TICKET_CAP:
+        logger.warning("playlist has %d segments, over the reader ticket cap of %d; its earliest "
+                       "segments may be evicted before ffmpeg fetches them", segments[0], TICKET_CAP)
     return Response(content=rewritten, status_code=resp.status,
                     media_type="application/vnd.apple.mpegurl")
 
@@ -253,7 +289,10 @@ def media_reader(secret: str, ticket: str, request: Request) -> Response:
     deadline = upstream.Deadline(upstream.DEADLINE)
     try:
         resp, conn = upstream.open_url(url, "GET", fwd, home, deadline)
-    except Exception:  # noqa: BLE001 — refused/unreachable/malformed/timeout: one clean 502
+    except dest.Refused as e:  # a hop resolved into the LAN/metadata: refused, and worth a log line
+        logger.warning("media source refused by destination guard: %s", e)
+        return Response(status_code=502, content=b"media source unreachable")
+    except Exception:  # noqa: BLE001 — unreachable/malformed/timeout: one clean 502
         return Response(status_code=502, content=b"media source unreachable")
     ctype = resp.getheader("Content-Type", "") or ""
     if playlist.is_playlist(urllib.parse.urlsplit(url).path, ctype):
@@ -262,7 +301,7 @@ def media_reader(secret: str, ticket: str, request: Request) -> Response:
         except (OSError, http.client.HTTPException):
             answer = Response(status_code=502, content=b"media source unreachable")
         else:
-            answer = _playlist_response(resp, raw, request, url, home)
+            answer = _playlist_response(resp, raw, request, url, home, ticket_headers)
         finally:
             _close(resp, conn)
         # A playlist the deadline cut short (a stalled upstream, most likely) is never served --

@@ -1,3 +1,5 @@
+import re
+
 from fastapi.testclient import TestClient
 
 from stremiosrv.api import media_fetch
@@ -194,3 +196,77 @@ def test_reader_reports_an_oversized_playlist_as_502(monkeypatch):
     t = media_fetch.register("https://cdn.example/hls/index.m3u8", False)
     r = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}")
     assert r.status_code == 502
+
+
+def test_reader_keeps_every_segment_of_a_long_playlist(monkeypatch):
+    # #2: a playlist with more segments than the historical 64-ticket cap must not evict its own
+    # earliest segments during the rewrite burst -- ffmpeg fetches them in order, and an evicted
+    # ticket answers 404. Every segment ticket must still resolve after the whole playlist is
+    # rewritten, including the first (which the old cap evicted before ffmpeg reached it).
+    from stremiosrv.proxy import upstream
+    media_fetch.reset()
+    n = 100  # over the old cap of 64 (so this bit the bug before); well under the current cap
+    body_bytes = b"#EXTM3U\n" + b"".join(
+        f"#EXTINF:1,\nhttps://cdn.example/seg{i}.ts\n".encode() for i in range(n))
+
+    class FakeResp:
+        status = 200
+        def getheader(self, k, d=None):
+            return "application/vnd.apple.mpegurl" if k.lower() == "content-type" else d
+        def read(self, *a):
+            return body_bytes
+        def close(self): pass
+
+    class FakeConn:
+        def close(self): pass
+
+    monkeypatch.setattr(upstream, "open_url", lambda *a, **k: (FakeResp(), FakeConn()))
+
+    t = media_fetch.register("https://cdn.example/index.m3u8", False)
+    body = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}").text
+    tickets = re.findall(r"/_hls-media-read/[^/]+/([A-Za-z0-9_-]+)", body)
+    assert len(tickets) == n
+    assert all(media_fetch.resolve_ticket(tk) is not None for tk in tickets)
+    assert media_fetch.resolve_ticket(tickets[0])[0] == "https://cdn.example/seg0.ts"
+
+
+def test_reader_carries_playlist_headers_to_same_origin_segments_only(monkeypatch):
+    # #3: a proxied playlist's own request headers (its `h=` options, e.g. auth) must ride onto the
+    # tickets of SAME-ORIGIN segments, or an authenticated HLS/debrid stream 401s per segment -- but
+    # NOT onto a segment on a different ORIGIN: a different host (a third-party CDN), a plain-HTTP
+    # downgrade of the HTTPS playlist (which would expose the token to any passive observer), or a
+    # different port. Origin = scheme + host + port, not host alone.
+    from stremiosrv.proxy import upstream
+    media_fetch.reset()
+    body_bytes = (b"#EXTM3U\n#EXTINF:1,\nseg-same.ts\n"
+                  b"#EXTINF:1,\nhttp://cdn.example/seg-downgrade.ts\n"
+                  b"#EXTINF:1,\nhttps://cdn.example:8443/seg-port.ts\n"
+                  b"#EXTINF:1,\nhttps://other.cdn/seg-cross.ts\n")
+
+    class FakeResp:
+        status = 200
+        def getheader(self, k, d=None):
+            return "application/vnd.apple.mpegurl" if k.lower() == "content-type" else d
+        def read(self, *a):
+            return body_bytes
+        def close(self): pass
+
+    class FakeConn:
+        def close(self): pass
+
+    monkeypatch.setattr(upstream, "open_url", lambda *a, **k: (FakeResp(), FakeConn()))
+
+    t = media_fetch.register("https://cdn.example/hls/index.m3u8", True,
+                             (("Authorization", "tok"),))
+    body = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}").text
+    tickets = re.findall(r"/_hls-media-read/[^/]+/([A-Za-z0-9_-]+)", body)
+    assert len(tickets) == 4
+    same, downgrade, other_port, cross = (media_fetch.resolve_ticket(tk) for tk in tickets)
+    assert same[0] == "https://cdn.example/hls/seg-same.ts"
+    assert same[2] == (("Authorization", "tok"),)   # same origin -> headers carried
+    assert downgrade[0] == "http://cdn.example/seg-downgrade.ts"
+    assert downgrade[2] == ()                         # http downgrade -> credential NOT sent cleartext
+    assert other_port[0] == "https://cdn.example:8443/seg-port.ts"
+    assert other_port[2] == ()                        # different port -> not the same origin
+    assert cross[0] == "https://other.cdn/seg-cross.ts"
+    assert cross[2] == ()                             # different host -> credential NOT leaked
