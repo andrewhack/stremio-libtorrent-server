@@ -186,9 +186,10 @@ def opensub_hash(request: Request, videoUrl: str | None = None, mediaURL: str | 
             hsh, size = opensubtitles_hash_and_size(file_disk_path(eng.save_path(), h, idx))
             return {"error": None, "result": {"size": size, "hash": hsh}}
         return {"error": None, "result": None}  # couldn't resolve in time -> client falls back to filename
-    if os.path.exists(src):
-        hsh, size = opensubtitles_hash_and_size(src)
-        return {"error": None, "result": {"size": size, "hash": hsh}}
+    # No filesystem fallback: a real client sends our own /<ih>/<idx> stream URL (handled above) or
+    # an addon http(s) URL, never a local path. Probing an arbitrary path for its size and hash is
+    # a local-file oracle for anyone who can reach this route, so it is refused here -- the client
+    # falls back to filename matching, exactly as it does for `result: null`.
     return {"error": None, "result": None}
 
 

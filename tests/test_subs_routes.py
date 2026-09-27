@@ -1,3 +1,5 @@
+import os
+
 from fastapi.testclient import TestClient
 
 from stremiosrv.api.subs import parse_stream_url
@@ -17,21 +19,25 @@ def test_opensub_hash_null_for_unresolvable_url():
     assert r.json() == {"error": None, "result": None}
 
 
-def test_opensub_hash_route(tmp_path):
-    p = tmp_path / "v.bin"
-    p.write_bytes(b"\x00" * (2 * 65536))  # 128 KiB zeros -> filesize hash
-    c = TestClient(create_app())
-    r = c.get("/opensubHash", params={"videoUrl": str(p)})
-    assert r.status_code == 200
-    # Stock-server envelope: result carries BOTH the hash AND the byte size. OpenSubtitles matches on
-    # moviehash + moviebytesize, so a bare hash (no size) silently breaks OpenSubtitles-addon matching.
-    assert r.json() == {"error": None, "result": {"size": 131072, "hash": "0000000000020000"}}
-
-
 def test_opensub_hash_requires_source():
     c = TestClient(create_app())
     r = c.get("/opensubHash")
     assert r.status_code == 422
+
+
+def test_opensubhash_does_not_probe_arbitrary_local_paths(tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_bytes(b"x" * 1000)
+    c = TestClient(create_app())
+    r = c.get("/opensubHash", params={"videoUrl": str(secret)})
+    assert r.status_code == 200
+    assert r.json() == {"error": None, "result": None}  # never a size/hash for a local path
+
+
+def test_opensubhash_rejects_a_bare_existing_directory():
+    c = TestClient(create_app())
+    r = c.get("/opensubHash", params={"videoUrl": os.getcwd()})
+    assert r.json() == {"error": None, "result": None}
 
 
 def test_casting_returns_empty_list():
