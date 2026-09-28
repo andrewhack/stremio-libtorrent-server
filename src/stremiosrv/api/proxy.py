@@ -17,6 +17,7 @@ fixed sizes (a small compressed body, or many short lines, could otherwise grow 
 from __future__ import annotations
 
 import http.client
+import logging
 import re
 import threading
 import weakref
@@ -30,6 +31,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from stremiosrv.proxy import client, dest, opts, playlist, upstream
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Marks every request we send upstream. One that comes back to this server -- over loopback, the
 # container's own address or the public name -- is refused by RefuseOwnRequests below, on every
@@ -263,7 +265,8 @@ def _proxied(request: Request, o: opts.ProxyOpts, path: str, home: bool,
     try:
         resp, conn = upstream.open_url(url, request.method, _request_headers(request, o), home,
                                        deadline)
-    except dest.Refused:
+    except dest.Refused as e:
+        logger.warning("proxy destination refused by destination guard: %s", e)
         slot.release()
         return Response(status_code=403, content=b"destination not allowed")
     except (OSError, http.client.HTTPException, upstream.TooManyRedirects,
