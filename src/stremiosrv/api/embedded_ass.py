@@ -32,6 +32,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from stremiosrv import metrics
+from stremiosrv.api.media_fetch import looks_like_manifest
 from stremiosrv.api.subs import parse_stream_url
 from stremiosrv.library import netguard
 from stremiosrv.stream.fileserver import content_type_for, wait_and_read
@@ -206,6 +207,23 @@ def _wait_for_head(request: Request, info_hash: str, idx: int) -> None:
         time.sleep(HEAD_POLL)
 
 
+def _head_is_manifest(request: Request, info_hash: str, idx: int, n: int = 64) -> bool:
+    """Whether the file's first bytes are a manifest ffprobe/ffmpeg would follow to external URLs
+    (Minor-8). Read through the same private-reader path the probe uses, so it sees the same bytes;
+    False when they cannot be read (the probe's own reader would 404 too)."""
+    h = _playing(request, info_hash, idx)
+    if h is None:
+        return False
+    try:
+        head = b"".join(wait_and_read(
+            request.app.state.engine.save_path(), h, idx, 0, n - 1,
+            timeout=READER_TIMEOUT, first_timeout=READER_FIRST_TIMEOUT, count=False,
+            yield_to_viewer=True))
+    except Exception:  # noqa: BLE001 — an unreadable head fails open, like the reader itself
+        return False
+    return looks_like_manifest(head)
+
+
 def _discovery(request: Request, info_hash: str, idx: int) -> Discovery:
     """The file's tracks and fonts, probed once and remembered for the last _FOUND_KEEP files."""
     key = (info_hash, idx)
@@ -219,6 +237,12 @@ def _discovery(request: Request, info_hash: str, idx: int) -> Discovery:
                 _found.move_to_end(key)
                 return _found[key]
         _wait_for_head(request, info_hash, idx)
+        if _head_is_manifest(request, info_hash, idx):
+            # Minor-8: a torrent file that is really a manifest would make the probe/extract ffmpeg
+            # follow its (attacker-chosen) segment URLs. Refuse before probing, as the hlsv2 and
+            # subtitle routes' resolve_media_input guard does for their own inputs.
+            logger.warning("embedded ASS: refused a manifest file [%s file %d]", info_hash, idx)
+            raise HTTPException(status_code=415, detail="playlist inputs are not accepted")
         try:
             proc = subprocess.run(probe_argv(reader_url(request, info_hash, idx)),
                                   capture_output=True, timeout=PROBE_TIMEOUT)

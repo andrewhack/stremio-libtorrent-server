@@ -149,3 +149,13 @@ def test_the_reader_url_carries_the_secret_and_the_api_port(engine):
     req.app = app
     assert embedded_ass.reader_url(req, IH, 2) == (
         f"http://127.0.0.1:12345/_embedded-ass-read/{embedded_ass._SECRET}/{IH}/2")
+
+
+def test_a_manifest_torrent_file_is_refused_before_probe(tmp_path):
+    # Minor-8: the embedded-ASS probe must not open a torrent file that is really a manifest --
+    # ffprobe would follow its (attacker-chosen) absolute segment URLs. The head is sniffed and the
+    # file refused with 415 before any ffprobe runs.
+    (tmp_path / "clip.mkv").write_bytes(b"#EXTM3U\n#EXTINF:2.0,\nhttp://169.254.169.254/x\n")
+    embedded_ass.reset()
+    r = _client(Engine(tmp_path)).get("/embedded-ass", params={"mediaURL": f"http://h/{IH}/0"})
+    assert r.status_code == 415

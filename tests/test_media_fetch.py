@@ -12,8 +12,9 @@ IH = "aabbccddeeff00112233445566778899aabbccdd"
 
 
 def _req(server_url="https://box.example:12470", host="box.example:12470", peer="127.0.0.1",
-         allow="127.0.0.0/8,192.168.0.0/16", origin=None, port=11470):
-    st = types.SimpleNamespace(server_url=server_url, library_addon_allow=allow, http_port=port)
+         allow="127.0.0.0/8,192.168.0.0/16", origin=None, port=11470, first_piece_timeout=30):
+    st = types.SimpleNamespace(server_url=server_url, library_addon_allow=allow, http_port=port,
+                               stream_first_piece_timeout=first_piece_timeout)
     app = types.SimpleNamespace(state=types.SimpleNamespace(settings=st))
     headers = {"host": host}
     if origin:
@@ -189,3 +190,109 @@ def test_malformed_url_is_403():
     with pytest.raises(HTTPException) as ei:
         media_fetch.resolve_media_input(r, "http://[::1:80/evil")
     assert ei.value.status_code == 403
+
+
+# --- Minor-8: a torrent whose bytes are really a manifest -----------------------------------------
+
+@pytest.mark.parametrize("head", [
+    b"#EXTM3U\n#EXT-X-VERSION:3\n",              # HLS
+    b"\xef\xbb\xbf#EXTM3U\n",                      # UTF-8 BOM before the tag
+    b"\n  \t#EXTM3U\n",                            # leading whitespace
+    b'<?xml version="1.0"?>\n<MPD>',              # DASH with an XML declaration
+    b'<MPD xmlns="urn:mpeg:dash:schema:mpd">',    # DASH without one
+    b"ffconcat version 1.0\nfile 'x'\n",          # ffmpeg concat demuxer
+])
+def test_manifest_heads_are_detected(head):
+    assert media_fetch.looks_like_manifest(head) is True
+
+
+@pytest.mark.parametrize("head", [
+    b"\x00\x00\x00\x18ftypmp42",                   # MP4
+    b"\x1aE\xdf\xa3",                              # Matroska / WebM (EBML)
+    b"RIFF\x00\x00\x00\x00AVI ",                   # AVI
+    b"",                                           # unreadable head -> fail-open
+    b"#EXT",                                        # too short to be #EXTM3U
+    b"not a playlist, just text",
+])
+def test_non_manifest_heads_pass(head):
+    assert media_fetch.looks_like_manifest(head) is False
+
+
+def test_own_torrent_whose_bytes_are_a_playlist_is_refused(monkeypatch):
+    # A torrent file that is really an HLS/DASH/concat manifest must be refused BEFORE ffprobe/ffmpeg
+    # opens it: ffprobe follows its (attacker-chosen, absolute) segment URLs during -show_format,
+    # before the route's hls-format 415 can fire. The sniff reads the same head ffprobe would.
+    monkeypatch.setattr(media_fetch, "_torrent_head",
+                        lambda *a, **k: b"#EXTM3U\n#EXTINF:1,\nhttp://169.254.169.254/x\n")
+    r = _req()
+    with pytest.raises(HTTPException) as ei:
+        media_fetch.resolve_media_input(r, f"http://127.0.0.1:11470/{IH}/0")
+    assert ei.value.status_code == 415
+
+
+def test_own_torrent_real_media_passes_through(monkeypatch):
+    monkeypatch.setattr(media_fetch, "_torrent_head", lambda *a, **k: b"\x00\x00\x00\x18ftypmp42")
+    r = _req()
+    url = f"http://127.0.0.1:11470/{IH}/0"
+    assert media_fetch.resolve_media_input(r, url) == url
+
+
+def test_head_sniff_fails_open_without_an_engine():
+    # No engine on app.state -> nothing to read -> b"" -> not a manifest -> the guard never breaks a
+    # stream it cannot inspect (and the existing own-URL passthrough tests above stay green).
+    assert media_fetch._torrent_head(_req(), IH, 0) == b""
+
+
+class _FakeHandle:
+    """A libtorrent handle just complete enough for wait_and_read to read a file's head off disk."""
+    def __init__(self, name: str, size: int, present: bool = True):
+        self._name, self._size, self._present = name, size, present
+
+    def has_metadata(self): return True
+    def piece_length(self): return 1 << 20   # head sits in piece 0
+    def file_offset(self, i): return 0
+    def file_path(self, i): return self._name
+    def file_size(self, i): return self._size
+    def num_pieces(self): return 1
+    def have_piece(self, p): return self._present
+    def boost_piece(self, *a, **k): pass
+
+
+class _FakeEngine:
+    def __init__(self, save_path: str, handle: _FakeHandle):
+        self._sp, self._h = save_path, handle
+
+    def get(self, ih): return self._h
+    def add(self, ih, **k): return self._h
+    def save_path(self): return self._sp
+
+
+def test_torrent_head_reads_a_real_file_via_the_real_reader(tmp_path):
+    # Composed path: the REAL _torrent_head reads real on-disk bytes through wait_and_read -- the same
+    # read path ffprobe uses -- and the real sniff refuses a manifest / passes a real container. No
+    # monkeypatch of the reader here, unlike the tests above.
+    body = b"#EXTM3U\n#EXTINF:2.0,\nhttp://169.254.169.254/latest/meta-data/\n#EXT-X-ENDLIST\n"
+    (tmp_path / "evil.m3u8").write_bytes(body)
+    r = _req()
+    r.app.state.engine = _FakeEngine(str(tmp_path), _FakeHandle("evil.m3u8", len(body)))
+    with pytest.raises(HTTPException) as ei:
+        media_fetch.resolve_media_input(r, f"http://127.0.0.1:11470/{IH}/0")
+    assert ei.value.status_code == 415
+
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 200
+    (tmp_path / "movie.mp4").write_bytes(mp4)
+    r.app.state.engine = _FakeEngine(str(tmp_path), _FakeHandle("movie.mp4", len(mp4)))
+    url = f"http://127.0.0.1:11470/{IH}/0"
+    assert media_fetch.resolve_media_input(r, url) == url  # a real container passes untouched
+
+
+def test_head_never_arriving_refuses_rather_than_falls_through(tmp_path):
+    # Review-found race: the sniff's wait and ffprobe's are sequential, so if the head has not
+    # arrived when the sniff gives up, the sniff must REFUSE (504) -- not fall through and let ffprobe
+    # read the head (and follow a manifest's segments) once the piece lands on its own later clock.
+    (tmp_path / "clip.mkv").write_bytes(b"#EXTM3U\nseg\n")  # a manifest IF it were ever read
+    r = _req(first_piece_timeout=0.4)
+    r.app.state.engine = _FakeEngine(str(tmp_path), _FakeHandle("clip.mkv", 12, present=False))
+    with pytest.raises(HTTPException) as ei:
+        media_fetch.resolve_media_input(r, f"http://127.0.0.1:11470/{IH}/0")
+    assert ei.value.status_code == 504

@@ -95,7 +95,12 @@ def to_webvtt(text: str) -> str:
             f.write(text)
             tmp = f.name
         proc = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-y", "-i", tmp, "-f", "webvtt", "pipe:1"],
+            # The input is our own local temp file, so ffmpeg never needs a network protocol. Pin the
+            # whitelist to local ones so a subtitle body that is really a manifest can't make ffmpeg
+            # fetch its segments (defence in depth: today ffmpeg's default already refuses http from a
+            # file input, so this changes no working case -- it just makes that guarantee explicit).
+            ["ffmpeg", "-hide_banner", "-y", "-protocol_whitelist", "file,crypto,data",
+             "-i", tmp, "-f", "webvtt", "pipe:1"],
             capture_output=True, timeout=15, check=False,
         )
         if proc.returncode == 0 and proc.stdout.strip():
