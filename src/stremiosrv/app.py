@@ -242,6 +242,7 @@ def build_app() -> FastAPI:
         prefetch_next_fraction=settings.prefetch_next_fraction,
         prefetch_next_max_bytes=settings.prefetch_next_max_bytes,
         prefetch_trigger_fraction=settings.prefetch_trigger_fraction,
+        enable_upnp=settings.enable_upnp,
     )
     engine.load_pins_into_session()
     converter = Converter(settings.cache_root, settings.transcode_profile)

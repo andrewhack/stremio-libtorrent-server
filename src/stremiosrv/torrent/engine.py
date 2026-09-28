@@ -622,15 +622,16 @@ class Engine:
                  prefetch_next_fraction: float = 0.05,
                  prefetch_next_max_bytes: int = 134_217_728,
                  prefetch_trigger_fraction: float = 0.90,
-                 dht_bootstrap_nodes: str = "") -> None:
+                 dht_bootstrap_nodes: str = "",
+                 enable_upnp: bool = True) -> None:  # auto router port-map (UPnP + NAT-PMP)
         _settings = {
             # INBOUND listener (stock server lacks this) — dual-stack so IPv6 peers can reach us too;
             # a host without IPv6 just fails that bind and keeps IPv4 (libtorrent degrades gracefully).
             "listen_interfaces": f"0.0.0.0:{listen_port},[::]:{listen_port}",
             "enable_dht": True,
             "enable_lsd": True,
-            "enable_upnp": True,
-            "enable_natpmp": True,
+            "enable_upnp": enable_upnp,
+            "enable_natpmp": enable_upnp,  # one switch: NAT-PMP follows UPnP (both are router port-map)
             "download_rate_limit": download_rate_limit,  # bytes/sec, 0 = unlimited
             "upload_rate_limit": upload_rate_limit,      # bytes/sec, 0 = unlimited
             # Streaming-tuned (mirrors the stock server's "ultra_fast" profile): ramp peers fast,

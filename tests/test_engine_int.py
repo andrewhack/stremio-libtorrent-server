@@ -42,3 +42,33 @@ def test_add_torrent_gets_metadata():
         assert h.torrent_file().num_files() >= 1
     finally:
         eng.shutdown()
+
+
+def _engine_at(tmp_path, **kw):
+    from stremiosrv.torrent.engine import Engine
+
+    # listen_port=0 -> OS-assigned, so these never collide with the fixed-port tests above.
+    return Engine(listen_port=0, cache_root=str(tmp_path), **kw)
+
+
+def test_upnp_and_natpmp_on_by_default(tmp_path):
+    """Default leaves automatic router port-mapping on — unchanged behaviour."""
+    eng = _engine_at(tmp_path)
+    try:
+        s = eng._ses.get_settings()
+        assert s["enable_upnp"]
+        assert s["enable_natpmp"]
+    finally:
+        eng.shutdown()
+
+
+def test_enable_upnp_false_disables_upnp_and_natpmp(tmp_path):
+    """config.enable_upnp=False must actually reach libtorrent and turn OFF both the UPnP and
+    the NAT-PMP port mapper — the one switch governs both."""
+    eng = _engine_at(tmp_path, enable_upnp=False)
+    try:
+        s = eng._ses.get_settings()
+        assert not s["enable_upnp"]
+        assert not s["enable_natpmp"]
+    finally:
+        eng.shutdown()

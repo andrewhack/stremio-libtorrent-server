@@ -25,6 +25,8 @@ class Settings(BaseSettings):
 
     http_port: int = 11470
     bt_listen_port: int = 6881
+    # Ask the router to auto-forward the BT port via UPnP and NAT-PMP. false stops both — useful when
+    # nothing is forwarded on purpose (LAN-only) or the traffic is tunnelled, so the mapping is noise.
     enable_upnp: bool = True
     cache_root: str = "/root/.stremio-server"
     cert_file: str = "certificates.pem"  # active TLS cert (in cache_root); watched by /health
