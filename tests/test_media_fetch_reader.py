@@ -270,3 +270,31 @@ def test_reader_carries_playlist_headers_to_same_origin_segments_only(monkeypatc
     assert other_port[2] == ()                        # different port -> not the same origin
     assert cross[0] == "https://other.cdn/seg-cross.ts"
     assert cross[2] == ()                             # different host -> credential NOT leaked
+
+
+def test_reader_refuses_a_playlist_short_of_its_content_length(monkeypatch):
+    # An upstream that declared a Content-Length and closed early leaves http.client's read(amt)
+    # returning a partial playlist without raising. Rewriting and handing that to ffmpeg would feed
+    # it a playlist missing its later segments -- it must be a 502, like api/proxy.py's _playlist.
+    from stremiosrv.proxy import upstream
+    media_fetch.reset()
+
+    class FakeResp:
+        status = 200
+        length = 500  # http.client's remaining count: >0 means the socket closed before the CL end
+
+        def getheader(self, n, d=None):
+            return "application/vnd.apple.mpegurl" if n.lower() == "content-type" else d
+
+        def read(self, *a):
+            return b"#EXTM3U\n#EXTINF:1,\nhttps://cdn.example/seg1.ts\n"  # a partial playlist
+
+        def close(self): pass
+
+    class FakeConn:
+        def close(self): pass
+
+    monkeypatch.setattr(upstream, "open_url", lambda *a, **k: (FakeResp(), FakeConn()))
+    t = media_fetch.register("https://cdn.example/hls/index.m3u8", False)
+    r = _client().get(f"{media_fetch.READER_PREFIX}/{media_fetch._SECRET}/{t}")
+    assert r.status_code == 502

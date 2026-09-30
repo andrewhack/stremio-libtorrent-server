@@ -185,6 +185,19 @@ def _origin(u: urllib.parse.SplitResult) -> tuple[str, str, int]:
     return (u.scheme, (u.hostname or "").lower(), u.port or (443 if u.scheme == "https" else 80))
 
 
+def truncated(resp: http.client.HTTPResponse) -> bool:
+    """True when the upstream declared a Content-Length and closed before delivering it.
+
+    `resp.length` is http.client's count of the bytes the response still owes: 0 once the body is
+    fully read, None when there was no Content-Length (a chunked or close-delimited body), and a
+    positive number when read(amt) returned early because the socket closed. read(amt) -- unlike
+    read() -- hands back that short body WITHOUT raising, so a playlist served on resp.status would
+    be a partial one; the caller answers 502 instead. getattr guards a test double that omits the
+    attribute (a real HTTPResponse always sets it): nothing declared is nothing to fall short of.
+    """
+    return bool(getattr(resp, "length", None))
+
+
 def open_url(url: str, method: str, headers: dict[str, str], home_client: bool,
              deadline: Deadline) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
     """(response, connection) for `url` after any redirects; the caller closes both, and stops

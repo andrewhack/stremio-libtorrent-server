@@ -148,6 +148,17 @@ class _Upstream(BaseHTTPRequestHandler):
             # no Content-Length: the playlist ends when the connection does
             self._drip(b"HTTP/1.0 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\n\r\n"
                        b"#EXTM3U\n", b"/seg.ts\n", 8, 0.2)
+        elif p.startswith("/short.m3u8"):
+            # promises 500 more bytes than it sends, then forces the socket shut: http.client's
+            # read(amt) returns the partial body WITHOUT raising, so an unchecked proxy would rewrite
+            # and serve a truncated playlist as 200 (the short-Content-Length bug).
+            body = b"#EXTM3U\n/seg1.ts\n/seg2.ts\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+            self.send_header("Content-Length", str(len(body) + 500))
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
         elif p.startswith("/slowhop"):
             n = int(p.removeprefix("/slowhop"))
             self._late(0.3, lambda: self._send(302, extra={
@@ -339,6 +350,21 @@ def test_a_playlist_whose_rewrite_passes_the_limit_is_refused(upstream, monkeypa
 
 def test_a_playlist_with_an_unparseable_url_is_a_502_not_a_crash(upstream):
     assert _client().get(f"/proxy/{_opts(upstream, TOKEN)}/badurl.m3u8").status_code == 502
+
+
+def test_a_playlist_cut_short_of_its_content_length_is_refused(upstream):
+    # An upstream that declares a Content-Length and then closes early leaves http.client's
+    # read(amt) returning a partial body without raising; serving that rewritten as 200 would give
+    # the player a playlist missing its later segments. It must be a 502, not a truncated 200.
+    assert _client().get(f"/proxy/{_opts(upstream, TOKEN)}/short.m3u8").status_code == 502
+
+
+def test_truncated_reads_the_responses_remaining_length():
+    from types import SimpleNamespace
+    assert upstream_mod.truncated(SimpleNamespace(length=500)) is True   # 500 bytes never delivered
+    assert upstream_mod.truncated(SimpleNamespace(length=0)) is False    # fully read
+    assert upstream_mod.truncated(SimpleNamespace(length=None)) is False  # no Content-Length
+    assert upstream_mod.truncated(SimpleNamespace()) is False            # no length declared at all
 
 
 def test_a_forced_mpegurl_type_turns_the_rewrite_on(upstream):

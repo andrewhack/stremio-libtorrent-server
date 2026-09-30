@@ -203,6 +203,8 @@ def _playlist(resp: http.client.HTTPResponse, headers: dict[str, str],
         return Response(status_code=502, content=b"upstream unreachable")
     if len(body) > MAX_PLAYLIST_BYTES:
         return Response(status_code=502, content=b"playlist too large")
+    if upstream.truncated(resp):  # a short read under a declared Content-Length: not the whole playlist
+        return Response(status_code=502, content=b"truncated playlist")
     decoded = _decoded(body, headers.pop("content-encoding", ""))
     if decoded is None:
         return Response(status_code=502, content=b"undecodable playlist")

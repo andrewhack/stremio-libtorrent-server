@@ -343,6 +343,8 @@ def _playlist_response(resp: http.client.HTTPResponse, raw: bytes, request: Requ
     _segment_mapper)."""
     if len(raw) > _MAX_PLAYLIST_BYTES:
         return Response(status_code=502, content=b"playlist too large")
+    if upstream.truncated(resp):  # a short read under a declared Content-Length: a partial playlist
+        return Response(status_code=502, content=b"truncated playlist")
     segments = [0]
     mapper = _segment_mapper(request, url, home, headers, segments)
     try:
