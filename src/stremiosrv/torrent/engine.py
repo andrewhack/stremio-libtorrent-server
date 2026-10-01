@@ -977,13 +977,16 @@ class Engine:
         """
         ih = info_hash.lower()
         h = self.get(info_hash) or self.add(info_hash)
-        # disk guard: existing incomplete pins + this candidate must still leave headroom
+        # disk guard: existing incomplete pins + this candidate must fit in currently free disk.
+        # Ordinary cache is evictable, so the configured cache budget is not reserved as permanently
+        # free space for a pin.
         free = shutil.disk_usage(self._cache_root).free
         pinned_remaining = sum(self._remaining_bytes(self._torrents[p])
                                for p in self._pinned if p in self._torrents and p != ih)
         candidate_remaining = self._remaining_bytes(h)
-        if not pinsmod.pin_fits(free, pinned_remaining, candidate_remaining, self._cache_size):
-            raise PinSpaceError(pinsmod.headroom(self._cache_size), free)
+        needed = pinned_remaining + candidate_remaining
+        if not pinsmod.pin_fits(free, pinned_remaining, candidate_remaining):
+            raise PinSpaceError(needed, free)
         self._pinned.add(ih)
         h.pinned = True
         if h.has_metadata():
