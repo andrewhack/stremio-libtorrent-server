@@ -6,6 +6,7 @@ A pin keeps a torrent fully downloaded, never evicted, and seeding. Pins are rec
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 
