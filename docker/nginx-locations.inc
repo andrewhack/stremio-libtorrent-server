@@ -62,6 +62,10 @@ location ^~ /library           { proxy_pass http://127.0.0.1:11470; }
 # It used to get index.html -- 200 for a GET, 405 for a POST -- which is how a missing route stayed
 # invisible for months (issue #3). The allowlist above remains the security boundary: every
 # unmatched path lands on the one fixed route below, so none can reach an origin-only route.
+# The player's loader (docker/web-player-loader.js) keeps its URL from one image release to the next,
+# and the web build sends no cache headers, so a browser could run an older copy for days. It is a few
+# KB: revalidating it on every load costs one 304.
+location ~ "^/[0-9a-fA-F]{40}/scripts/loader\.js$" { add_header Cache-Control "no-cache"; }
 location / { try_files $uri $uri/ @unmatched; }
 location @unmatched {
     # Declaring proxy_set_header here drops the inherited ones; /_unmatched reads only the two below.

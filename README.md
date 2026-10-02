@@ -177,7 +177,7 @@ Everything is a plain `-e NAME=value` environment variable:
 | Setting | Default | What it does |
 |---|---|---|
 | `IPADDRESS` | *(unset)* | Your server IP → auto **trusted TV cert** via `*.stremio.rocks`. Unset → self-signed. |
-| `SERVER_URL` | auto | URL the web player targets. Set for a custom domain. `/proxy` also counts a web page on this host, at any port, as the server's own. |
+| `SERVER_URL` | auto | URL the web player targets. Set for a custom domain. It is what a browser starts with: a different streaming-server URL picked later in the player's settings is kept, and changing `SERVER_URL` puts the new one in once. `/proxy` also counts a web page on this host, at any port, as the server's own. |
 | `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | Download-cache budget in bytes (LRU-evicted). Keep it **above your largest file**. |
 | `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | Seconds a torrent stays safe from eviction after it was last served. Raise it if a player buffers long enough between range requests that the title being watched ages out. |
 | `STREMIOSRV_RESUME_RETENTION_DAYS` | `365` | How long a fast-resume record is kept for a title that has left the cache. The record carries the torrent's metadata, so re-playing an evicted title starts without fetching it from the swarm again — this only bounds the directory. A title still cached, kept, or downloading is exempt at any age. `0` keeps everything. |
