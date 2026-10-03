@@ -40,14 +40,17 @@ def pinned_hashes(cache_root: str) -> set[str]:
 
 
 def headroom(cache_size: int) -> int:
-    """Bytes to keep free for normal streaming: cache budget + 10%."""
+    """Legacy helper: cache budget + 10% free-space target."""
     return math.ceil(cache_size * 1.10)
 
 
-def pin_fits(disk_free: int, pinned_remaining: int, candidate_remaining: int,
-             cache_size: int) -> bool:
-    """True if completing all pins (existing incomplete + candidate) still leaves >= headroom free."""
-    return disk_free - (pinned_remaining + candidate_remaining) >= headroom(cache_size)
+def pin_fits(disk_free: int, pinned_remaining: int, candidate_remaining: int) -> bool:
+    """True if the disk has enough free space for existing pins plus the candidate.
+
+    Normal cache data is evictable, while pinned data is not. Keep therefore checks the actual bytes
+    that must still be written for pins instead of requiring the whole cache budget to remain free.
+    """
+    return disk_free >= pinned_remaining + candidate_remaining
 
 
 # --- which file a pin wants -------------------------------------------------------------------
