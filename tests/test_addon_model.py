@@ -458,6 +458,43 @@ def test_a_whole_torrent_stream_still_describes_the_torrent():
     assert "4.00 GB" in s["title"]
 
 
+def test_a_single_file_row_names_its_file():
+    """Only a pack's rows named their file, so two copies of one episode -- each a single-file
+    torrent, the usual case -- read "8.41 GB · on disk" and "7.00 GB · on disk", with nothing to
+    tell which release is which, beside other sources that all name themselves."""
+    e = _entry(size=8 * GB,
+               label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 2,
+                      "name": "Show"},
+               files=[{"index": 0, "name": "Show.S01E02.2160p.mkv", "size": 8 * GB,
+                       "downloaded": 8 * GB, "progress": 1.0}])
+    s = am.stream_for(e, ORIGIN)
+    assert s["title"].startswith("Show.S01E02.2160p.mkv\n"), s["title"]
+    assert "8.00 GB" in s["title"], s["title"]
+
+
+def test_a_single_file_known_only_from_disk_is_named_too():
+    """After a restart most of the cache has no engine record: its one file is listed from disk
+    with no index, and offered as index 0. It is still that file, so the row names it."""
+    e = _entry(size=8 * GB,
+               label={"type": "movie", "metaId": "tt0000001", "name": "Film"},
+               files=[{"index": None, "name": "Film.2160p.mkv", "size": 8 * GB,
+                       "downloaded": 8 * GB, "progress": 1.0}])
+    s = am.stream_for(e, ORIGIN)
+    assert s["url"].endswith("/0")
+    assert s["title"].startswith("Film.2160p.mkv\n"), s["title"]
+
+
+def test_an_unlabelled_single_file_does_not_repeat_its_own_name():
+    """Its library page is titled by that very name (display_name), so a row repeating it under
+    the title adds a line and says nothing."""
+    e = _entry(name="Some.File.mkv",
+               files=[{"index": 0, "name": "Some.File.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    s = am.stream_for(e, ORIGIN)
+    assert "Some.File.mkv" not in s["title"], s["title"]
+    assert "4.00 GB" in s["title"], s["title"]
+
+
 def test_an_episode_still_downloading_is_not_offered():
     """A partial file can be streamed -- the server fetches as it goes -- but a row saying "play the
     local copy" promises something it cannot keep: the first open stalls while the head and the

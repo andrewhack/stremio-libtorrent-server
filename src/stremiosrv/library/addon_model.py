@@ -349,10 +349,22 @@ def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict | 
     ih = entry["infoHash"].lower()
     # Describe the file being offered when the entry knows it -- a pack's own size on one episode's
     # row is the wrong number. The file name goes first, the way every other source row names what
-    # it is about to play, so ours is recognisable beside them.
-    chosen = next((f for f in (entry.get("files") or []) if f.get("index") == idx), None)
-    if chosen is not None and len(entry.get("files") or []) > 1:
-        title = _basename(chosen.get("name") or "") + "\n" + describe_file(entry, chosen)
+    # it is about to play, so ours is recognisable beside them. A single-file torrent too: two
+    # copies of one title otherwise differ only by a size.
+    files = entry.get("files") or []
+    chosen = next((f for f in files if f.get("index") == idx), None)
+    if chosen is None and idx == 0 and len(files) == 1:
+        # Listed from disk with no index (no engine record, as after a restart), and offered as
+        # index 0 by playable_index: it is still that one file.
+        chosen = files[0]
+    if chosen is not None:
+        title = describe_file(entry, chosen)
+        name = _basename(chosen.get("name") or "")
+        # Not when the page above already says it: an unlabelled entry's own page is titled by its
+        # name (display_name), which for a single-file torrent is this file's.
+        shown = (entry.get("label") or {}).get("name") or entry.get("name") or ""
+        if name and name != _basename(shown):
+            title = name + "\n" + title
     else:
         title = describe(entry)
     return {

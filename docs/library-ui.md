@@ -80,7 +80,9 @@ under Addons → Add addon, and it produces two surfaces there:
 
 - a **My Library** row on the board, one card per title the server holds;
 - a **My Library** entry in a normal title's stream list, beside every other source, whenever the box
-  already holds that title.
+  already holds that title. Like the other sources, it names the file it will play, above that
+  file's size and state, so two copies of one title can be told apart; only a title's own page in
+  the library, which is already called by that file name, leaves the line out.
 
 The addon names a title only from `labels.json`, never from a folder name: guessing an identity from
 a folder name would risk putting the wrong film behind a right-looking row. Besides the downloads you
