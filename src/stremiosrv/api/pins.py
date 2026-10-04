@@ -3,7 +3,7 @@ import re
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from stremiosrv.torrent.engine import PinSpaceError
+from stremiosrv.torrent.engine import PinSizeUnknownError, PinSpaceError
 
 router = APIRouter()
 
@@ -36,6 +36,9 @@ def pin(info_hash: str, request: Request):
         return JSONResponse(
             {"error": "insufficient_space", "needed": e.needed, "free": e.free}, status_code=409
         )
+    except PinSizeUnknownError:
+        # No metadata yet, so no size to guard: refused rather than kept unmeasured. Try again.
+        return JSONResponse({"error": "size_unknown"}, status_code=409)
     return {"ok": True}
 
 

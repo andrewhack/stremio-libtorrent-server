@@ -1009,6 +1009,15 @@ def test_keep_on_a_release_pins_instead_of_downloading_it_again():
     assert "keepTitle(btn.dataset.keepHash, false)" in page
 
 
+def test_keep_explains_a_title_it_cannot_size_yet():
+    """A magnet has no size until its metadata arrives, and the server refuses to keep what it
+    cannot measure. Reading that refusal as "not enough disk" would send the owner deleting things
+    for nothing."""
+    page = _page()
+    body = page[page.index("async function keepTitle("):page.index("async function startDownload(")]
+    assert "'size_unknown'" in body
+
+
 def test_a_refused_or_warned_button_explains_itself_on_hover():
     """A disabled or red button is a decision made on the owner's behalf. The reason was only in a
     line beneath the release, so hovering the button -- the thing that looked broken -- said

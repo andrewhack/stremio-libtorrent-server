@@ -49,6 +49,18 @@ def test_pin_insufficient_space_returns_409():
     assert body["needed"] == 1100 and body["free"] == 500
 
 
+def test_pin_whose_size_is_unknown_returns_409():
+    """No metadata yet means no size, and an unmeasured pin is refused: the caller tries again."""
+    from stremiosrv.torrent.engine import PinSizeUnknownError
+
+    class FakeEngine:
+        def pin(self, ih): raise PinSizeUnknownError()
+    c = TestClient(create_app(engine=FakeEngine()))
+    resp = c.post(f"/{IH}/pin")
+    assert resp.status_code == 409
+    assert resp.json() == {"error": "size_unknown"}
+
+
 class _Recorder:
     """An engine that only records what reached it."""
 

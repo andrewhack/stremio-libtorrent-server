@@ -49,6 +49,12 @@ class PinSpaceError(Exception):
         self.free = free
 
 
+class PinSizeUnknownError(Exception):
+    """Raised when a pin cannot be measured yet: the torrent's metadata has not arrived."""
+    def __init__(self) -> None:
+        super().__init__("cannot pin before the torrent's size is known")
+
+
 # Priority of the *played* file. A file being actively streamed downloads at ACTIVE_FILE_PRIO so it
 # beats the background fill of torrents nobody is watching; when no stream is open on it, it drops to
 # IDLE_FILE_PRIO — still downloading to completion (the "full torrent client" behaviour), but yielding
@@ -59,6 +65,7 @@ IDLE_FILE_PRIO = 1
 logger = logging.getLogger("stremiosrv.prefetch")
 
 PREFETCH_INTERVAL = 5.0  # seconds between next-episode prefetch policy ticks
+PIN_METADATA_WAIT = 15.0  # seconds pin() waits for a magnet's metadata (its size) before refusing
 
 
 def idle_download_limit(*, this_active: bool, any_active: bool, idle_limit: int) -> int:
@@ -684,6 +691,7 @@ class Engine:
         self._wanted: dict[str, list[dict]] = {}
         self._wanted_applied: set[str] = set()
         self._cache_size = cache_size
+        self._pin_metadata_wait = PIN_METADATA_WAIT
         # Latest UPnP/NAT-PMP port-map result (best-effort; populated by the alerts loop if the
         # router auto-forwards). {"mapped": bool, "transport": str|None, "externalPort": int|None}
         self._portmap = {"mapped": False, "transport": None, "externalPort": None}
@@ -936,6 +944,17 @@ class Engine:
         st = h.status()
         return max(0, st.total_wanted - st.total_done)
 
+    def _pin_remaining(self, h: Handle) -> int:
+        """What pinning `h` will still fetch -- metadata required.
+
+        A pin with no file selection switches on every file (see pin), so it is measured whole, not
+        by what streaming happened to want so far: a pack streamed for one episode has its other
+        files at priority 0, and `total_wanted` would count that one episode."""
+        st = h.status()
+        if h.wanted:
+            return max(0, st.total_wanted - st.total_wanted_done)
+        return max(0, h.torrent_file().total_size() - st.total_done)
+
     def is_pinned(self, info_hash: str) -> bool:
         return info_hash.lower() in self._pinned
 
@@ -977,13 +996,22 @@ class Engine:
         """
         ih = info_hash.lower()
         h = self.get(info_hash) or self.add(info_hash)
+        # The disk guard has to measure what this pin will fetch, and a magnet has no size until its
+        # metadata arrives. Wait a little for it, then refuse rather than admit a pin nobody could
+        # measure: a pinned torrent is never evicted, so one too big for the disk would fill it.
+        end = time.time() + self._pin_metadata_wait
+        while not h.has_metadata() and time.time() < end:
+            time.sleep(0.2)
+        if not h.has_metadata():
+            raise PinSizeUnknownError()
         # disk guard: existing incomplete pins + this candidate must still leave headroom
         free = shutil.disk_usage(self._cache_root).free
         pinned_remaining = sum(self._remaining_bytes(self._torrents[p])
                                for p in self._pinned if p in self._torrents and p != ih)
-        candidate_remaining = self._remaining_bytes(h)
+        candidate_remaining = self._pin_remaining(h)
         if not pinsmod.pin_fits(free, pinned_remaining, candidate_remaining, self._cache_size):
-            raise PinSpaceError(pinsmod.headroom(self._cache_size), free)
+            needed = pinsmod.headroom(self._cache_size) + pinned_remaining + candidate_remaining
+            raise PinSpaceError(needed, free)
         self._pinned.add(ih)
         h.pinned = True
         if h.has_metadata():

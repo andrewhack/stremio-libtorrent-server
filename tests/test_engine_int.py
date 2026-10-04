@@ -72,3 +72,19 @@ def test_enable_upnp_false_disables_upnp_and_natpmp(tmp_path):
         assert not s["enable_natpmp"]
     finally:
         eng.shutdown()
+
+
+def test_a_pin_on_a_magnet_with_no_metadata_is_refused(tmp_path):
+    """A real handle with no metadata has no size, and the disk guard measured that as 0 -- so a pin
+    on any magnet was admitted unmeasured. It is refused now, and nothing is left pinned."""
+    from stremiosrv.torrent.engine import PinSizeUnknownError
+
+    eng = _engine_at(tmp_path)
+    eng._pin_metadata_wait = 2  # an infohash nobody seeds never resolves; no need to wait 15 s
+    try:
+        with pytest.raises(PinSizeUnknownError):
+            eng.pin("0f" * 20)
+        assert not eng.is_pinned("0f" * 20)
+        assert not (tmp_path / "pins.json").exists()
+    finally:
+        eng.shutdown()

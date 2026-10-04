@@ -127,10 +127,19 @@ season and episode, the largest video whose name reads as that episode, so a rel
 carries the episode's name too, is never fetched in its place. When nothing narrows it, a film for
 example, the whole torrent. The page's buttons and its episode ticks read the same file.
 
-A download is a **pin**: fully downloaded, never evicted, kept, and seeding. The existing disk guard
-applies, so a download that would leave no room for normal streaming is refused with a message
-saying how much space is needed. While anything is being watched, background downloads yield the
-bandwidth (`STREMIOSRV_IDLE_DOWNLOAD_RATE_LIMIT`).
+A download is **ordinary cache**: fetched in full, then managed like anything the server has
+streamed, so the evictor may reclaim it once the cache is over budget. The page offers the button
+only while the disk can spare the file and still keep the larger of 2 GiB and 2% of itself free.
+While anything is being watched, background downloads yield the bandwidth
+(`STREMIOSRV_IDLE_DOWNLOAD_RATE_LIMIT`).
+
+**Keep** is what protects a title: a kept title is never evicted, and it keeps seeding. Keep on a
+whole title means every file; Keep on a title narrowed to one episode keeps that episode. The disk
+guard belongs to Keep, because a kept title is the one thing the evictor cannot reclaim: Keep is
+refused, with how much space it needs, when what it would still fetch, added to what other kept
+titles still need, would leave less free than the cache budget plus 10%. A magnet has no size until
+its details arrive from the swarm, so Keep waits up to 15 seconds for them and otherwise refuses
+rather than keep something it could not measure — try again a minute later.
 
 **Remove** unpins the torrent, stops it, deletes its files and forgets its label.
 

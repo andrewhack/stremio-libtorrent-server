@@ -700,7 +700,11 @@ const LIB = (() => {
                 { method: 'POST', body: JSON.stringify({ infoHash: infoHash }) });
     } catch (err) {
       const b = err.body || {};
-      $('add-err').textContent = err.status === 409
+      // size_unknown: the torrent's details have not arrived yet, so its size cannot be checked
+      // against the disk -- and it is not kept unchecked. Nothing to delete; just try again.
+      $('add-err').textContent = err.status === 409 && b.error === 'size_unknown'
+        ? 'Cannot size this yet - its details are still arriving. Try again in a minute.'
+        : err.status === 409
         ? 'Not enough free disk to keep this. Needs ' + fmt(b.needed) + ', '
           + fmt(b.free) + ' free.'
         : 'Could not change that.';

@@ -349,6 +349,16 @@ def test_pin_still_answers_the_disk_guard_flatly(tmp_path, monkeypatch):
     assert body["error"] == "insufficient_space" and "detail" not in body
 
 
+def test_pin_whose_size_is_unknown_answers_flatly_too(tmp_path, monkeypatch):
+    from stremiosrv.torrent.engine import PinSizeUnknownError
+
+    eng = FakeEngine(pin_error=PinSizeUnknownError())
+    c = _signed_in(tmp_path, monkeypatch, eng)
+    r = c.post("/library/api/pin", json={"infoHash": IH}, headers=HTTPS)
+    assert r.status_code == 409
+    assert r.json() == {"error": "size_unknown"}
+
+
 def test_unpin_keeps_the_files(ctx):
     """Unpin is not Remove. It stops keeping the title; the bytes stay and stay playable, and the
     evictor may now reclaim them like any other cache."""

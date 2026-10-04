@@ -115,14 +115,14 @@ what "done" looks like, so it can be picked up without context.
   *Done =* a single-file row names its file too, as a pack's rows do, without repeating the entry's
   own name when the two are the same.
 
-- [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
-  `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins
-  immediately after `add`, so the guard always measures nothing and always passes. A torrent far
-  larger than the cache budget is admitted without complaint, then cannot be evicted because it is
-  pinned.
-  *Done =* the guard re-runs from `_apply_pending_wanted` once metadata gives a real size, with a
-  loud, actionable outcome when what arrived does not fit — the pin is the owner's instruction, so
-  silently dropping it is not the answer either.
+- [x] **The disk guard can see the size of a magnet.** `Engine.pin` sized the candidate with
+  `total_wanted - total_done`: zero before metadata arrives, so a pin on a magnet was admitted
+  unmeasured and then could not be evicted; and for a torrent nobody had narrowed, only what
+  streaming had wanted so far, though the pin then switches on every file. A pin now waits up to
+  15 s for metadata and is otherwise refused (`409 {"error": "size_unknown"}` — try again), measures
+  what it will actually fetch (the whole torrent unless narrowed), and a refusal's `needed` is the
+  full requirement rather than the headroom alone. Refusing was chosen over admitting first and
+  re-checking later: nothing is ever kept unmeasured, and there is no deferred state to surface.
 
 ## Tooling & docs
 
