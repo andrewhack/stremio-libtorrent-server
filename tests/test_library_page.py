@@ -1219,3 +1219,26 @@ def test_the_card_uses_the_pack_caption_and_the_viewing_order():
     assert "kidsInOrder(kids)" in page
     # the partial-file leftovers read as a remainder, after the episodes
     assert ".join('')}${scrapsHtml}</div>`" in page
+
+
+def test_the_page_script_parses_as_a_whole():
+    """Every other page test runs a function cut out of the script, so none of them notices when
+    the script as a whole cannot load. 1.6.27 declared EPISODE_RE a second time; a duplicate
+    `const` is a SyntaxError, nothing on the page ran, and it sat on "Signing in..." for good."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)</script>", _page())
+    assert scripts, "no inline script in the page"
+    for src in scripts:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+            f.write(src)
+        r = subprocess.run([node, "--check", f.name], capture_output=True, text=True,
+                           encoding="utf-8", timeout=30)
+        assert r.returncode == 0, r.stderr

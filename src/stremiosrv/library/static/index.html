@@ -875,8 +875,6 @@ const LIB = (() => {
   //
   // Only complete files count. A half-fetched episode is not "already on this server", and saying
   // so would send someone away from a download they still need.
-  const EPISODE_RE = /S(\d{1,2})[ ._-]?E(\d{1,3})/i;
-
   function onDiskEpisodes(data) {
     const out = new Set();
     const add = (sn, ep) => {
