@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import socket
+import threading
 import time
 import uuid
 
@@ -70,6 +71,11 @@ _TOKEN = uuid.uuid4().hex  # this process's identity, minted once per interprete
 # A restart mints a new token but keeps the hostname, and a container's own dead process is not a
 # rival -- without this the survivor of a restart locks itself out of its own cache root.
 _HOST = socket.gethostname()
+# A hostname does not survive a container being recreated, so a successor still reads a claim its
+# predecessor left as a rival's until it goes stale. A server that stops cleanly gives the root back
+# instead (release_owner); after that this process never claims it again.
+_claim_lock = threading.Lock()
+_released: set[str] = set()
 
 
 def read_owner(root: str) -> dict | None:
@@ -88,13 +94,29 @@ def write_owner(root: str, token: str | None = None, now: float | None = None) -
     rec = {"token": token or _TOKEN, "host": _HOST, "pid": os.getpid(),
            "heartbeat": now or time.time()}
     path = os.path.join(root, OWNER_FILE)
-    try:
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(rec, f)
-        os.replace(tmp, path)
-    except OSError as e:
-        logger.warning("could not claim cache root %s: %s", root, e)
+    with _claim_lock:
+        if root in _released:
+            return
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(rec, f)
+            os.replace(tmp, path)
+        except OSError as e:
+            logger.warning("could not claim cache root %s: %s", root, e)
+
+
+def release_owner(root: str) -> None:
+    """Give `root` back as this server stops, so the next one evicts from its first pass. Only our
+    own claim is removed: a rival's is left exactly as it is."""
+    with _claim_lock:
+        _released.add(root)
+        rec = read_owner(root)
+        if rec and rec.get("token") == _TOKEN:
+            try:
+                os.remove(os.path.join(root, OWNER_FILE))
+            except OSError as e:
+                logger.warning("could not release cache root %s: %s", root, e)
 
 
 def evictor_may_run(root: str, stale_after: float) -> tuple[bool, dict | None]:
@@ -473,6 +495,8 @@ def run_evictor(root: str, budget: int, engine=None, interval: int = 60, grace: 
     blocked = False
     while True:
         time.sleep(interval)  # sleep first: let active streams re-register after a restart
+        if root in _released:  # the server is stopping and has given the root back
+            return
         # Re-checked every cycle rather than once at startup, and it doubles as the heartbeat on
         # our own claim. Giving up permanently turned an overlap of a few minutes into an evictor
         # that never ran again for the life of the process -- and a cache stuck over budget with

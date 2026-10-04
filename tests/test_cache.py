@@ -557,6 +557,68 @@ def test_a_claim_from_elsewhere_is_still_respected(tmp_path):
     assert may is False and other["host"] == "some-other-box"
 
 
+def test_a_stopping_server_gives_its_claim_back(tmp_path, monkeypatch):
+    """A recreated container has a new hostname, so its predecessor's fresh claim read as a rival
+    and eviction waited out the staleness rule ("claimed by another server" after every upgrade).
+    A server that stops cleanly hands the root back, and the next one takes it at once."""
+    from stremiosrv import cache as c
+    c.write_owner(str(tmp_path))
+    c.release_owner(str(tmp_path))
+    assert c.read_owner(str(tmp_path)) is None
+    monkeypatch.setattr(c, "_TOKEN", "the-new-container")
+    monkeypatch.setattr(c, "_HOST", "a-new-hostname")
+    assert c.evictor_may_run(str(tmp_path), stale_after=300) == (True, None)
+
+
+def test_giving_a_root_back_leaves_a_rival_claim_alone(tmp_path):
+    from stremiosrv import cache as c
+    _foreign_claim(tmp_path)
+    c.release_owner(str(tmp_path))
+    assert c.read_owner(str(tmp_path))["token"] == "the-other-container"
+
+
+def test_a_root_given_back_is_not_claimed_again_on_the_way_out(tmp_path):
+    """The evictor thread can be mid-pass while the server shuts down; its heartbeat must not put
+    the claim back once it has been released."""
+    from stremiosrv import cache as c
+    c.write_owner(str(tmp_path))
+    c.release_owner(str(tmp_path))
+    c.write_owner(str(tmp_path))
+    assert c.read_owner(str(tmp_path)) is None
+
+
+def test_the_evictor_stops_once_the_root_is_given_back(tmp_path, monkeypatch):
+    from stremiosrv import cache as c
+    sleeps = []
+
+    def fake_sleep(n):
+        sleeps.append(n)
+        if len(sleeps) == 2:
+            c.release_owner(str(tmp_path))
+        if len(sleeps) >= 4:
+            raise SystemExit
+
+    monkeypatch.setattr(c.time, "sleep", fake_sleep)
+    try:
+        c.run_evictor(str(tmp_path), budget=10**9, interval=5, resume_retention_days=0)
+    except SystemExit:
+        pass
+    assert len(sleeps) == 2, "kept running after the root was given back"
+    assert c.read_owner(str(tmp_path)) is None
+
+
+def test_the_app_gives_the_cache_root_back_when_it_shuts_down(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from stremiosrv import cache as c
+    from stremiosrv.app import create_app
+    from stremiosrv.config import Settings
+
+    with TestClient(create_app(settings=Settings(cache_root=str(tmp_path)))):
+        c.write_owner(str(tmp_path))  # what the evictor's first pass does
+    assert c.read_owner(str(tmp_path)) is None
+
+
 def test_a_refused_evictor_keeps_trying(tmp_path, monkeypatch):
     """Refusing was a one-shot `return`, so a claim that went stale a minute later never got
     picked up -- eviction stayed off for the life of the process. It must re-check each cycle."""

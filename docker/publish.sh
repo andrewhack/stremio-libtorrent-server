@@ -130,6 +130,21 @@ if [ "$got" != "$VERSION" ]; then
     exit 3
 fi
 echo "SMOKE OK: healthy in ${i}s, reports $got"
+# `docker stop` must reach the server. A shell that is PID 1 ignores SIGTERM unless it traps it, so
+# a stop used to sit out Docker's grace period and end in SIGKILL (exit 137): the server never shut
+# down, and its cache-root claim was left for the next container to wait out. A real shutdown
+# takes a second or two; the long timeout only makes a missed signal unmistakable.
+t0=$(date +%s)
+docker stop -t 30 "$SMOKE_NAME" >/dev/null
+took=$(( $(date +%s) - t0 ))
+code=$(docker inspect -f '{{.State.ExitCode}}' "$SMOKE_NAME")
+if [ "$code" = 137 ] || [ "$took" -gt 10 ] || \
+   ! docker logs "$SMOKE_NAME" 2>&1 | grep -q "Application shutdown complete"; then
+    echo "SMOKE FAIL: docker stop took ${took}s, exit $code -- the server did not shut down" >&2
+    docker logs --tail 10 "$SMOKE_NAME" 2>&1 | sed 's/^/    /' >&2
+    exit 3
+fi
+echo "SMOKE OK: stopped in ${took}s, exit $code"
 cleanup_smoke
 trap - EXIT INT TERM
 

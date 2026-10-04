@@ -183,10 +183,20 @@ what "done" looks like, so it can be picked up without context.
 
 ## Deployment & image
 
-- [ ] **A recreated container reads as a rival cache owner.** The cache owner is identified by
-  hostname, which changes when `docker compose up` recreates the container, so after an upgrade the
-  new server logs "claimed by another server" and skips eviction for up to five minutes.
-  *Done =* a stable identity across recreation.
+- [x] **A recreated container takes over its cache without a hold-off (1.6.31).** The cache owner
+  is identified by hostname, which changes when a container is recreated, so after an upgrade the
+  new server logged "claimed by another server" and skipped eviction for up to five minutes. The
+  real cause was that a stop never reached the server: the entrypoint shell is PID 1 and ignored
+  SIGTERM, so `docker stop` ended in SIGKILL. The entrypoint now passes the signal on, and a server
+  that shuts down gives its claim back, so the next one evicts from its first pass. A crash still
+  leaves a claim that expires after five minutes: a dead predecessor cannot be told from a live
+  rival.
+
+- [ ] **Stopping does not save resume data or the DHT table.** `Engine.shutdown()` (save every
+  resume record and the DHT state) has no caller, so a stop keeps only what the periodic saves
+  wrote; the README's "and on shutdown" for `dht.state` is not true yet. Since 1.6.31 a stop does
+  reach the server, so the app's shutdown can call it.
+  *Done =* a `docker stop` leaves fresh resume records and `dht.state`, within the stop timeout.
 
 - [ ] **Behind a TLS-terminating reverse proxy the server sees plain HTTP from one address.** nginx
   sets `X-Forwarded-Proto` and `X-Forwarded-For` from its own connection, so the library refuses

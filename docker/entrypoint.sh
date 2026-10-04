@@ -90,8 +90,21 @@ sed "s#/root/.stremio-server/certificates.pem#${CERT}#g" \
 # --no-access-log: don't log every request — those lines include infohash/stream paths (a
 # content-neutrality + privacy concern, like nginx's access_log off) and would otherwise bury real
 # warnings/errors so the admin Logs card surfaces nothing.
+# --timeout-graceful-shutdown: a player holding a stream open must not hold up a stop.
 /srv/app/.venv/bin/uvicorn stremiosrv.app:build_app --factory --host 0.0.0.0 --port 11470 \
-  --no-access-log &
+  --no-access-log --timeout-graceful-shutdown 5 &
 APP_PID=$!
 nginx -c /tmp/nginx-allinone.conf -g 'daemon off;' &
-wait "$APP_PID"
+NGINX_PID=$!
+# This shell is PID 1, and PID 1 ignores SIGTERM unless it traps it: `docker stop` used to sit out
+# its grace period and SIGKILL everything, so the server never shut down (and never gave its
+# cache-root claim back). Pass the signal on, then wait for the server to finish shutting down --
+# a trapped signal ends the first `wait` early.
+trap 'kill -TERM "$NGINX_PID" "$APP_PID" 2>/dev/null || true' TERM INT
+rc=0
+wait "$APP_PID" || rc=$?
+if kill -0 "$APP_PID" 2>/dev/null; then
+    rc=0
+    wait "$APP_PID" || rc=$?
+fi
+exit "$rc"

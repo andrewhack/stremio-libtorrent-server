@@ -1,3 +1,4 @@
+import contextlib
 import contextvars
 import logging
 
@@ -6,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from stremiosrv import health, unmatched
+from stremiosrv import cache, health, unmatched
 from stremiosrv.api import cache as cache_api
 from stremiosrv.api import (
     casting,
@@ -136,6 +137,14 @@ class SuppressClientDisconnect:
             raise
 
 
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    yield
+    # Stopping: give the cache root back, so a recreated container evicts from its first pass
+    # instead of waiting out the claim this one would otherwise leave behind.
+    cache.release_owner(app.state.settings.cache_root)
+
+
 def create_app(settings: Settings | None = None, engine=None, converter=None) -> FastAPI:
     """Application factory. Wires the Stremio streaming-server routers.
 
@@ -144,7 +153,7 @@ def create_app(settings: Settings | None = None, engine=None, converter=None) ->
     503, and hlsv2 returns 503 — keeping the app importable without libtorrent/ffmpeg.
     """
     settings = settings or Settings()
-    app = FastAPI(title="stremio-libtorrent-server")
+    app = FastAPI(title="stremio-libtorrent-server", lifespan=_lifespan)
     # Stremio runs the stock server with NO_CORS=1; mirror that so web/cast clients can call it.
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
