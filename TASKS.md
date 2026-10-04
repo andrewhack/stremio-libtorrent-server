@@ -53,20 +53,17 @@ what "done" looks like, so it can be picked up without context.
   *Done =* each answers as `server.reference.js` does, or is recorded here as deliberately out of
   scope. `unmatchedRoutes` in `/stats.json` shows which of them real clients actually ask for.
 
-- [~] **A `-1` stream URL is not recognised outside the byte route.** stremio-core writes
-  `/<infoHash>/-1` for a stream with no file index, but the parser the subtitle routes share
-  (`api/subs.py` `_STREAM_RE`) accepts digits only: `/opensubHash` answers `result: null` (hash
-  matching silently lost), the embedded-subtitle discovery cannot resolve the file, and
-  `/<infoHash>/-1/subtitles.json|.vtt` do not exist.
-  *Done =* `-1` resolves to the same file the byte route plays, on every route that takes a stream URL
-  or a file index.
+- [x] **A `-1` stream URL is recognised outside the byte route (1.6.30).** stremio-core writes
+  `/<infoHash>/-1` for a stream with no file index. The parser the subtitle routes share took digits
+  only, so `/opensubHash` answered `result: null`, the embedded-subtitle discovery answered 404, and
+  `/<infoHash>/-1/subtitles.json|.vtt` did not exist. Each now resolves `-1` to the file the byte
+  route plays, chosen the same way.
 
-- [~] **The embedded-subtitle list and its extractor disagree on what `track` means.**
-  `subtitles.json` reports ffprobe's index across all streams, while `subtitles.vtt?track=` maps it as
-  an index among subtitle streams, so a file with video and audio first extracts the wrong track or
-  none. A track that takes longer than 60 s to extract escapes as a 500.
-  *Done =* the number the list gives is the number the extractor takes, as stock does, and a slow
-  extraction answers like the other ffmpeg timeouts.
+- [x] **The embedded-subtitle list and its extractor agree on what `track` means (1.6.30).**
+  `subtitles.json` reported ffprobe's index across all streams while `subtitles.vtt?track=` reads a
+  position among subtitle streams, so a file with video and audio first extracted the wrong track or
+  none. The list now gives the position (`id` keeps the ffprobe index), and an extraction that runs
+  past 60 s answers 504 instead of escaping as a 500.
 
 - [ ] **Every audio track in a transcoded stream.** Our HLS output carries the first audio track only;
   stock lists each as an `#EXT-X-MEDIA:TYPE=AUDIO` rendition. A file with two or more audio tracks is

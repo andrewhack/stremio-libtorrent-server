@@ -40,12 +40,19 @@ class Handle:
     def __init__(self):
         self.head_after, self.asked = 0, 0
         self.gone_after = None  # when set: removed from the engine after that many looks
+        self.paths = ["Movie.mkv"]
 
     def has_metadata(self):
         return True
 
     def num_files(self):
         return 1
+
+    def file_paths(self):
+        return self.paths
+
+    def file_size(self, idx):
+        return 1 << 30
 
     def piece_length(self):
         return 1 << 20
@@ -156,6 +163,23 @@ def test_anything_but_a_torrent_this_server_plays_is_404_and_never_probed(client
     assert client.get("/embedded-ass/font/3", params=media).status_code == 404
     assert tools.runs == []
     assert metrics.playback_stats()["embeddedAssAsks"] == 0
+
+
+def test_discovery_takes_cores_minus_one_as_the_file_the_stream_plays(client, tools):
+    """A stream with no file index plays as /<ih>/-1, and the TV names that URL here. It is the
+    file /<ih>/-1 serves -- the same guess -- so it is read, and remembered, by its real index."""
+    r = client.get("/embedded-ass", params=_media(idx=-1))
+    assert r.status_code == 200
+    assert [t["number"] for t in r.json()["tracks"]] == [1]
+    assert client.get("/embedded-ass", params=_media(idx=0)).status_code == 200
+    [probe] = tools.of("ffprobe")
+    assert probe[-1].endswith(f"/{IH}/0")
+
+
+def test_minus_one_on_a_torrent_with_no_video_is_404(client, tools):
+    client.app.state.engine.handles[IH].paths = ["readme.txt"]
+    assert client.get("/embedded-ass", params=_media(idx=-1)).status_code == 404
+    assert tools.runs == []
 
 
 def test_a_file_is_probed_once_whatever_is_asked(client, tools):

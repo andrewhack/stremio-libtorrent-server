@@ -33,7 +33,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from stremiosrv import metrics
 from stremiosrv.api.media_fetch import looks_like_manifest
-from stremiosrv.api.subs import parse_stream_url
+from stremiosrv.api.subs import parse_stream_url, stream_file_idx
 from stremiosrv.library import netguard
 from stremiosrv.stream.fileserver import content_type_for, wait_and_read
 from stremiosrv.stream.ranges import parse_range
@@ -176,8 +176,14 @@ async def _off_pool(fn, *args):
 
 def _resolve(request: Request, media_url: str | None) -> tuple[str, int]:
     """The torrent and file a client's mediaURL names -- when it is this server's own stream of a
-    torrent the engine holds. The URL itself is never fetched."""
+    torrent the engine holds. /<ih>/-1 names the file that stream plays. The URL itself is never
+    fetched."""
     parsed = parse_stream_url(media_url or "")
+    if parsed is not None and parsed[1] < 0:
+        info_hash = parsed[0]
+        eng = getattr(request.app.state, "engine", None)
+        h = eng.get(info_hash) if eng is not None else None
+        parsed = (info_hash, stream_file_idx(h, -1) if h is not None and h.has_metadata() else -1)
     if parsed is None or _playing(request, *parsed) is None:
         raise HTTPException(status_code=404, detail="not a torrent stream this server is playing")
     return parsed

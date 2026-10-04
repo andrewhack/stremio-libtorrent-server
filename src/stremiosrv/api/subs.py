@@ -64,13 +64,24 @@ def decode_subtitle(raw: bytes) -> str:
             return str(best)
     return raw.decode("windows-1251", errors="replace")  # Cyrillic-biased last resort
 
-# Stremio passes videoUrl as our own stream URL: .../<40-hex-infohash>/<fileIdx>[?...]
-_STREAM_RE = re.compile(r"/([0-9a-fA-F]{40})/(\d+)")
+# Stremio passes videoUrl as our own stream URL: .../<40-hex-infohash>/<fileIdx>[?...]. The index
+# is -1 for a stream stremio-core holds none for (playback.serve_guessed); it ends at a separator,
+# so `/12abc` is no index rather than 12.
+_STREAM_RE = re.compile(r"/([0-9a-fA-F]{40})/(-1|\d+)(?=[/?#]|$)")
 
 
 def parse_stream_url(url: str) -> tuple[str, int] | None:
     m = _STREAM_RE.search(url)
     return (m.group(1).lower(), int(m.group(2))) if m else None
+
+
+def stream_file_idx(h, idx: int) -> int:
+    """The file a stream URL's index names: `idx` itself, or for -1 the file /<ih>/-1 plays, chosen
+    the way playback.serve chooses it (-1 again when the torrent has no media). Needs the metadata."""
+    if idx >= 0:
+        return idx
+    from stremiosrv.api import playback  # local, as in media_fetch: keeps the load graph acyclic
+    return playback._guess(h, {})
 
 
 def srt_to_vtt(text: str) -> str:
@@ -198,7 +209,8 @@ def opensub_hash(request: Request, videoUrl: str | None = None, mediaURL: str | 
         end = time.time() + 20
         while not h.has_metadata() and time.time() < end:
             time.sleep(0.2)
-        if h.has_metadata() and _ensure_edges(h, idx):
+        idx = stream_file_idx(h, idx) if h.has_metadata() else -1
+        if idx >= 0 and _ensure_edges(h, idx):
             hsh, size = opensubtitles_hash_and_size(file_disk_path(eng.save_path(), h, idx))
             return {"error": None, "result": {"size": size, "hash": hsh}}
         return {"error": None, "result": None}  # couldn't resolve in time -> client falls back to filename
@@ -262,12 +274,21 @@ def subtitles_list(info_hash: str, idx: int, mediaURL: str, request: Request) ->
         return {"subtitles": []}
     if "hls" in (pr.get("format", {}).get("name") or ""):
         raise HTTPException(status_code=415, detail="playlist inputs are not accepted")
+    # `track` is the position among the subtitle streams, the number subtitles.vtt's `0:s:<track>`
+    # takes. `id` stays the ffprobe stream index, which counts the video and audio streams too.
+    subtitle_streams = [s for s in pr["streams"] if s.get("track") == "subtitle"]
     subs = [
-        {"id": s.get("id"), "track": s.get("index"), "codec": s.get("codec"), "lang": s.get("lang")}
-        for s in pr["streams"]
-        if s.get("track") == "subtitle"
+        {"id": s.get("id"), "track": n, "codec": s.get("codec"), "lang": s.get("lang")}
+        for n, s in enumerate(subtitle_streams)
     ]
     return {"subtitles": subs}
+
+
+@router.get("/{info_hash}/-1/subtitles.json")
+def subtitles_list_guessed(info_hash: str, mediaURL: str, request: Request) -> dict:
+    """subtitles.json for a stream played as /<ih>/-1. The file is the one `mediaURL` names, so the
+    index is unused; Starlette's int convertor takes no sign, hence a literal route of its own."""
+    return subtitles_list(info_hash, -1, mediaURL, request)
 
 
 @router.get("/{info_hash}/{idx:int}/subtitles.vtt")
@@ -278,7 +299,19 @@ def subtitles_vtt(
     argv = ["ffmpeg", "-hide_banner", "-y",
             "-protocol_whitelist", "file,crypto,data,http,tcp,tls,https",
             "-i", media, "-map", f"0:s:{track}", "-f", "webvtt", "pipe:1"]
-    proc = subprocess.run(argv, capture_output=True, timeout=60)
+    try:
+        proc = subprocess.run(argv, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        logger.warning("subtitle extraction timed out")
+        raise HTTPException(status_code=504, detail="subtitle extraction timed out") from None
     if proc.returncode != 0:
         raise HTTPException(status_code=404, detail="subtitle track not found")
     return Response(content=proc.stdout, media_type="text/vtt")
+
+
+@router.get("/{info_hash}/-1/subtitles.vtt")
+def subtitles_vtt_guessed(
+    info_hash: str, mediaURL: str, request: Request, track: int = 0,
+) -> Response:
+    """subtitles.vtt for a stream played as /<ih>/-1 -- see subtitles_list_guessed."""
+    return subtitles_vtt(info_hash, -1, mediaURL, request, track)

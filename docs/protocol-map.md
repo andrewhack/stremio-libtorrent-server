@@ -63,6 +63,11 @@ The `/subtitles.:ext?from=` route (section 4) fetches its subtitle URL directly 
 destination rule rather than the reader; `/opensubHash` answers only for this server's own streams and
 never fetches a client-supplied URL.
 
+On those routes, `/opensubHash` and the embedded-ASS routes, a stream URL with index `-1` names the
+file `/{infoHash}/-1` plays (the largest media file). A `subtitles.json` entry's `track` is its
+position among the file's subtitle streams, the number `subtitles.vtt?track=` takes; its `id` is the
+ffprobe stream index.
+
 ### Legacy/alt HLS family (top-level `/:first/:second/…`, 46625+)
 `master.m3u8` (46626), `hls.m3u8` (46625), `stream.m3u8` (46627), `stream-q-:quality.m3u8` (46628),
 `stream-:stream.m3u8` (46629), `stream-q-:quality/:seg.ts` (46630), `stream-:stream/:seg.ts` (46631),
