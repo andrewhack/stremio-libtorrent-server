@@ -364,13 +364,17 @@ const LIB = (() => {
   // bytes are all here; "kept" is whether they survive the evictor. A title streamed by the
   // player is complete AND evictable, which is exactly the combination that lost a cache today.
   const isComplete = e => e.state !== 'downloading' && (e.progress == null || e.progress >= 1);
+  // Still arriving: a library download, or a torrent the player is filling ("streaming" -- see
+  // state._untracked_view). The second sat on the Downloaded shelf as "complete" while the player
+  // was halfway through it.
+  const isBusy = e => e.state === 'downloading' || e.state === 'streaming';
   const keptWord = e => (e.pinned ? 'kept' : 'cached');
 
   // Spelled out rather than badged. The tick above means KEPT, and a test pins that on purpose:
   // marking a cached file with the same tick as a kept download tells the owner they have
   // something they do not. But "complete" is a different question and the card answered neither
   // -- a title played to the end by the player showed only its size, so it read as unfinished.
-  const stateWord = e => (isComplete(e) ? 'complete' : 'partial') + ', ' + keptWord(e);
+  const stateWord = e => (isComplete(e) ? 'complete' : 'partial ' + pct(e) + '%') + ', ' + keptWord(e);
 
   // What this title is giving back, when it is giving anything back. Silent at zero on purpose:
   // uploadSpeed is 0 both for a loaded torrent nobody is pulling from AND for an entry with no
@@ -381,13 +385,16 @@ const LIB = (() => {
   // The progress row. Painted from two places -- the card, and the tick that refreshes speeds
   // between rebuilds -- which built the same string separately until one of them gained an upload
   // rate and the other did not.
-  const busyLine = e => pct(e) + '%'
+  const busyLine = e => (e.state === 'streaming' ? (e.playing ? 'playing' : 'fetching') + ' · ' : '')
+    + pct(e) + '%'
     + (e.downloadSpeed ? ' · ↓ ' + fmt(e.downloadSpeed) + '/s' : '')
     + upSuffix(e)
     + ' · ' + (e.seeds || 0) + ' seeders';
 
   const subLine = e => {
-    if (e.peers === 0 && e.progress < 1) return 'no seeds';
+    // Only for something being fetched: nothing is fetching an idle title, so its peers are not
+    // known -- a partial film left halfway would read "no seeds" where it is simply partial.
+    if (e.state !== 'idle' && e.peers === 0 && e.progress < 1) return 'no seeds';
     if (e.size) return fmt(e.size) + ' · ' + stateWord(e) + upSuffix(e);
     return (e.state === 'seeding' ? 'seeding · ' + keptWord(e)
                                   : (e.pinned ? 'kept' : 'size unknown')) + upSuffix(e);
@@ -466,7 +473,7 @@ const LIB = (() => {
       : '';
     const pack = packCaption(e.children);
     const title = (label.name || e.name) + (pack ? ' · ' + pack : ep);
-    const downloading = e.state === 'downloading';
+    const downloading = isBusy(e);
     return `
     <div class="card" data-infohash="${esc(e.infoHash || '')}">
       <div class="poster">
@@ -538,15 +545,15 @@ const LIB = (() => {
   function render(data) {
     lastState = data;
     const entries = withClientLabels(data.entries);
-    const downloading = entries.filter(e => e.state === 'downloading');
+    const downloading = entries.filter(isBusy);
     // Pinned is what makes an entry ours: the pin is written when the download starts and lives
     // in pins.json. A label is a nicety on top, and labels.json is a separate file that can be
     // lost -- it was, and every finished download silently dropped out of this section into
     // "other on disk" while its folder sat on the disk untouched. cardHtml already falls back to
     // the torrent name for the caption, so an unlabelled pin renders fine.
     const ours = e => Boolean(e.label || e.pinned);
-    const done = entries.filter(e => ours(e) && e.state !== 'downloading');
-    const other = entries.filter(e => !ours(e) && e.state !== 'downloading');
+    const done = entries.filter(e => ours(e) && !isBusy(e));
+    const other = entries.filter(e => !ours(e) && !isBusy(e));
     $('sec-downloading').hidden = downloading.length === 0;
     $('downloading').innerHTML = downloading.map(cardHtml).join('');
     $('titles').innerHTML = done.map(cardHtml).join('') || EMPTY;
@@ -1096,7 +1103,7 @@ const LIB = (() => {
       // and painting it once and never again is worse than not painting it -- a stale rate looks
       // live.
       if (!e || !sub) return;
-      sub.textContent = e.state === 'downloading' ? busyLine(e) : subLine(e);
+      sub.textContent = isBusy(e) ? busyLine(e) : subLine(e);
     });
     document.querySelectorAll('#continue .card, #catalogs .card').forEach(card => {
       const id = card.dataset.metaid;

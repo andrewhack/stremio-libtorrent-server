@@ -58,8 +58,8 @@ Horizontal shelves of posters, in the shape the Stremio client uses:
 
 | Shelf | What is in it |
 |---|---|
-| **Downloading** | In progress, with the bar drawn on the artwork. Hidden when nothing is running. |
-| **Downloaded** | Complete and kept, marked with a check. |
+| **Downloading** | In progress, with the bar drawn on the artwork — a download started here, or a title the player is filling right now ("playing", or "fetching" once the player has stopped and it carries on in the background). Hidden when nothing is running. |
+| **Downloaded** | Your titles on disk. A kept one carries a check; one only partly here — a film watched halfway and left — says how much of it is (`partial 45%`). |
 | **Your library** | Your Stremio library. Items already on disk are marked; the rest have a **Download** button. |
 | **Other on disk** | Everything the server is holding that is **not** matched to a title. |
 

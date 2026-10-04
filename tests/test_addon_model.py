@@ -221,7 +221,7 @@ def test_a_single_file_entry_without_an_index_still_plays_as_index_zero():
 
 
 class _FakeEngine:
-    """The exact three methods state.build calls on an engine -- see state._engine_view, which is
+    """The exact four methods state.build calls on an engine -- see state._engine_view, which is
     the only place `build` ever touches its `engine` argument. Nothing else is implemented on
     purpose: a test double growing extra methods is how a fake quietly stops matching the real
     contract."""
@@ -236,6 +236,9 @@ class _FakeEngine:
 
     def tracked_status(self) -> list[dict]:
         return self._statuses
+
+    def held_status(self) -> dict:
+        return {}
 
     def live_files(self) -> dict:
         return self._live

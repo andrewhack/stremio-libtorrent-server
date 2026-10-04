@@ -1057,6 +1057,33 @@ class Engine:
         """
         return self._status_for(set(self._pinned) | set(self._wanted))
 
+    def held_status(self) -> dict[str, dict]:
+        """Whether each torrent the session holds but nobody tracks is still arriving, by infohash.
+
+        Playback fills a torrent without the library tracking it, and keeps filling it at idle
+        priority after the player stops (see Handle._priorities). The library read every such
+        torrent as idle and complete, so a film the player was halfway into sat on its Downloaded
+        shelf. Cheap on purpose -- one status() per torrent, no per-file stats: live_files does
+        that work, and the library asks for both on every refresh.
+        """
+        tracked = set(self._pinned) | set(self._wanted)
+        out: dict[str, dict] = {}
+        for ih, h in list(self._torrents.items()):  # a copy: request threads add torrents
+            if ih in tracked or not h.has_metadata():
+                continue
+            st = h.status()
+            out[ih] = {
+                "state": "seeding" if h.is_finished() else "downloading",
+                "progress": round(st.progress, 4),
+                "downloadSpeed": st.download_rate,
+                "uploadSpeed": st.upload_rate,
+                "peers": st.num_peers,
+                "seeds": st.num_seeds,
+                # A stream is open on it right now, as opposed to filling in the background.
+                "playing": h.is_active(),
+            }
+        return out
+
     def pinned_status(self) -> list[dict]:
         """Only the kept titles -- what /pins.json has always meant."""
         return self._status_for(set(self._pinned))

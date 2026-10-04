@@ -1242,3 +1242,47 @@ def test_the_page_script_parses_as_a_whole():
         r = subprocess.run([node, "--check", f.name], capture_output=True, text=True,
                            encoding="utf-8", timeout=30)
         assert r.returncode == 0, r.stderr
+
+
+# --- a title the player is fetching is not "downloaded" ----------------------------------------
+
+def test_a_title_being_played_is_busy_not_done():
+    """The server reports a torrent the player is filling as `streaming` (state._untracked_view).
+    It belongs with the downloads in flight, not on the Downloaded shelf where a film the player
+    was 45% into used to sit as "complete"."""
+    page = _page()
+    i = page.index("const isBusy = ")
+    src = page[i:page.index("\n", i)]
+    assert _run_js(src, "isBusy({state:'streaming'})") is True
+    assert _run_js(src, "isBusy({state:'downloading'})") is True
+    assert _run_js(src, "isBusy({state:'idle'})") is False
+    assert _run_js(src, "isBusy({state:'seeding'})") is False
+
+
+def test_the_shelves_the_card_and_the_tick_all_read_isbusy():
+    page = _page()
+    assert "const downloading = entries.filter(isBusy);" in page
+    assert page.count("e => ours(e) && !isBusy(e)") == 1
+    assert page.count("e => !ours(e) && !isBusy(e)") == 1
+    assert "const downloading = isBusy(e);" in page
+    assert "sub.textContent = isBusy(e) ? busyLine(e) : subLine(e);" in page
+
+
+def test_a_title_being_played_says_so_on_its_progress_line():
+    src = _speed_src()
+    playing = "{state:'streaming', playing:true, progress:0.45, downloadSpeed:8388608, seeds:9}"
+    got = _run_js(src, f"busyLine({playing})")
+    assert got.startswith("playing · 45%"), got
+    background = "{state:'streaming', playing:false, progress:0.45, seeds:9}"
+    assert _run_js(src, f"busyLine({background})").startswith("fetching · 45%")
+    download = "{state:'downloading', progress:0.45, seeds:9}"
+    assert _run_js(src, f"busyLine({download})").startswith("45%")
+
+
+def test_a_partial_title_nobody_is_fetching_says_how_much_is_here():
+    """A film watched halfway and closed: its peers are not known (nothing is fetching it), so
+    "no seeds" would be a guess -- and "complete" was a falsehood."""
+    src = _speed_src()
+    e = "{size: 4.6e9, state:'idle', progress:0.45, pinned:false, peers:0}"
+    got = _run_js(src, f"subLine({e})")
+    assert "partial 45%, cached" in got, got

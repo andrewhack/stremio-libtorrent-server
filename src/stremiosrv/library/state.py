@@ -186,12 +186,12 @@ def _fresh_single_file(base: str, name: str,
     return [dict(live[0], wanted=False)], 0, 1  # one video, however little of it is here
 
 
-def _engine_view(engine) -> tuple[dict, dict, dict]:
-    """(name -> infohash, infohash -> tracked status, infohash -> live per-file list). Never
-    raises: the engine is allowed to be absent or briefly broken, and a listing of the disk is
-    still worth serving when it is."""
+def _engine_view(engine) -> tuple[dict, dict, dict, dict]:
+    """(name -> infohash, infohash -> tracked status, infohash -> live per-file list, infohash ->
+    held status). Never raises: the engine is allowed to be absent or briefly broken, and a
+    listing of the disk is still worth serving when it is."""
     if engine is None:
-        return {}, {}, {}
+        return {}, {}, {}, {}
     try:
         names = {n: h.lower() for n, h in (engine.name_to_hash() or {}).items()}
     except Exception as e:  # noqa: BLE001 — degrade to a disk-only listing
@@ -212,11 +212,41 @@ def _engine_view(engine) -> tuple[dict, dict, dict]:
     except Exception as e:  # noqa: BLE001 — degrade to measuring them on the disk
         log.warning("library: live_files failed: %s: %s", type(e).__name__, e)
         live = {}
-    return names, pins, live
+    try:
+        # Whether each torrent the session holds untracked is still arriving: playback fills one
+        # without the library tracking it (see Engine.held_status).
+        held = {ih.lower(): s for ih, s in (engine.held_status() or {}).items()}
+    except Exception as e:  # noqa: BLE001 — degrade to reading progress off the disk
+        log.warning("library: held_status failed: %s: %s", type(e).__name__, e)
+        held = {}
+    return names, pins, live, held
+
+
+def _untracked_view(held: dict | None, listed: list[dict]) -> dict:
+    """State and progress for a torrent nobody tracks.
+
+    This said "idle, complete" for every one of them, on the reasoning that nothing was
+    downloading them. Playback does, and since titles are labelled at playback such a torrent can
+    be the owner's: a film the player was 45% into sat on the Downloaded shelf as "complete".
+    From the session while it holds the torrent -- "streaming" while it is still arriving, idle
+    once it is not. Otherwise from what its own files hold on the disk, leaving out the spill a
+    neighbouring file's pieces leave behind (is_watchable), or a finished episode would read as a
+    fraction of its season for good. Complete only when nothing is known at all, as before.
+    """
+    if held is not None:
+        view = {k: held.get(k, 0) for k in ("progress", "downloadSpeed", "uploadSpeed",
+                                             "peers", "seeds")}
+        view["state"] = "streaming" if held.get("state") == "downloading" else "idle"
+        view["playing"] = bool(held.get("playing"))
+        return view
+    files = [f for f in listed if is_watchable(f)]
+    size = sum(f.get("size") or 0 for f in files)
+    have = sum(f.get("downloaded") or 0 for f in files)
+    return {"state": "idle", "progress": round(have / size, 4) if size else 1.0}
 
 
 def build(cache_root: str, engine, budget: int = 0) -> dict:
-    names, pins, live = _engine_view(engine)
+    names, pins, live, in_session = _engine_view(engine)
     idle = cachemod.load_name_index(cache_root)
     all_labels = labelsmod.load(cache_root)
     entries: list[dict] = []
@@ -253,6 +283,7 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
         else:
             listed, num_files = _disk_files(cache_root, name, live.get(ih)), 0
             source = "disk" if listed else None
+        view = pin or _untracked_view(in_session.get(ih) if ih else None, listed)
         entries.append({
             "name": name,
             "infoHash": ih or None,
@@ -263,10 +294,9 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             "pinned": bool(pin.get("pinned")),
             # /library/api/remove is keyed by infohash; without one the button would do nothing.
             "removable": bool(ih),
-            # Without a pin record there is no progress figure to report. The files are on disk and
-            # nothing is downloading them, so treat them as complete rather than as 0% — a finished
-            # entry showing "0%" reads as a stalled download.
-            "progress": pin.get("progress", 1.0),
+            # A tracked torrent reports its own; an untracked one reads it off the session or the
+            # disk (see _untracked_view).
+            "progress": view.get("progress", 1.0),
             # The one file a narrowed pin fetches, when it is narrower than the torrent.
             "wantedFile": pin.get("wantedFile"),
             # What this torrent holds or wants, per file, and how many files it has in all.
@@ -283,13 +313,15 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
             # many files the TORRENT has -- only how many have landed -- so a caller must not read
             # it as though it were the torrent's own list.
             "filesFrom": source,
-            "state": pin.get("state", "idle"),
-            "peers": pin.get("peers", 0),
-            "seeds": pin.get("seeds", 0),
-            "downloadSpeed": pin.get("downloadSpeed", 0),
+            "state": view.get("state", "idle"),
+            "peers": view.get("peers", 0),
+            "seeds": view.get("seeds", 0),
+            "downloadSpeed": view.get("downloadSpeed", 0),
             "uploaded": pin.get("uploaded", 0),
             "ratio": pin.get("ratio", 0.0),
-            "uploadSpeed": pin.get("uploadSpeed", 0),
+            "uploadSpeed": view.get("uploadSpeed", 0),
+            # A stream is open on it right now, as opposed to filling in the background.
+            "playing": view.get("playing", False),
             "label": all_labels.get(ih) if ih else None,
         })
         # A pack holds several episodes, arriving from different places -- one downloaded here,
