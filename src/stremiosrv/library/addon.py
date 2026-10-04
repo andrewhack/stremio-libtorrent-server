@@ -142,7 +142,7 @@ def stream(token: str, type_: str, stream_id: str, request: Request) -> dict:
         entry = model.find_entry(state, ih)
         # stream_for yields None for a pack whose files carry no addressable index -- offering
         # nothing is the point of that, so it must not become a [None] here.
-        found = model.stream_for(entry, origin, idx) if entry else None
+        found = model.stream_for(entry, origin, idx, own_page=True) if entry else None
         return {"streams": [found] if found else []}
     return {"streams": model.streams_for_meta_id(state, stream_id, origin)}
 

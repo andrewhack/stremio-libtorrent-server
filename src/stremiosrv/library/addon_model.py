@@ -336,12 +336,14 @@ def playable_index(entry: dict) -> int | None:
     return 0 if not files else None
 
 
-def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict | None:
+def stream_for(entry: dict, origin: str, file_idx: int | None = None,
+               own_page: bool = False) -> dict | None:
     """One stream entry pointing at the copy already on disk, or None when there is no file index
     to point it at -- see `playable_index` for when that happens.
 
     `bingeGroup` ties every episode of one torrent together so the app can play the next one
-    without asking again.
+    without asking again. `own_page`: the row is for this library's own title page, which is
+    titled by `display_name` -- anywhere else, the app titles the page from its own catalog.
     """
     idx = playable_index(entry) if file_idx is None else file_idx
     if idx is None:
@@ -360,10 +362,12 @@ def stream_for(entry: dict, origin: str, file_idx: int | None = None) -> dict | 
     if chosen is not None:
         title = describe_file(entry, chosen)
         name = _basename(chosen.get("name") or "")
-        # Not when the page above already says it: an unlabelled entry's own page is titled by its
-        # name (display_name), which for a single-file torrent is this file's.
+        # Not when the page above already says it: our own page is titled by display_name, which
+        # for an entry with no label name is its own -- for a single-file torrent, this file's. The
+        # page decides, not the label: a title learned at playback has a label with no name, and
+        # on its page in the app (titled from Stremio's catalog) the row must still name the file.
         shown = (entry.get("label") or {}).get("name") or entry.get("name") or ""
-        if name and name != _basename(shown):
+        if name and not (own_page and name == _basename(shown)):
             title = name + "\n" + title
     else:
         title = describe(entry)

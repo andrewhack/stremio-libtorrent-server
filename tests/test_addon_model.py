@@ -484,15 +484,27 @@ def test_a_single_file_known_only_from_disk_is_named_too():
     assert s["title"].startswith("Film.2160p.mkv\n"), s["title"]
 
 
-def test_an_unlabelled_single_file_does_not_repeat_its_own_name():
-    """Its library page is titled by that very name (display_name), so a row repeating it under
-    the title adds a line and says nothing."""
+def test_on_its_own_page_an_unnamed_single_file_does_not_repeat_its_name():
+    """The library's own page is titled by display_name -- for an entry with no label name, the
+    entry's own name, which for a single-file torrent is the file's -- so a row repeating it under
+    that title adds a line and says nothing."""
     e = _entry(name="Some.File.mkv",
                files=[{"index": 0, "name": "Some.File.mkv", "size": 4 * GB,
                        "downloaded": 4 * GB, "progress": 1.0}])
-    s = am.stream_for(e, ORIGIN)
+    s = am.stream_for(e, ORIGIN, own_page=True)
     assert "Some.File.mkv" not in s["title"], s["title"]
     assert "4.00 GB" in s["title"], s["title"]
+
+
+def test_anywhere_else_an_unnamed_single_file_is_named():
+    """A title learned at playback has a label but no name, so its entry is named after the file.
+    On the title's page in the app -- titled from Stremio's catalog -- the row must still name it."""
+    e = _entry(name="Some.File.mkv",
+               label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 2},
+               files=[{"index": 0, "name": "Some.File.mkv", "size": 4 * GB,
+                       "downloaded": 4 * GB, "progress": 1.0}])
+    s = am.stream_for(e, ORIGIN)
+    assert s["title"].startswith("Some.File.mkv\n"), s["title"]
 
 
 def test_an_episode_still_downloading_is_not_offered():

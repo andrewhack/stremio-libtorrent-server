@@ -111,8 +111,10 @@ what "done" looks like, so it can be picked up without context.
   file name only for a multi-file torrent; a single file got just `<size> · on disk`, so two copies
   of one title — the usual case for a standalone episode or film — differed only by a size. Every
   row that offers one known file now names it, including a lone file listed from disk with no index
-  after a restart. The line is left out only where the page above already shows that name: an
-  unlabelled title's own library page.
+  after a restart. The line is left out only on the library's own page for a title that page
+  already calls by the file's name; on the title's page in the app it is always there (1.6.26 fixed
+  the first cut, which keyed this on the label and dropped the name for every title learned at
+  playback).
 
 - [x] **The disk guard can see the size of a magnet.** `Engine.pin` sized the candidate with
   `total_wanted - total_done`: zero before metadata arrives, so a pin on a magnet was admitted

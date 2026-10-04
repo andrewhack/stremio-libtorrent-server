@@ -228,3 +228,38 @@ def test_x_forwarded_proto_from_a_non_loopback_peer_does_not_set_the_stream_sche
     streams = r.json()["streams"]
     assert len(streams) == 1
     assert streams[0]["url"].startswith("http://")
+
+
+def test_a_learned_single_file_is_named_on_its_episode_page_but_not_twice_on_its_own(tmp_path,
+                                                                                     monkeypatch):
+    """A title learned at playback has a label with no name, so its library page is titled by the
+    entry's own name -- for a single-file torrent, the file's. That page must not repeat it. The
+    title's page in the app is the other case: Stremio titles it from its own catalog, and the row
+    there is where two copies of one episode have to be told apart. The guard once looked at the
+    label instead of the page and dropped the name on both.
+    """
+    from bencode_helper import benc
+
+    from stremiosrv.library import torrentfiles
+
+    ih = "c" * 40
+    name = "Show.S01E02.1080p.WEB.mkv"
+    (tmp_path / name).write_bytes(b"x" * 4096)           # a single-file torrent sits at the root
+    (tmp_path / ".resume").mkdir()                        # with its resume record, as on a real box
+    (tmp_path / ".resume" / f"{ih}.fastresume").write_bytes(
+        benc({"info": {"name": name, "length": 4096}}))
+    cachemod.save_name_index(str(tmp_path), {name: ih})
+    monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: st.st_size)  # no holes: complete
+    torrentfiles._read.cache_clear()
+    labelsmod.put(str(tmp_path), ih, {"metaId": "tt0000010", "type": "series",
+                                      "season": 1, "episode": 2})
+    c = _client(tmp_path)
+    t = _token(tmp_path)
+
+    episode = c.get(f"/library/addon/{t}/stream/series/tt0000010:1:2.json", headers=LAN)
+    titles = [s["title"] for s in episode.json()["streams"]]
+    assert titles and titles[0].startswith(name + "\n"), titles
+
+    own = c.get(f"/library/addon/{t}/stream/other/stremiosrv:{ih}:0.json", headers=LAN)
+    titles = [s["title"] for s in own.json()["streams"]]
+    assert titles and name not in titles[0], titles
