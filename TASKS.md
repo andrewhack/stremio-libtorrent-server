@@ -62,22 +62,14 @@ what "done" looks like, so it can be picked up without context.
   `POST /library/api/pin`, which is the same act as the appliance's own pin. Unkeep is `unpin`: the
   bytes stay and become evictable again, which is what makes it different from Remove.
 
-- [ ] **The library lists torrents, but a pack holds many episodes.** An entry is one cache
-  directory, so every episode inside a season pack is folded into a single card — the one the pin
-  was labelled with. Watch a second episode from that pack through the player and there is nothing
-  in the library to show for it: no card, no size, no way to remove just that episode. The card's
-  size is the whole directory too, which is why a 4.2 GB episode can report 8.6 GB.
-  The cache does not care where a request came from, and that is correct: the library UI is
-  owner-gated, but the streaming server is not, so any client pointed at this box adds to the same
-  cache. One person pinning an episode through the library and another streaming a different
-  episode of the same pack through the player land in one torrent, sharing one directory — which
-  the owner then sees as a single card whose size climbs with nothing on the page attributing it.
-  So this is not a rendering nicety: it is what makes a SHARED cache legible.
-  *Done =* a multi-file torrent renders one card per file that has data, driven by libtorrent's
-  per-file progress and independent of which surface started it, with the torrent as their shared
-  parent for removal; the card's size reports the file, not the directory it happens to share; and
-  each says kept or cached, which is the distinction that decides whether it survives eviction and
-  is orthogonal to who asked for it.
+- [x] **A pack's card says which episodes it holds.** An entry is one torrent, so a season pack is
+  one card -- and its caption named only the episode its label was learned from, while the others
+  sat unordered in small print, in whatever order the torrent numbers its files. The card now reads
+  `Show · S04 · 3 episodes` and lists each episode on disk in episode order with that file's size
+  and progress, whichever surface started it, with spill from neighbouring files summed beneath.
+  Chosen over one card per episode: the episodes share one torrent, one directory and one place in
+  the eviction order, so Keep and Remove can only act on the whole -- a card per episode would have
+  put a whole-pack Remove on every one of them. Removing a single episode is not offered.
 
 - [x] **The download gate no longer reserves the whole cache budget.** It applied `pins.pin_fits`
   -- free space must exceed the release PLUS `cache_size * 1.10`. That rule is right for a PIN,

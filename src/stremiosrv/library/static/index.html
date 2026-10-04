@@ -396,9 +396,40 @@ const LIB = (() => {
   // The release a card came from. Shown wherever it adds something the title does not already
   // say: two episodes of one series, or two rips of one film, differ only here.
   // A file name is long and mostly noise; the episode number is the part that identifies it.
+  const EPISODE_RE = /S(\d{1,2})[ ._-]?E(\d{1,3})/i;
   const shortFile = name => {
-    const m = /S(\d{1,2})[ ._-]?E(\d{1,3})/i.exec(name || '');
+    const m = EPISODE_RE.exec(name || '');
     return m ? 'S' + m[1].padStart(2, '0') + 'E' + m[2].padStart(2, '0') : (name || '');
+  };
+
+  // The season and episode a file name carries, or null.
+  const episodeOf = name => {
+    const m = EPISODE_RE.exec(name || '');
+    return m ? { season: Number(m[1]), episode: Number(m[2]) } : null;
+  };
+
+  // A pack's files in viewing order. Packs number their files however they like -- a real one
+  // listed E06, E02, E03, E04, E05, E01, E07, E08 -- so the torrent's own order reads as a
+  // shuffle. Episodes by season and episode; anything that is not one comes after, by name.
+  const kidsInOrder = kids => kids.slice().sort((a, b) => {
+    const x = episodeOf(a.name), y = episodeOf(b.name);
+    if (x && y) return x.season - y.season || x.episode - y.episode;
+    if (x || y) return x ? -1 : 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  // What a card holding several files holds: "S04 · 3 episodes", "3 episodes" across seasons,
+  // "3 files" when they are not all episodes. Null for one file or none, where the label's own
+  // episode still names the card. The caption used to name only the episode the label was learned
+  // from, so a card holding three of them read as one.
+  const packCaption = kids => {
+    if (!kids || kids.length < 2) return null;
+    const eps = kids.map(k => episodeOf(k.name));
+    if (!eps.every(Boolean)) return kids.length + ' files';
+    const n = kids.length + ' episodes';
+    return new Set(eps.map(x => x.season)).size === 1
+      ? 'S' + String(eps[0].season).padStart(2, '0') + ' · ' + n
+      : n;
   };
 
   const childrenHtml = e => {
@@ -408,10 +439,12 @@ const LIB = (() => {
       ? `<div class="kid dim">${esc('+' + e.scraps.count + ' partial file'
           + (e.scraps.count === 1 ? '' : 's') + ' \u00b7 ' + fmt(e.scraps.size))}</div>`
       : '';
-    return `<div class="kids">${scrapsHtml}${kids.map(k => `<div class="kid${
+    // The leftovers after the episodes: they are what remains of the disk total once the episodes
+    // are counted, so they read as a remainder rather than as the first thing on the card.
+    return `<div class="kids">${kidsInOrder(kids).map(k => `<div class="kid${
         k.wanted ? '' : ' dim'}" title="${esc(k.name)}">${esc(shortFile(k.name))} ${esc(fmt(k.size))
       }${k.progress < 1 ? esc(' \u00b7 ' + Math.round(k.progress * 100) + '%') : ''}</div>`
-    ).join('')}</div>`;
+    ).join('')}${scrapsHtml}</div>`;
   };
 
   const releaseHtml = (e, title) => {
@@ -431,7 +464,8 @@ const LIB = (() => {
       ? ' · S' + String(label.season).padStart(2, '0')
         + 'E' + String(label.episode).padStart(2, '0')
       : '';
-    const title = (label.name || e.name) + ep;
+    const pack = packCaption(e.children);
+    const title = (label.name || e.name) + (pack ? ' · ' + pack : ep);
     const downloading = e.state === 'downloading';
     return `
     <div class="card" data-infohash="${esc(e.infoHash || '')}">

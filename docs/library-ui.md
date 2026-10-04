@@ -67,6 +67,12 @@ That last shelf is not optional and does not hide itself. Pasted magnets, torren
 UI existed, and anything whose title could not be resolved all consume disk, and a view that only
 listed recognised titles would let the disk fill invisibly.
 
+**A season pack is one card.** Its caption says what it holds — `Show · S04 · 3 episodes` — and it
+lists each episode it has on disk, in episode order, with that file's size and how much of it has
+arrived, whoever started it: a download here or a stream in the player. What neighbouring files left
+behind is summed on one line beneath. **Keep** and **Remove** act on the whole torrent: its episodes
+share one torrent, one directory and one place in the eviction order.
+
 Titles and artwork come from the Stremio data already in your browser — your library, and the record
 of which stream played which video. The server stores a small `labels.json` beside the cache for the
 downloads you start here, so they are still labelled on a different device, and for what the Stremio

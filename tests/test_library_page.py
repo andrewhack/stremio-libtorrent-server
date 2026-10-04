@@ -1171,3 +1171,51 @@ def test_every_same_origin_endpoint_the_page_calls_is_a_route_the_server_serves(
     routes = {r.path for r in app.routes if "methods" in dir(r)}
     missing = [e for e in endpoints if e not in routes]
     assert not missing, f"the page calls {missing}, which the server does not serve"
+
+
+# --- a pack card describes the pack -----------------------------------------------------------
+
+_PACK_SRC = re.compile(r"(const EPISODE_RE = [\s\S]*?\n  const packCaption = [\s\S]*?\n  \};)")
+
+
+def _pack_src():
+    m = _PACK_SRC.search(_page())
+    assert m, "the pack helpers (EPISODE_RE .. packCaption) were not found in the page"
+    return m.group(1)
+
+
+def _names(*names):
+    return "[" + ",".join(f"{{name:{n!r}}}" for n in names) + "]"
+
+
+def test_a_pack_card_says_how_many_episodes_it_holds():
+    """The caption named the one episode its label was learned from, so a card holding E05-E07
+    read as E05 alone -- the other two were only in the small print underneath."""
+    src = _pack_src()
+    three = _names("Show.S04E05.mkv", "Show.S04E06.mkv", "Show.S04E07.mkv")
+    assert _run_js(src, f"packCaption({three})") == "S04 · 3 episodes"
+    across = _names("Show.S01E09.mkv", "Show.S02E01.mkv")
+    assert _run_js(src, f"packCaption({across})") == "2 episodes"
+    films = _names("Film.Part.One.mkv", "Film.Part.Two.mkv")
+    assert _run_js(src, f"packCaption({films})") == "2 files"
+    assert _run_js(src, f"packCaption({_names('Show.S04E05.mkv')})") is None
+    assert _run_js(src, "packCaption([])") is None
+
+
+def test_a_pack_lists_its_episodes_in_viewing_order():
+    """Packs number their files however they like -- a real one listed E06, E02, E03, E04, E05,
+    E01, E07, E08 -- and the lines followed the torrent's order, which reads as a shuffle."""
+    src = _pack_src()
+    shuffled = _names("Show.S04E06.mkv", "Extras.mkv", "Show.S04E02.mkv", "Show.S04E10.mkv",
+                      "Show.S03E09.mkv")
+    got = _run_js(src, f"kidsInOrder({shuffled}).map(k => k.name)")
+    assert got == ["Show.S03E09.mkv", "Show.S04E02.mkv", "Show.S04E06.mkv", "Show.S04E10.mkv",
+                   "Extras.mkv"]
+
+
+def test_the_card_uses_the_pack_caption_and_the_viewing_order():
+    page = _page()
+    assert "packCaption(e.children)" in page
+    assert "kidsInOrder(kids)" in page
+    # the partial-file leftovers read as a remainder, after the episodes
+    assert ".join('')}${scrapsHtml}</div>`" in page
