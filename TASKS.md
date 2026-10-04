@@ -6,7 +6,7 @@ yet, and why each item is still open.
 Convention: `- [ ]` open · `- [x]` done · `- [~]` in progress · `- [!]` blocked. Every entry states
 what "done" looks like, so it can be picked up without context.
 
-**Last updated:** 2026-09-18
+**Last updated:** 2026-10-04
 
 ---
 
@@ -107,6 +107,14 @@ what "done" looks like, so it can be picked up without context.
   disk. Both surfaces now go through one `keepTitle`, which is also the only copy of the 409
   handling.
 
+- [ ] **A single-file torrent's "My Library" row does not name its file.** The addon's stream row
+  shows the file name only for a multi-file torrent; a single file gets just `<size> · on disk`. Two
+  copies of one title — the usual case for a standalone episode or film — then differ only by a
+  size, with no release or quality to tell them apart, while every other source in the list names
+  itself.
+  *Done =* a single-file row names its file too, as a pack's rows do, without repeating the entry's
+  own name when the two are the same.
+
 - [ ] **The disk guard cannot see the size of a magnet.** `Engine.pin` sizes the candidate with
   `total_wanted - total_done`, which is zero before metadata arrives — and a library download pins
   immediately after `add`, so the guard always measures nothing and always passes. A torrent far
@@ -136,3 +144,8 @@ what "done" looks like, so it can be picked up without context.
   prefetch section — reference material for someone already running the server, not getting-started
   material — moved behind `<!--hub:skip-->` with pointers to the full README. The Hub copy is now
   ~18.9 kB, leaving over 6 kB. The publish step still checks the size and fails before uploading.
+  By 1.6.23 new settings rows had eaten it back to under 600 bytes, so the settings table is now
+  split: the everyday settings stay on the Hub page, and the specialist ones (timeouts, transcode
+  housekeeping, trackers and DHT, prefetch tuning, the library's network and account rules) moved to
+  a GitHub-only "More settings" table that the Hub copy links to. That leaves ~6.5 kB again; a new
+  specialist setting belongs in the second table.

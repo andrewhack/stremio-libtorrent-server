@@ -180,13 +180,7 @@ Everything is a plain `-e NAME=value` environment variable:
 | `SERVER_URL` | auto | URL the web player targets. Set for a custom domain. It is what a browser starts with: a different streaming-server URL picked later in the player's settings is kept, and changing `SERVER_URL` puts the new one in once. `/proxy` also counts a web page on this host, at any port, as the server's own. |
 | `STREMIOSRV_CACHE_SIZE` | `19327352832` (18 GiB) | Download-cache budget in bytes (LRU-evicted). Keep it **above your largest file**. |
 | `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | Seconds a torrent stays safe from eviction after it was last served. Raise it if a player buffers long enough between range requests that the title being watched ages out. |
-| `STREMIOSRV_RESUME_RETENTION_DAYS` | `365` | How long a fast-resume record is kept for a title that has left the cache. The record carries the torrent's metadata, so re-playing an evicted title starts without fetching it from the swarm again — this only bounds the directory. A title still cached, kept, or downloading is exempt at any age. `0` keeps everything. |
-| `STREMIOSRV_TRANSCODE_GC_INTERVAL` | `60` | Seconds between transcode housekeeping passes: end encoders nobody is reading, then sweep the directories they leave behind. `transcode/` is exempt from cache eviction, so this is the only thing that reclaims it. |
-| `STREMIOSRV_TRANSCODE_IDLE_TIMEOUT` | `300` | Seconds a transcode may go unread before its `ffmpeg` is ended. A player that crashes, refuses the stream, or loses its connection never calls `/destroy`, and the encoder left behind holds a GPU as firmly as a wanted one. Raise it if you pause for long stretches — resuming after a reap re-transcodes from the start; `0` disables the reaper. |
-| `STREMIOSRV_TRANSCODE_GC_MAX_AGE` | `600` | Grace before an *unclaimed* transcode directory is deleted. A job with a live `ffmpeg` is kept no matter how old. Raise it only if you pause transcoded playback for long stretches. |
 | `STREMIOSRV_READAHEAD_BYTES` | `268435456` (256 MiB) | Playhead buffer — bigger absorbs more swarm jitter (fewer rebuffers). |
-| `STREMIOSRV_STREAM_PIECE_TIMEOUT` | `30` | Seconds a request waits for one piece **mid-stream** before ending the stream (the player then re-requests). Raise it on a slow or thinly-peered swarm where the piece does arrive, just late — but it cuts both ways: when the piece is never coming, this is how long playback freezes before the retry that would have recovered it. |
-| `STREMIOSRV_STREAM_FIRST_PIECE_TIMEOUT` | `120` | Same, for the **first** piece of a request — a cold start: the beginning of playback, or a seek into a region nothing has downloaded yet. |
 | `STREMIOSRV_BT_LISTEN_PORT` | `6881` | BitTorrent peer port (TCP **and** UDP, IPv4 **and** IPv6). The one to forward. **If you change it, publish the *same* port** — the compose files and `docker/launch.sh` follow this var automatically; a hand-rolled `docker run` must use matching `-p <port>:<port>/tcp -p <port>:<port>/udp` (mapping to a *different* container port silently kills inbound peering). |
 | `STREMIOSRV_ENABLE_UPNP` | `true` | Ask the router to auto-forward the BitTorrent port via **UPnP** and **NAT-PMP**. `false` stops both mappers — set it when you forward the port yourself, forward nothing on purpose (LAN-only), or tunnel the server's traffic, so it stops asking the router for a mapping it does not need. Peer discovery (DHT, local service discovery) is unaffected. |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | Max peer connections. |
@@ -197,20 +191,36 @@ Everything is a plain `-e NAME=value` environment variable:
 | `STREMIOSRV_SEED_ON_COMPLETE` | `true` | Keep seeding after a torrent finishes (full torrent-client behaviour). `false` = **stop seeding + drop peers** the moment it completes. Pinned items always keep seeding. |
 | `STREMIOSRV_MAX_SEED_MINUTES` | `0` | Stop seeding this many **minutes after completion** (`0` = seed forever). Applies on top of `SEED_ON_COMPLETE`. |
 | `STREMIOSRV_EXTRA_TRACKERS` | *(empty)* | Extra trackers appended to **every** torrent (on top of the built-in defaults). Comma/space/newline-separated `udp://`/`http(s)://`/`ws(s)://` URLs. |
+| `STREMIOSRV_PREFETCH_NEXT` | `false` | **Next-episode prefetch (opt-in).** Once you are into the last 10% of an episode **and** that episode is fully downloaded, quietly pull the start of the next episode in the same torrent so pressing Next starts instantly. Only applies to multi-episode packs — see below. |
+| `STREMIOSRV_LIBRARY_UI` | `false` | **Opt-in download manager** at `/library` on the same origin as the web player: browse your Stremio library, download a title in full, and manage what is on disk as titles rather than folder names. Off by default — it is an authenticated page, so enabling it is a deliberate choice. See [docs/library-ui.md](docs/library-ui.md). |
+| `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
+| `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
+
+**More settings** — stream timeouts, transcode housekeeping, trackers and DHT, prefetch tuning, and which clients count as your own network — are in the [full list on GitHub](https://github.com/andrewhack/stremio-libtorrent-server#more-settings). **Behind a reverse proxy, or on an IPv6 host?** Read `STREMIOSRV_LIBRARY_ADDON_ALLOW` there first: clients can look local when they are not.
+
+**Next-episode prefetch** (opt-in, off by default) pulls the head of the next episode in a pack so *Next* starts instantly — see [the full description on GitHub](https://github.com/andrewhack/stremio-libtorrent-server#next-episode-prefetch).
+
+<!--hub:skip-->
+### More settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| `STREMIOSRV_RESUME_RETENTION_DAYS` | `365` | How long a fast-resume record is kept for a title that has left the cache. The record carries the torrent's metadata, so re-playing an evicted title starts without fetching it from the swarm again — this only bounds the directory. A title still cached, kept, or downloading is exempt at any age. `0` keeps everything. |
+| `STREMIOSRV_TRANSCODE_GC_INTERVAL` | `60` | Seconds between transcode housekeeping passes: end encoders nobody is reading, then sweep the directories they leave behind. `transcode/` is exempt from cache eviction, so this is the only thing that reclaims it. |
+| `STREMIOSRV_TRANSCODE_IDLE_TIMEOUT` | `300` | Seconds a transcode may go unread before its `ffmpeg` is ended. A player that crashes, refuses the stream, or loses its connection never calls `/destroy`, and the encoder left behind holds a GPU as firmly as a wanted one. Raise it if you pause for long stretches — resuming after a reap re-transcodes from the start; `0` disables the reaper. |
+| `STREMIOSRV_TRANSCODE_GC_MAX_AGE` | `600` | Grace before an *unclaimed* transcode directory is deleted. A job with a live `ffmpeg` is kept no matter how old. Raise it only if you pause transcoded playback for long stretches. |
+| `STREMIOSRV_STREAM_PIECE_TIMEOUT` | `30` | Seconds a request waits for one piece **mid-stream** before ending the stream (the player then re-requests). Raise it on a slow or thinly-peered swarm where the piece does arrive, just late — but it cuts both ways: when the piece is never coming, this is how long playback freezes before the retry that would have recovered it. |
+| `STREMIOSRV_STREAM_FIRST_PIECE_TIMEOUT` | `120` | Same, for the **first** piece of a request — a cold start: the beginning of playback, or a seek into a region nothing has downloaded yet. |
 | `STREMIOSRV_TRACKER_LIST_URL` | *(empty)* | Optional URL of a community tracker list (e.g. the raw [ngosang/trackerslist](https://github.com/ngosang/trackerslist) `trackers_best.txt`). Fetched in a **background thread** to keep the list current — best-effort, **never blocks startup or playback**; offline falls back to the last cached list, then the built-in defaults. Empty = fully static. |
 | `STREMIOSRV_TRACKER_LIST_REFRESH_HOURS` | `24` | How often the background tracker-list source re-fetches (only when a URL is set). |
 | `STREMIOSRV_DHT_BOOTSTRAP_NODES` | *(empty)* | Your own DHT entry points, `host:port,host:port`. Empty keeps libtorrent's built-in routers. Only used on a **first** boot — after that the server rejoins via its saved routing table (see below). |
 | `STREMIOSRV_ADAPTIVE_PICKING` | `false` | **Experimental.** While playing, relax strict sequential download to parallel once enough is buffered ahead of the playhead (harvests more swarm throughput), re-tightening to in-order when the buffer drains or on a seek — the playhead window stays deadline-rushed, so continuity is protected. Off by default; needs on-box tuning. |
-| `STREMIOSRV_PREFETCH_NEXT` | `false` | **Next-episode prefetch (opt-in).** Once you are into the last 10% of an episode **and** that episode is fully downloaded, quietly pull the start of the next episode in the same torrent so pressing Next starts instantly. Only applies to multi-episode packs — see below. |
 | `STREMIOSRV_PREFETCH_NEXT_FRACTION` | `0.05` | How much of the next episode to fetch, as a fraction of its size. |
 | `STREMIOSRV_PREFETCH_NEXT_MAX_BYTES` | `134217728` (128 MiB) | Ceiling on that head, so a very large episode doesn't pull 200 MB. |
 | `STREMIOSRV_PREFETCH_TRIGGER_FRACTION` | `0.90` | How far into the current episode the trigger sits. |
-| `STREMIOSRV_LIBRARY_UI` | `false` | **Opt-in download manager** at `/library` on the same origin as the web player: browse your Stremio library, download a title in full, and manage what is on disk as titles rather than folder names. Off by default — it is an authenticated page, so enabling it is a deliberate choice. See [docs/library-ui.md](docs/library-ui.md). |
 | `STREMIOSRV_LIBRARY_ADDON_ALLOW` | *(unset)* | Which client addresses count as your own network. They may reach the library addon, and `/proxy` (which plays addon streams that need their own request headers) fetches any address for them but a link-local or cloud-metadata one, while other clients — and web pages on other sites — may fetch public addresses only. A web page counts as the server's own, not another site, when it was opened on an IP address in these ranges, or on the server's own host or `SERVER_URL`'s. Unset means loopback, private ranges, link-local, IPv6 ULA and carrier-grade NAT (so a private tunnel still works). Comma-separated CIDRs to replace that list. **Clients can look local when they are not:** behind a reverse proxy every client arrives from the proxy's address, and on a host with IPv6 whose container network has none, Docker forwards IPv6 clients from its bridge gateway. In either case list your own LAN ranges here explicitly. Subtitle and transcode routes that take a media URL apply the same destination rule as the proxy, and never let ffmpeg open an outside URL directly. |
 | `STREMIOSRV_LIBRARY_OWNER` | *(unset)* | Which Stremio account may use it — the account id or its email. Unset = the **first** account to sign in claims the server. |
 | `STREMIOSRV_LIBRARY_ALLOW_HTTP` | `false` | Allow the library UI without TLS. Its session cookie is `Secure`, so plain HTTP is refused unless you set this — only do so on a trusted LAN or behind a VPN. |
-| `DOMAIN` | `localhost` | CN for the self-signed cert (when not using `IPADDRESS`). |
-| `CERT_FILE` | `certificates.pem` | Bring-your-own cert (full-chain + key) filename in the data volume. |
 
 **Trackers & peer discovery.** Every torrent is announced to a curated set of public trackers (baked-in
 defaults) **plus DHT, LSD and PEX** — so a bare infohash finds peers even when the magnet carries no
@@ -230,9 +240,6 @@ off for months and then gets plugged back in. A corrupt or missing file is not a
 falls back to a normal cold start. Set `STREMIOSRV_DHT_BOOTSTRAP_NODES` if you would rather not use
 the built-in routers for that first boot either.
 
-**Next-episode prefetch** (opt-in, off by default) pulls the head of the next episode in a pack so *Next* starts instantly — see [the full description on GitHub](https://github.com/andrewhack/stremio-libtorrent-server#next-episode-prefetch).
-
-<!--hub:skip-->
 ### Watch your library inside Stremio
 
 Turning on the library page also publishes it as a **Stremio addon**, so what is on the box shows up
