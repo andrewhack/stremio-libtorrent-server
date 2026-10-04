@@ -53,6 +53,59 @@ what "done" looks like, so it can be picked up without context.
   *Done =* each answers as `server.reference.js` does, or is recorded here as deliberately out of
   scope. `unmatchedRoutes` in `/stats.json` shows which of them real clients actually ask for.
 
+- [~] **A `-1` stream URL is not recognised outside the byte route.** stremio-core writes
+  `/<infoHash>/-1` for a stream with no file index, but the parser the subtitle routes share
+  (`api/subs.py` `_STREAM_RE`) accepts digits only: `/opensubHash` answers `result: null` (hash
+  matching silently lost), the embedded-subtitle discovery cannot resolve the file, and
+  `/<infoHash>/-1/subtitles.json|.vtt` do not exist.
+  *Done =* `-1` resolves to the same file the byte route plays, on every route that takes a stream URL
+  or a file index.
+
+- [~] **The embedded-subtitle list and its extractor disagree on what `track` means.**
+  `subtitles.json` reports ffprobe's index across all streams, while `subtitles.vtt?track=` maps it as
+  an index among subtitle streams, so a file with video and audio first extracts the wrong track or
+  none. A track that takes longer than 60 s to extract escapes as a 500.
+  *Done =* the number the list gives is the number the extractor takes, as stock does, and a slow
+  extraction answers like the other ffmpeg timeouts.
+
+- [ ] **Every audio track in a transcoded stream.** Our HLS output carries the first audio track only;
+  stock lists each as an `#EXT-X-MEDIA:TYPE=AUDIO` rendition. A file with two or more audio tracks is
+  always transcoded by the player (it refuses direct play), and then loses every language but the
+  first. *Done =* the master playlist offers every audio track, as stock does, proven against the
+  real-browser gate.
+
+- [ ] **Embedded subtitles in a transcoded stream (the browser half).** A transcoded stream carries
+  no subtitle track; stock serves WebVTT renditions (`subtitle<id>.m3u8`). Needs the two items above
+  first. *Done =* text subtitle tracks appear as WebVTT renditions in the master playlist; bitmap
+  formats are left out and said so.
+
+## Streaming & transcoding
+
+- [ ] **The head check before ffprobe waits for a piece nobody asked for.** The manifest refusal
+  (1.6.20) waits for the file's first piece without boosting it, so a cold torrent's first
+  `/hlsv2/probe` can wait out the whole first-piece timeout and answer 504. *Done =* the head piece
+  is prioritised before the wait, the wait stays fail-closed, and a trace on a cold torrent shows
+  the probe answering as soon as the piece lands.
+
+- [ ] **Transcoding a torrent still downloading ends at the first long stall.** The byte route ends
+  a response when a piece misses its timeout, and ffmpeg treats a body shorter than its
+  Content-Length as the end of the input, so the encode stops and the playlist freezes. *Done =* a
+  stall longer than the piece timeout no longer ends the transcode (e.g. ffmpeg reconnecting to the
+  same range), shown with a stalled-range test.
+
+- [ ] **HDR sources that are transcoded come out washed out.** When a transcode is already chosen,
+  an HDR source is converted to 8-bit without tone mapping. *Done =* HDR→SDR tone mapping on the
+  hardware paths that support it, leaving direct play of HDR untouched.
+
+- [ ] **VAAPI assumes one device and one capability.** Only `renderD128` is recognised, and a GPU
+  that cannot decode the source profile (HEVC 10-bit on older iGPUs) fails the job instead of
+  falling back. *Done =* render nodes are discovered, and an early hardware failure retries with
+  software decode + hardware encode, then software.
+
+- [ ] **Two players on one file start two encodes.** Each playback attempt gets its own transcode
+  job, so a reload or a second device runs a second full encode until the idle reaper ends the
+  first. *Done =* identical workloads share one ffmpeg, with the reaper counting its readers.
+
 ## Library UI
 
 - [x] **A title the player streamed can be kept, not only removed.** The library UI used to pin
@@ -116,6 +169,48 @@ what "done" looks like, so it can be picked up without context.
   what it will actually fetch (the whole torrent unless narrowed), and a refusal's `needed` is the
   full requirement rather than the headroom alone. Refusing was chosen over admitting first and
   re-checking later: nothing is ever kept unmeasured, and there is no deferred state to surface.
+
+- [ ] **Keep's disk guard counts the cache's own bytes twice.** It asks for the whole cache budget
+  plus 10% to stay free beside the pin, but the cache already on disk is not free space, so a warm
+  cache needs about 2.1 times the budget: on a small disk Keep is refused for a title that would
+  fit. *Done =* the guard reserves only what the cache can still grow into plus the 10% slack —
+  never stricter than today, still refusing a pin that would fill the disk.
+
+- [ ] **The free-space reserve lives only in the page.** The download button holds back the larger
+  of 2 GiB and 2% of the disk, but `POST /library/api/download` itself has no guard, and `/health`
+  says nothing about the disk. *Done =* the reserve is enforced by the server too (a 409 like
+  Keep's), the page reads it from the state, and `/health` has a `disk` component.
+
+- [ ] **No way to play a title from the library page.** *Done =* a card (and each file of a pack)
+  offers Watch, opening it in the bundled player through its own deep link.
+
+## Deployment & image
+
+- [ ] **A recreated container reads as a rival cache owner.** The cache owner is identified by
+  hostname, which changes when `docker compose up` recreates the container, so after an upgrade the
+  new server logs "claimed by another server" and skips eviction for up to five minutes.
+  *Done =* a stable identity across recreation.
+
+- [ ] **Behind a TLS-terminating reverse proxy the server sees plain HTTP from one address.** nginx
+  sets `X-Forwarded-Proto` and `X-Forwarded-For` from its own connection, so the library refuses
+  sign-in as not HTTPS, addon URLs come out `http://`, and every visitor looks like the proxy (the
+  docs' advice to forward the client address cannot take effect). *Done =* an opt-in trusted-proxy
+  setting that believes those headers only from the listed addresses; unchanged when unset.
+
+- [ ] **The GPU overlays assume `/dev/dri`.** `compose.gpu.yaml` maps it even for NVIDIA-only hosts
+  that have none, and mapping the whole directory fails in some unprivileged containers. *Done =*
+  the NVIDIA overlay needs no DRM node, and VAAPI maps render nodes only.
+
+- [ ] **BitTorrent cannot be bound to one interface.** *Done =* a setting that pins listening and
+  outgoing BitTorrent traffic to a named interface (a VPN tunnel), unset by default.
+
+- [ ] **No ARM64 image.** The GPU base image is amd64-only. *Done =* a second, CPU-only image tag
+  built for amd64 and arm64, the GPU image unchanged.
+
+- [ ] **Image and repo hygiene.** `.env` is not gitignored and there is no `.env.example`; the image
+  relies on `openssl` and `curl` arriving with the base without checking; the trusted-certificate
+  fetch trusts its exit code without checking the file. *Done =* `.env` ignored and an example
+  committed; a build-time check for the tools the entrypoint needs; the fetch verified by the file.
 
 ## Tooling & docs
 
