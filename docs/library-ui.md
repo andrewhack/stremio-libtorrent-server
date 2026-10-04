@@ -145,7 +145,9 @@ While anything is being watched, background downloads yield the bandwidth
 whole title means every file; Keep on a title narrowed to one episode keeps that episode. The disk
 guard belongs to Keep, because a kept title is the one thing the evictor cannot reclaim: Keep is
 refused, with how much space it needs, when what it would still fetch, added to what other kept
-titles still need, would leave less free than the cache budget plus 10%. A magnet has no size until
+titles still need, would leave less free than the room the cache can still grow into (its budget
+less what it already holds, since a kept title counts against the same budget) plus 10% of the
+budget. A magnet has no size until
 its details arrive from the swarm, so Keep waits up to 15 seconds for them and otherwise refuses
 rather than keep something it could not measure — try again a minute later.
 

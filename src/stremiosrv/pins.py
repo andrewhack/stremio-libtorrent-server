@@ -39,15 +39,23 @@ def pinned_hashes(cache_root: str) -> set[str]:
     return {e["infoHash"].lower() for e in load_pins(cache_root) if e.get("infoHash")}
 
 
-def headroom(cache_size: int) -> int:
-    """Bytes to keep free for normal streaming: cache budget + 10%."""
-    return math.ceil(cache_size * 1.10)
+def headroom(cache_size: int, cache_used: int = 0) -> int:
+    """Bytes to keep free beside the pins for normal streaming: the room the cache can still grow
+    into, plus 10% of its budget as slack.
+
+    `cache_used` is what the cache already holds, measured as the evictor measures it. Those bytes
+    are on the disk already, and pinned bytes count against the same budget, so reserving the whole
+    budget again counted them twice: a warm cache needed about 2.1 times its budget free and a small
+    title was refused on a disk it fitted. Never stricter than the old flat budget + 10%, which is
+    what an empty cache (or one that cannot be measured) still gets."""
+    return math.ceil(cache_size * 1.10) - min(cache_size, max(0, cache_used))
 
 
 def pin_fits(disk_free: int, pinned_remaining: int, candidate_remaining: int,
-             cache_size: int) -> bool:
+             cache_size: int, cache_used: int = 0) -> bool:
     """True if completing all pins (existing incomplete + candidate) still leaves >= headroom free."""
-    return disk_free - (pinned_remaining + candidate_remaining) >= headroom(cache_size)
+    return (disk_free - (pinned_remaining + candidate_remaining)
+            >= headroom(cache_size, cache_used))
 
 
 # --- which file a pin wants -------------------------------------------------------------------

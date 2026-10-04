@@ -109,3 +109,52 @@ def test_a_refusal_reports_everything_the_pin_needs(tmp_path, monkeypatch):
         eng.pin(IH)
     assert e.value.needed == pinsmod.headroom(10 * GiB) + 90 * GiB
     assert e.value.free == 100 * GiB
+
+
+# --- the reserve beside a pin: only the room the cache can still grow into (plus 10% slack) ---
+
+def _warm(monkeypatch, used):
+    """The cache already holds `used` bytes, measured the way the evictor measures it."""
+    monkeypatch.setattr(engmod.cachemod, "scan_cache", lambda root: [{"name": "x", "size": used}])
+
+
+def test_a_warm_cache_does_not_have_to_stay_free_beside_a_pin(tmp_path, monkeypatch):
+    """The reported case: a 30 GB budget, the cache near it, 26 GB free, and a 3 GB film refused
+    with "needs 30.7 GB". The cache's bytes are already on the disk and pinned bytes count against
+    the same budget, so reserving the whole budget again counted them twice."""
+    _warm(monkeypatch, 28 * GiB)
+    h = FakeHandle(total_size=3 * GiB)
+    eng = _engine(tmp_path, monkeypatch, h, free=26 * GiB, cache_size=30 * GiB)
+    eng.pin(IH)
+    assert eng._pinned == {IH}
+
+
+def test_a_cold_cache_keeps_its_room_to_grow(tmp_path, monkeypatch):
+    """Nothing cached yet: the cache can still grow by its whole budget, so the reserve is what
+    it always was."""
+    _warm(monkeypatch, 0)
+    h = FakeHandle(total_size=3 * GiB)
+    eng = _engine(tmp_path, monkeypatch, h, free=26 * GiB, cache_size=30 * GiB)
+    with pytest.raises(PinSpaceError) as e:
+        eng.pin(IH)
+    assert e.value.needed == pinsmod.headroom(30 * GiB) + 3 * GiB
+
+
+def test_room_the_cache_already_uses_is_not_reserved_twice(tmp_path, monkeypatch):
+    _warm(monkeypatch, 20 * GiB)
+    h = FakeHandle(total_size=3 * GiB)
+    eng = _engine(tmp_path, monkeypatch, h, free=15 * GiB, cache_size=30 * GiB)
+    with pytest.raises(PinSpaceError) as e:
+        eng.pin(IH)
+    assert e.value.needed == pinsmod.headroom(30 * GiB) - 20 * GiB + 3 * GiB
+
+
+def test_a_pin_that_would_fill_the_disk_is_still_refused(tmp_path, monkeypatch):
+    """However full the cache already is, the 10% slack stays: a pin that exactly fills the disk
+    leaves nothing for the evictor's lag, a stream being watched, or transcode segments."""
+    _warm(monkeypatch, 40 * GiB)
+    h = FakeHandle(total_size=5 * GiB)
+    eng = _engine(tmp_path, monkeypatch, h, free=5 * GiB, cache_size=30 * GiB)
+    with pytest.raises(PinSpaceError):
+        eng.pin(IH)
+    assert eng._pinned == set()

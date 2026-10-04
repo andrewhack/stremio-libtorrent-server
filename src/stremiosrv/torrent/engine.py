@@ -1004,13 +1004,17 @@ class Engine:
             time.sleep(0.2)
         if not h.has_metadata():
             raise PinSizeUnknownError()
-        # disk guard: existing incomplete pins + this candidate must still leave headroom
+        # disk guard: existing incomplete pins + this candidate must still leave headroom -- the room
+        # the cache can still grow into (what it holds now, measured as the evictor does) + slack
         free = shutil.disk_usage(self._cache_root).free
         pinned_remaining = sum(self._remaining_bytes(self._torrents[p])
                                for p in self._pinned if p in self._torrents and p != ih)
         candidate_remaining = self._pin_remaining(h)
-        if not pinsmod.pin_fits(free, pinned_remaining, candidate_remaining, self._cache_size):
-            needed = pinsmod.headroom(self._cache_size) + pinned_remaining + candidate_remaining
+        used = sum(i["size"] for i in cachemod.scan_cache(self._cache_root))
+        if not pinsmod.pin_fits(free, pinned_remaining, candidate_remaining, self._cache_size,
+                                cache_used=used):
+            needed = (pinsmod.headroom(self._cache_size, cache_used=used)
+                      + pinned_remaining + candidate_remaining)
             raise PinSpaceError(needed, free)
         self._pinned.add(ih)
         h.pinned = True

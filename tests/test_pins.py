@@ -461,3 +461,15 @@ def test_names_episode_reads_the_forms_a_download_reads():
     assert not names_episode("Show.S01E50.mkv", 1, 5)
     assert not names_episode("Show.S02E05.mkv", 1, 5)
     assert not names_episode("Some.Film.2019.1080p.mkv", 1, 5)
+
+
+def test_the_reserve_shrinks_by_what_the_cache_already_holds_and_is_never_stricter():
+    budget = 1000
+    assert pins.headroom(budget, cache_used=0) == pins.headroom(budget)  # cold: as before
+    assert pins.headroom(budget, cache_used=600) == pins.headroom(budget) - 600
+    assert pins.headroom(budget, cache_used=5000) == pins.headroom(budget) - budget  # slack only
+    for used in (0, 1, 999, 1000, 10**6):
+        assert 0 < pins.headroom(budget, cache_used=used) <= pins.headroom(budget)
+    # pin_fits takes the same measure
+    assert pins.pin_fits(400, 0, 250, budget, cache_used=1000) is True
+    assert pins.pin_fits(400, 0, 250, budget) is False

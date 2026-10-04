@@ -167,11 +167,12 @@ what "done" looks like, so it can be picked up without context.
   full requirement rather than the headroom alone. Refusing was chosen over admitting first and
   re-checking later: nothing is ever kept unmeasured, and there is no deferred state to surface.
 
-- [ ] **Keep's disk guard counts the cache's own bytes twice.** It asks for the whole cache budget
-  plus 10% to stay free beside the pin, but the cache already on disk is not free space, so a warm
-  cache needs about 2.1 times the budget: on a small disk Keep is refused for a title that would
-  fit. *Done =* the guard reserves only what the cache can still grow into plus the 10% slack —
-  never stricter than today, still refusing a pin that would fill the disk.
+- [x] **Keep's disk guard no longer counts the cache's own bytes twice (1.6.32).** It asked for the
+  whole cache budget plus 10% to stay free beside the pin, but the cache already on disk is not
+  free space, so a warm cache needed about 2.1 times the budget and on a small disk Keep refused a
+  title that fitted. It now reserves the room the cache can still grow into (its budget less what
+  it holds, measured as the evictor does) plus the 10% slack: an empty cache gets the old reserve,
+  and a pin that would fill the disk is still refused.
 
 - [ ] **The free-space reserve lives only in the page.** The download button holds back the larger
   of 2 GiB and 2% of the disk, but `POST /library/api/download` itself has no guard, and `/health`

@@ -1151,7 +1151,7 @@ const LIB = (() => {
   // A download is ordinary evictable cache, so the only thing that can honestly refuse it is the
   // DISK. This used to apply the server's PIN guard (pins.pin_fits): free space must exceed the
   // release PLUS the whole cache budget and ten percent. That rule is right for a pin -- a pin can
-  // never be evicted, so the entire budget has to stay free beside it for ordinary streaming --
+  // never be evicted, so the room the cache can still grow into has to stay free beside it --
   // and wrong for a download, which the evictor manages like anything else. Applied here it
   // refused nearly everything: a 48 GiB budget demanded ~56.7 GB free ON TOP of the release, so a
   // 10 GB file was greyed out on a box with 61 GB free.
