@@ -99,11 +99,12 @@ NGINX_PID=$!
 # This shell is PID 1, and PID 1 ignores SIGTERM unless it traps it: `docker stop` used to sit out
 # its grace period and SIGKILL everything, so the server never shut down (and never gave its
 # cache-root claim back). Pass the signal on, then wait for the server to finish shutting down --
-# a trapped signal ends the first `wait` early.
-trap 'kill -TERM "$NGINX_PID" "$APP_PID" 2>/dev/null || true' TERM INT
+# a trapped signal ends the first `wait` early with 143, and the second one collects the server's
+# own exit status.
+trap 'stopping=1; kill -TERM "$NGINX_PID" "$APP_PID" 2>/dev/null || true' TERM INT
 rc=0
 wait "$APP_PID" || rc=$?
-if kill -0 "$APP_PID" 2>/dev/null; then
+if [ -n "${stopping:-}" ]; then
     rc=0
     wait "$APP_PID" || rc=$?
 fi
