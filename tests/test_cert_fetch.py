@@ -174,6 +174,18 @@ def test_a_long_message_is_capped(tmp_path):
         stub.close()
 
 
+def test_a_non_ascii_message_never_splits_a_character(tmp_path):
+    """cut counts bytes: a long multi-byte message was cut mid-character, the status file stopped
+    being UTF-8, and /health then read it as missing -- healthy while serving self-signed."""
+    # one ASCII byte, then two-byte characters: the 160th byte falls in the middle of one
+    stub = _Stub(546, ('{"error":{"message":"x' + "ü" * 200 + '"}}').encode("utf-8"))
+    try:
+        detail = _reason(tmp_path, stub)[1]  # decoding the output as UTF-8 must not fail
+        assert detail.startswith("xü") and len(detail.encode("utf-8")) <= 160
+    finally:
+        stub.close()
+
+
 def test_success_prints_nothing_and_asks_nothing_more(tmp_path):
     good = tmp_path / "good.pem"
     _make_pem(good, f"DNS:*.{ZONE}", days=90)

@@ -41,7 +41,12 @@ CODE=$(curl -s -m "$PROBE_TIMEOUT" -o "$BODY" -w '%{http_code}' -X POST \
     -H 'Content-Type: application/json' \
     --data "{\"authKey\":null,\"ipAddress\":\"${IPADDRESS}\"}" "$PROBE_URL")
 RC=$?
-MSG=$(sed -n 's/.*"message" *: *"\([^"]*\)".*/\1/p' "$BODY" | head -n 1 | tr -d '\t\r\n' | cut -c1-160)
+MSG=$(sed -n 's/.*"message" *: *"\([^"]*\)".*/\1/p' "$BODY" | head -n 1 | tr -d '\t\r\n')
+if [ "$(printf '%s' "$MSG" | wc -c)" -gt 160 ]; then
+    # cut counts bytes, and half a multi-byte character would leave the status file no longer
+    # UTF-8 (/health would then ignore it): cut, then drop a character the cut may have split.
+    MSG=$(printf '%s' "$MSG" | LC_ALL=C cut -b1-160 | LC_ALL=C sed 's/[\xC0-\xFF][\x80-\xBF]*$//')
+fi
 rm -f "$BODY"
 case "$RC" in
     0)
