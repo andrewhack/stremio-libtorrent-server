@@ -47,7 +47,7 @@ class _Stub:
         self.hits = 0
 
         class H(http.server.BaseHTTPRequestHandler):
-            def do_POST(self):  # noqa: N802
+            def do_POST(self):
                 stub.hits += 1
                 self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 time.sleep(delay)
