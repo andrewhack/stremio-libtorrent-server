@@ -26,6 +26,13 @@ password sign-in form on a server using this cert (see [library-ui.md](library-u
 Trusted and private are two different properties. For anything reachable from outside your LAN,
 prefer option 2 below.
 
+### When the certificate service is down
+The cert comes from Stremio's certificate service, asked at startup — and again whenever the one
+on disk has less than a month left. If that service is unreachable or failing, the server still
+starts: it keeps the trusted cert it already has for as long as that is valid, and only a server
+that has none falls back to a self-signed cert, which TVs refuse. Restart the container once the
+service answers again to fetch the trusted one.
+
 ## 2. Bring-your-own cert (best — works for all clients)
 Put a **full-chain + private key** PEM at `<data-dir>/certificates.pem` (the cache dir mounted at
 `/root/.stremio-server`). The container uses it as-is; no warnings, native apps accept it.

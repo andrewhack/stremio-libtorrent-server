@@ -14,6 +14,9 @@ ZONE="$2"
 # keep handing back a certificate the same image is already alarming about, and a restart -- the
 # one thing an operator would try -- would not renew it. tests/test_cert_reuse.py guards the gap.
 RENEW_WITHIN=2592000
+# A third argument replaces the window. After a failed fetch the entrypoint asks with 0: a trusted
+# certificate that is still valid at all beats dropping to a self-signed one TVs refuse.
+[ -n "$3" ] && RENEW_WITHIN="$3"
 
 # An empty zone leaves nothing to identify a certificate by, so it is refused here rather than left
 # to the comparison below, which would then be deciding on an empty string.

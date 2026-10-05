@@ -25,11 +25,14 @@ if [ -n "${IPADDRESS}" ]; then
         HAVE_SROCKS=1
     else
         echo "[entrypoint] IPADDRESS=$IPADDRESS -> fetching trusted stremio.rocks cert"
-        # Time-box the fetch: on an offline / isolated (LAN-only, static-IP) network it would
-        # otherwise hang on DNS/HTTP timeouts and block uvicorn from ever starting. On timeout we
-        # fall through to the existing/self-signed cert so the server still comes up on the LAN.
-        if (cd /srv/stremio-server && timeout 30 node certificate.js --action fetch); then
-            cp /srv/stremio-server/certificates.pem "$CERT"
+        # Time-boxed, and judged by the certificate it installs rather than by its exit code (see
+        # cert-fetch.sh). When it fails -- an offline LAN, or the certificate service down -- a
+        # trusted certificate already here is kept for as long as it is valid at all, and only
+        # without one does the server fall back to the existing/self-signed certificate.
+        if sh /srv/app/docker/cert-fetch.sh "$CERT" "$SROCKS_ZONE"; then
+            HAVE_SROCKS=1
+        elif sh /srv/app/docker/cert-reuse.sh "$CERT" "$SROCKS_ZONE" 0; then
+            echo "[entrypoint] stremio.rocks fetch failed -> keeping the trusted cert on disk until it expires"
             HAVE_SROCKS=1
         else
             echo "[entrypoint] stremio.rocks fetch failed -> falling back to existing/self-signed cert"

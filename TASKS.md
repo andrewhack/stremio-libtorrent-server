@@ -215,10 +215,16 @@ what "done" looks like, so it can be picked up without context.
 - [ ] **No ARM64 image.** The GPU base image is amd64-only. *Done =* a second, CPU-only image tag
   built for amd64 and arm64, the GPU image unchanged.
 
+- [x] **The trusted-certificate fetch is judged by the file it writes (1.6.33).** Stremio's
+  `certificate.js` exits 0 even after every attempt failed, and the entrypoint copied the file it
+  never wrote: under `set -e` the container died, a crash loop for as long as the certificate
+  service failed quickly (seen during an outage of that service). A failed fetch now leaves the
+  served certificate alone, a trusted one still valid is kept, and only a server with none falls
+  back to self-signed.
+
 - [ ] **Image and repo hygiene.** `.env` is not gitignored and there is no `.env.example`; the image
-  relies on `openssl` and `curl` arriving with the base without checking; the trusted-certificate
-  fetch trusts its exit code without checking the file. *Done =* `.env` ignored and an example
-  committed; a build-time check for the tools the entrypoint needs; the fetch verified by the file.
+  relies on `openssl` and `curl` arriving with the base without checking. *Done =* `.env` ignored
+  and an example committed; a build-time check for the tools the entrypoint needs.
 
 ## Tooling & docs
 
