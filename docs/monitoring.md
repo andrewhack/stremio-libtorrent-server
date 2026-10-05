@@ -9,7 +9,11 @@ The trusted-HTTPS-for-TVs path relies on a cert that can lapse (esp. the shared
 
 - only present when a cert actually exists (dev/test stays `healthy`),
 - `ok` while the cert has ≥ 14 days left, `degraded` (HTTP 503) once it's within 14 days or unreadable,
-- `certDaysLeft` is included in the body for visibility.
+- `certDaysLeft` is included in the body for visibility,
+- with `IPADDRESS` set, `certStatus` says where the cert came from and, when the trusted one is
+  missing, why (`state`, `reason`, `detail`, `nextTry`); `cert` is also `degraded` (HTTP 503) while
+  `state` is `waiting` — the server is serving a self-signed fallback and retries every 30 minutes
+  (see [cert-guide.md](cert-guide.md), "When the certificate service is down").
 
 The **Application Health Monitor** already polls `/health`, so a lapsing cert surfaces as a Telegram
 alert with no extra wiring. If `*.stremio.rocks` ever dies, switch to the bring-your-own-cert path
