@@ -5,10 +5,16 @@ certificate service failed. The entrypoint trusted that exit code and copied a f
 written, and under `set -e` the failed copy ended the container: during an outage of that service a
 box crash-looped whenever the failures came back quickly, and fell back to a self-signed
 certificate only when they were slow enough for the 30 s timeout to fire first.
+
+A failed fetch also says why, in one REASON<TAB>DETAIL line: certificate.js only says "failed".
 """
+import http.server
 import os
 import shutil
+import socket
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -20,28 +26,66 @@ REUSE = ROOT / "docker" / "cert-reuse.sh"
 ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("sh") is None or shutil.which("openssl") is None,
-    reason="needs sh and openssl on PATH",
+    shutil.which("sh") is None or shutil.which("openssl") is None or shutil.which("curl") is None,
+    reason="needs sh, openssl and curl on PATH",
 )
 
 
-def _fetch(tmp_path: Path, fake: str) -> tuple[int, Path]:
+def _closed_port_url() -> str:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return f"http://127.0.0.1:{port}/api/certificateGet"
+
+
+class _Stub:
+    """Stremio's certificate service, answering every POST with one configured reply."""
+
+    def __init__(self, status: int, body: bytes, delay: float = 0.0):
+        stub = self
+        self.hits = 0
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                stub.hits += 1
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                time.sleep(delay)
+                self.send_response(status)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/api/certificateGet"
+
+    def close(self):
+        self.server.shutdown()
+
+
+def _fetch(tmp_path: Path, fake: str, probe_url: str | None = None,
+           probe_timeout: str = "15") -> tuple[int, Path, str]:
     """Run cert-fetch.sh with `fake` standing in for certificate.js; the fetch directory is
-    tmp_path/work, the certificate the server serves is tmp_path/certificates.pem."""
+    tmp_path/work, the certificate the server serves is tmp_path/certificates.pem. The probe goes
+    to `probe_url`, by default a closed local port (never the real service)."""
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     (work / "fake.sh").write_text(fake, encoding="utf-8")
     cert = tmp_path / "certificates.pem"
     env = {"PATH": os.environ["PATH"], "CERT_FETCH_DIR": str(work),
-           "CERT_FETCH_CMD": "sh fake.sh"}
+           "CERT_FETCH_CMD": "sh fake.sh", "IPADDRESS": "192.168.5.124",
+           "CERT_PROBE_URL": probe_url or _closed_port_url(), "CERT_PROBE_TIMEOUT": probe_timeout}
     proc = subprocess.run(["sh", str(FETCH), str(cert), ZONE], capture_output=True, env=env,
-                          timeout=60)
-    return proc.returncode, cert
+                          text=True, encoding="utf-8", timeout=60)
+    return proc.returncode, cert, proc.stdout
 
 
 def test_a_fetch_that_wrote_nothing_failed_whatever_it_exited(tmp_path):
     """The outage: the service answered 502, certificate.js gave up and exited 0."""
-    rc, cert = _fetch(tmp_path, "echo 'Error fetching certificate'; exit 0\n")
+    rc, cert, _ = _fetch(tmp_path, "echo 'Error fetching certificate'; exit 0\n")
     assert rc != 0
     assert not cert.exists()
 
@@ -49,7 +93,7 @@ def test_a_fetch_that_wrote_nothing_failed_whatever_it_exited(tmp_path):
 def test_a_fetched_wildcard_for_the_zone_is_installed(tmp_path):
     good = tmp_path / "good.pem"
     _make_pem(good, f"DNS:*.{ZONE}", days=90)
-    rc, cert = _fetch(tmp_path, f"cp '{good}' certificates.pem\n")
+    rc, cert, _ = _fetch(tmp_path, f"cp '{good}' certificates.pem\n")
     assert rc == 0
     assert cert.read_bytes() == good.read_bytes()
 
@@ -60,7 +104,7 @@ def test_a_fetch_that_wrote_something_unusable_failed(tmp_path, written):
     _make_pem(other, "DNS:localhost", days=90)
     body = (f"printf '{written}' > certificates.pem\n" if written
             else f"cp '{other}' certificates.pem\n")  # a certificate for another name
-    rc, cert = _fetch(tmp_path, body)
+    rc, cert, _ = _fetch(tmp_path, body)
     assert rc != 0
     assert not cert.exists()
 
@@ -69,7 +113,7 @@ def test_a_failed_fetch_leaves_the_served_certificate_alone(tmp_path):
     served = tmp_path / "certificates.pem"
     _make_pem(served, f"DNS:*.{ZONE}", days=10)
     before = served.read_bytes()
-    rc, _ = _fetch(tmp_path, "exit 0\n")
+    rc, _, _ = _fetch(tmp_path, "exit 0\n")
     assert rc != 0
     assert served.read_bytes() == before
 
@@ -78,9 +122,68 @@ def test_a_file_left_by_an_earlier_fetch_is_not_taken_for_a_new_one(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     _make_pem(work / "certificates.pem", f"DNS:*.{ZONE}", days=90)
-    rc, cert = _fetch(tmp_path, "exit 0\n")
+    rc, cert, _ = _fetch(tmp_path, "exit 0\n")
     assert rc != 0
     assert not cert.exists()
+
+
+# --- why a fetch failed ---
+
+def _reason(tmp_path, stub=None, **kw) -> tuple[str, str]:
+    rc, _, out = _fetch(tmp_path, "echo noise from certificate.js; exit 0\n",
+                        probe_url=stub.url if stub else None, **kw)
+    assert rc != 0
+    reason, _, detail = out.rstrip("\n").partition("\t")
+    return reason, detail
+
+
+@pytest.mark.parametrize(("status", "body", "reason", "detail"), [
+    (546, b'{"error":{"message":"General HTTPS Certificate DNS Error"}}', "refused",
+     "General HTTPS Certificate DNS Error"),
+    (403, b'{"error":{"message":"forbidden"}}', "refused", "forbidden"),
+    (502, b"error code: 502", "unavailable", "HTTP 502"),
+    (200, b'{"result":{}}', "other", "HTTP 200"),
+])
+def test_a_failed_fetch_says_why(tmp_path, status, body, reason, detail):
+    stub = _Stub(status, body)
+    try:
+        assert _reason(tmp_path, stub) == (reason, detail)
+        assert stub.hits == 1  # one probe, nothing more
+    finally:
+        stub.close()
+
+
+def test_no_connection_is_no_internet(tmp_path):
+    assert _reason(tmp_path) == ("no-internet", "")
+
+
+def test_no_answer_in_time_is_unavailable(tmp_path):
+    stub = _Stub(200, b"{}", delay=3)
+    try:
+        assert _reason(tmp_path, stub, probe_timeout="1") == ("unavailable",
+                                                             "no answer within 1s")
+    finally:
+        stub.close()
+
+
+def test_a_long_message_is_capped(tmp_path):
+    stub = _Stub(546, b'{"error":{"message":"' + b"x" * 400 + b'"}}')
+    try:
+        assert len(_reason(tmp_path, stub)[1]) == 160
+    finally:
+        stub.close()
+
+
+def test_success_prints_nothing_and_asks_nothing_more(tmp_path):
+    good = tmp_path / "good.pem"
+    _make_pem(good, f"DNS:*.{ZONE}", days=90)
+    stub = _Stub(546, b"{}")
+    try:
+        rc, _, out = _fetch(tmp_path, f"echo noise; cp '{good}' certificates.pem\n",
+                            probe_url=stub.url)
+        assert rc == 0 and out == "" and stub.hits == 0
+    finally:
+        stub.close()
 
 
 # --- keeping a still-valid trusted certificate when the fetch fails ---
