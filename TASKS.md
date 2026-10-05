@@ -222,6 +222,12 @@ what "done" looks like, so it can be picked up without context.
   served certificate alone, a trusted one still valid is kept, and only a server with none falls
   back to self-signed.
 
+- [x] **Without the trusted certificate the server retries and says why (1.6.34).** The fetch ran
+  only at startup, so after an outage of Stremio's certificate service someone had to restart the
+  server, and nothing said so. It now asks again every 30 minutes, switches in place when the
+  certificate arrives, records the reason in `cert-status.json`, logs one plain line per attempt,
+  and `/health` reports `certStatus` (degraded while waiting).
+
 - [ ] **Image and repo hygiene.** `.env` is not gitignored and there is no `.env.example`; the image
   relies on `openssl` and `curl` arriving with the base without checking. *Done =* `.env` ignored
   and an example committed; a build-time check for the tools the entrypoint needs.

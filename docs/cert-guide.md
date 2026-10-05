@@ -28,10 +28,18 @@ prefer option 2 below.
 
 ### When the certificate service is down
 The cert comes from Stremio's certificate service, asked at startup — and again whenever the one
-on disk has less than a month left. If that service is unreachable or failing, the server still
-starts: it keeps the trusted cert it already has for as long as that is valid, and only a server
-that has none falls back to a self-signed cert, which TVs refuse. Restart the container once the
-service answers again to fetch the trusted one.
+on disk has less than a month left. If the service is unreachable, failing, or refuses this
+server's address, the server still starts: it keeps the trusted cert it already has for as long as
+that is valid, and only a server that has none falls back to a self-signed cert, which TVs refuse.
+Either way it asks again by itself every 30 minutes and switches to the trusted cert when it
+arrives — a few seconds' restart inside the container, no action needed.
+
+Meanwhile it says why: one line in the container log per attempt
+(`[cert] no trusted certificate yet: Stremio's certificate service refused … ; trying again at
+14:35 UTC`), and a `certStatus` entry in `/health` (`state`, `reason`, `detail`, `nextTry`), which
+also reports the server **degraded** while it has no trusted cert. `reason` is `refused` (the
+service turned this address down — it has been seen to refuse an address for a while and accept
+others), `unavailable` (no answer), `no-internet` (it cannot be reached at all) or `other`.
 
 ## 2. Bring-your-own cert (best — works for all clients)
 Put a **full-chain + private key** PEM at `<data-dir>/certificates.pem` (the cache dir mounted at
