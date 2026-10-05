@@ -77,6 +77,28 @@ def test_the_same_certificate_again_never_restarts(tmp_path):
     assert data["reason"] == "other"
 
 
+ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
+
+
+def test_the_entrypoint_records_the_reason_and_the_state():
+    text = ENTRYPOINT.read_text(encoding="utf-8")
+    assert 'FETCH_OUT=$(sh /srv/app/docker/cert-fetch.sh "$CERT" "$SROCKS_ZONE")' in text
+    assert "CERT_STATE=renewing" in text and "CERT_STATE=waiting" in text
+    assert "sh /srv/app/docker/cert-status.sh" in text
+
+
+def test_the_loop_runs_only_while_waiting_or_renewing():
+    text = ENTRYPOINT.read_text(encoding="utf-8")
+    assert "waiting|renewing)" in text
+    assert "sh /srv/app/docker/cert-retry.sh" in text and "RETRY_PID=$!" in text
+
+
+def test_a_received_certificate_restarts_the_entrypoint_in_place():
+    text = ENTRYPOINT.read_text(encoding="utf-8")
+    assert "' USR1" in text
+    assert 'exec "$0"' in text
+
+
 def test_a_newer_certificate_during_renewal_restarts(tmp_path):
     old = tmp_path / "old.pem"
     _make_pem(old, f"DNS:*.{ZONE}", days=20)
