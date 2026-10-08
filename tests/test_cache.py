@@ -57,6 +57,23 @@ def test_evict_once_keeps_budget_not_everything(tmp_path):
     assert len(res["deleted"]) >= 1
 
 
+# 1.6.34 put cert-status.json beside the cache. It is written at start and rewritten only while a
+# certificate retry runs, so it is small and old: the first thing evicted once the cache went over
+# budget, after which /health reported no certStatus until the next restart.
+def test_the_cert_status_file_is_never_evicted(tmp_path):
+    from stremiosrv.health import CERT_STATUS_FILE
+    old = time.time() - 10_000  # older than grace -> evictable if it were a cache entry
+    status = tmp_path / CERT_STATUS_FILE
+    status.write_text('{"state": "ok"}', encoding="utf-8")
+    os.utime(status, (old, old))
+    movie = tmp_path / "movie.mkv"
+    movie.write_bytes(b"x" * 500)
+    os.utime(movie, (old + 1, old + 1))
+    evict_once(str(tmp_path), budget=100, engine=None, grace=300)
+    assert status.exists()
+    assert CERT_STATUS_FILE not in {i["name"] for i in scan_cache(str(tmp_path))}
+
+
 def test_evict_once_protects_recent(tmp_path):
     for i in range(5):  # just-created files (recent mtime) must be protected
         (tmp_path / f"f{i}.mkv").write_bytes(b"x" * 100)

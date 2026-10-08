@@ -54,6 +54,9 @@ PROTECTED = frozenset({
     "library-ui.json",
     # Which server is allowed to evict from this root — see evictor_may_run.
     ".evictor-owner",
+    # Where the trusted certificate came from and why it is missing (health.CERT_STATUS_FILE,
+    # written by docker/cert-status.sh). Evicted, /health stops reporting certStatus.
+    "cert-status.json",
 })
 
 # --- cache-root ownership ---------------------------------------------------------------------
