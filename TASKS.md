@@ -84,11 +84,12 @@ what "done" looks like, so it can be picked up without context.
   is prioritised before the wait, the wait stays fail-closed, and a trace on a cold torrent shows
   the probe answering as soon as the piece lands.
 
-- [ ] **Transcoding a torrent still downloading ends at the first long stall.** The byte route ends
-  a response when a piece misses its timeout, and ffmpeg treats a body shorter than its
-  Content-Length as the end of the input, so the encode stops and the playlist freezes. *Done =* a
-  stall longer than the piece timeout no longer ends the transcode (e.g. ffmpeg reconnecting to the
-  same range), shown with a stalled-range test.
+- [x] **Transcoding a torrent still downloading no longer ends at the first long stall (1.6.38).**
+  The byte route ends a response when a piece misses its timeout, and ffmpeg took a body shorter
+  than its Content-Length for the end of the input: it exited 0 and finished the playlist part-way
+  through. ffmpeg now reconnects on an `http(s)` input (`-reconnect 1 -reconnect_delay_max 30`)
+  and asks again from the byte it stopped at. Shown on the image's ffmpeg with a source whose first
+  response is cut at 40%: 22.5 s of a 60 s clip before, all 60 s after.
 
 - [ ] **HDR sources that are transcoded come out washed out.** When a transcode is already chosen,
   an HDR source is converted to 8-bit without tone mapping. *Done =* HDR→SDR tone mapping on the

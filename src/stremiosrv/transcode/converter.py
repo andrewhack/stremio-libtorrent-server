@@ -32,6 +32,11 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
         elif profile and profile.startswith("vaapi"):
             argv += ["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"]
 
+    if media_url.startswith(("http://", "https://")):
+        # The byte route ends a response when a torrent piece misses its timeout; without this,
+        # ffmpeg takes the short body for the end of the file and finishes the playlist there.
+        # HTTP-only: on a file input ffmpeg rejects the option and does not start.
+        argv += ["-reconnect", "1", "-reconnect_delay_max", "30"]
     argv += ["-i", media_url, "-map", "0:v:0"]
     if a is not None:
         argv += ["-map", "0:a:0?"]

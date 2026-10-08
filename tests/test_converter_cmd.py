@@ -46,6 +46,23 @@ def test_no_audio_stream():
     assert "0:a:0?" not in cmd
 
 
+# The byte route ends a response early when a torrent piece misses its timeout, and ffmpeg took a
+# body shorter than its Content-Length for the end of the input: it exited 0 and marked the playlist
+# finished part-way through the film. Reconnecting asks again from the byte it stopped at.
+def test_build_hls_cmd_reconnects_an_http_input_that_ends_short():
+    argv = build_hls_cmd("http://127.0.0.1:11470/" + "a" * 40 + "/0", DEC_COPY, None, "/tmp/j")
+    r = argv.index("-reconnect")
+    assert argv[r + 1] == "1"
+    assert argv[argv.index("-reconnect_delay_max") + 1] == "30"
+    assert r < argv.index("-i")
+
+
+def test_build_hls_cmd_leaves_reconnect_off_for_a_local_file():
+    # ffmpeg answers "Option reconnect not found." and exits 1 for a file input.
+    argv = build_hls_cmd("/tmp/src.mp4", DEC_COPY, None, "/tmp/j")
+    assert "-reconnect" not in argv
+
+
 def test_build_hls_cmd_has_a_protocol_whitelist_before_input():
     """ffmpeg must not be free to follow whatever scheme a redirect throws at it -- only the
     handful this server actually serves media over (Minor 8's protocol whitelist), and it has to
