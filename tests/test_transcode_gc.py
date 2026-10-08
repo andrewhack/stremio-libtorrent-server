@@ -114,6 +114,32 @@ def test_sweep_spares_a_job_whose_process_is_registered_but_exited(tmp_path):
     assert d.exists()
 
 
+# A finished transcode is read for as long as the film plays: a complete file with embedded
+# subtitles transcodes in a minute or two, and the player keeps fetching its segments for an hour or
+# more. The directory's mtime stops at ffmpeg's last write, so judging by it alone deleted the
+# segments ten minutes into playback and the next segment answered 404.
+def test_sweep_keeps_a_finished_job_a_client_is_still_reading(tmp_path):
+    conv = Converter(str(tmp_path), None)
+    d = _job(conv, "watched")
+    conv._jobs["watched"] = FakeProc(alive=False)
+    old = time.time() - 660  # ffmpeg's last write, 11 minutes ago
+    os.utime(d, (old, old))
+    conv.touch("watched")  # the player just fetched a segment
+    assert conv.sweep(max_age=600) == 0
+    assert d.exists()
+
+
+def test_sweep_removes_a_finished_job_nobody_has_read_within_max_age(tmp_path):
+    conv = Converter(str(tmp_path), None)
+    d = _job(conv, "abandoned")
+    conv._jobs["abandoned"] = FakeProc(alive=False)
+    old = time.time() - 660
+    os.utime(d, (old, old))
+    conv._seen["abandoned"] = time.monotonic() - 660  # last segment fetched 11 minutes ago
+    assert conv.sweep(max_age=600) == 1
+    assert not d.exists()
+
+
 def test_sweep_respects_max_age(tmp_path):
     conv = Converter(str(tmp_path), None)
     d = _job(conv, "recent")

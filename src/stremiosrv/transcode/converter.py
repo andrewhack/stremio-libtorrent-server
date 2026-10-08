@@ -236,8 +236,12 @@ class Converter:
             names = os.listdir(self.base)
         except OSError:
             return 0  # nothing has transcoded yet
+        # Live = ffmpeg still running, OR a client read the job within the grace. A finished
+        # transcode is played for as long as the film runs, long after its last write.
+        mono = time.monotonic()
         with self._lock:
-            live = {jid for jid, p in self._jobs.items() if p.poll() is None}
+            live = {jid for jid, p in self._jobs.items()
+                    if p.poll() is None or mono - self._seen.get(jid, float("-inf")) < max_age}
         now = time.time()
         removed: list[str] = []
         for name in names:
