@@ -20,14 +20,35 @@ def test_vaapi_hls():
     assert "vaapi" in cmd
     # h264_vaapi is 8-bit only and the decoder hands it whatever the source was, so the filter has
     # to convert: a 10-bit source otherwise fails at init, with no fallback.
-    assert "scale_vaapi=w=1920:h=-2:format=nv12" in cmd
+    assert any("scale_vaapi=w=1920:h=-2:format=nv12" in p for p in cmd)
 
 
 def test_vaapi_hls_converts_the_pixel_format_with_nothing_to_scale():
     """The other branch. It emitted no -vf at all, so there was nowhere for the conversion to go."""
     cmd = build_hls_cmd("http://x/0", {"video": {"action": "transcode"}}, "vaapi-x", "/tmp/j")
     assert "-vf" in cmd
-    assert "scale_vaapi=format=nv12" in cmd
+    assert any("scale_vaapi=format=nv12" in p for p in cmd)
+
+
+# A VAAPI decoder that cannot read the source (10-bit HEVC on older Intel, AV1 before its hardware
+# decodes it) hands ffmpeg software frames, and a chain that starts at scale_vaapi cannot take
+# them: the transcode failed outright. `format=nv12|vaapi,hwupload` passes hardware frames straight
+# through and uploads software ones, so the encode stays on the GPU either way. hwupload needs a
+# named device, so the render node is opened explicitly and shared by decoder and filters.
+def test_vaapi_hls_uploads_frames_the_hardware_could_not_decode():
+    cmd = build_hls_cmd("http://x/0", DEC_TRANSCODE, "vaapi-renderD128", "/tmp/j")
+    assert cmd[cmd.index("-vf") + 1] == (
+        "format=nv12|vaapi,hwupload,scale_vaapi=w=1920:h=-2:format=nv12")
+    assert cmd[cmd.index("-init_hw_device") + 1] == "vaapi=va:/dev/dri/renderD128"
+    assert cmd[cmd.index("-hwaccel_device") + 1] == "va"
+    assert cmd[cmd.index("-filter_hw_device") + 1] == "va"
+    assert cmd.index("-init_hw_device") < cmd.index("-hwaccel") < cmd.index("-i")
+
+
+def test_vaapi_hls_uploads_with_nothing_to_scale():
+    cmd = build_hls_cmd("http://x/0", {"video": {"action": "transcode"}}, "vaapi-renderD128",
+                        "/tmp/j")
+    assert cmd[cmd.index("-vf") + 1] == "format=nv12|vaapi,hwupload,scale_vaapi=format=nv12"
 
 
 def test_cpu_hls():

@@ -30,7 +30,12 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
         if profile == "nvenc-linux":
             argv += ["-hwaccel", "cuda"]
         elif profile and profile.startswith("vaapi"):
-            argv += ["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"]
+            # A named device (profile "vaapi-renderD128" -> /dev/dri/renderD128), shared by the
+            # decoder and the filters: hwupload needs one to upload frames the decoder could not.
+            node = profile.split("-", 1)[1] if "-" in profile else "renderD128"
+            argv += ["-init_hw_device", f"vaapi=va:/dev/dri/{node}", "-hwaccel", "vaapi",
+                     "-hwaccel_device", "va", "-hwaccel_output_format", "vaapi",
+                     "-filter_hw_device", "va"]
 
     if media_url.startswith(("http://", "https://")):
         # The byte route ends a response when a torrent piece misses its timeout; without this,
@@ -53,8 +58,11 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
             # -hwaccel_output_format vaapi means a 10-bit source decodes to p010 surfaces, and
             # h264_vaapi is 8-bit only: without an explicit conversion ffmpeg fails at init with
             # no fallback. The NVENC branch above normalises the same way (format=yuv420p).
+            # A source the hardware cannot decode (10-bit HEVC on older Intel, AV1 before its
+            # decoder exists) arrives as software frames, which scale_vaapi cannot take: those are
+            # converted and uploaded, while hardware-decoded frames pass straight through.
             vf = f"scale_vaapi=w={w}:h=-2:format=nv12" if w else "scale_vaapi=format=nv12"
-            argv += ["-vf", vf, "-c:v", "h264_vaapi"]
+            argv += ["-vf", f"format=nv12|vaapi,hwupload,{vf}", "-c:v", "h264_vaapi"]
         else:
             # libx264 would keep a 10-bit source 10-bit (H.264 High 10), which hardware decoders
             # cannot play and browsers decode only in software; 8-bit like the NVENC branch.
