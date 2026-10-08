@@ -56,9 +56,10 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
             vf = f"scale_vaapi=w={w}:h=-2:format=nv12" if w else "scale_vaapi=format=nv12"
             argv += ["-vf", vf, "-c:v", "h264_vaapi"]
         else:
-            if w:
-                argv += ["-vf", f"scale={w}:-2:flags=lanczos"]
-            argv += ["-c:v", "libx264", "-preset", "veryfast"]
+            # libx264 would keep a 10-bit source 10-bit (H.264 High 10), which hardware decoders
+            # cannot play and browsers decode only in software; 8-bit like the NVENC branch.
+            argv += ["-vf", f"scale={w}:-2:flags=lanczos,format=yuv420p" if w else "format=yuv420p",
+                     "-c:v", "libx264", "-preset", "veryfast"]
 
     # Audio
     if a is not None:

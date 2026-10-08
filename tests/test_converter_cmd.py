@@ -35,6 +35,19 @@ def test_cpu_hls():
     assert "libx264" in cmd
 
 
+# libx264 keeps a 10-bit source 10-bit unless told otherwise, and H.264 High 10 plays only in
+# software decoders: browsers decode it on the CPU at best, TV and phone hardware not at all.
+# The NVENC branch already normalises to yuv420p; the CPU branch has to as well.
+def test_cpu_hls_outputs_8_bit_when_scaling():
+    cmd = build_hls_cmd("http://x/0", DEC_TRANSCODE, None, "/tmp/j")
+    assert cmd[cmd.index("-vf") + 1] == "scale=1920:-2:flags=lanczos,format=yuv420p"
+
+
+def test_cpu_hls_outputs_8_bit_with_nothing_to_scale():
+    cmd = build_hls_cmd("http://x/0", {"video": {"action": "transcode"}}, None, "/tmp/j")
+    assert cmd[cmd.index("-vf") + 1] == "format=yuv420p"
+
+
 def test_copy_hls_has_no_decode_accel():
     cmd = build_hls_cmd("http://x/0", DEC_COPY, "nvenc-linux", "/tmp/j")
     assert "copy" in cmd
