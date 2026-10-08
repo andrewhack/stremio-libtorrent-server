@@ -1,5 +1,5 @@
-"""Guard: serialize_stats output must match stremio-core's Statistics struct (all fields required,
-camelCase). If it drifts, the desktop/web 'Statistics' panel silently shows 0/0/0 because core
+"""Guard: serialize_stats output must match stremio-core's Statistics struct (all fields required
+on the per-file route, camelCase). If it drifts, the desktop/web 'Statistics' panel silently shows 0/0/0 because core
 fails to deserialize the whole response. Schema mirrored from stremio-core
 src/types/streaming_server/statistics.rs."""
 from stremiosrv.api.playback import serialize_stats
@@ -83,6 +83,17 @@ def test_stats_matches_core_schema():
     # real per-file progress flows through
     assert out["streamProgress"] == 1000 / 8000
     assert out["streamLen"] == 8000
+
+
+# The torrent-level route (no file index) is asked only by stremio-core 0.64+ (web 5.0.0-beta.41),
+# where the stream* fields became optional. The stock server leaves them out there and the web
+# player then hides "Completed"; sending zeros showed "Completed 0 %" for the whole stream.
+def test_torrent_stats_leave_out_the_per_file_fields():
+    out = serialize_stats(FakeHandle())
+    assert not {"streamLen", "streamName", "streamProgress"} & out.keys()
+    for key, types in CORE_REQUIRED.items():
+        if not key.startswith("stream"):
+            assert isinstance(out.get(key), types), f"{key} missing or wrong type"
 
 
 def test_stats_no_negative_source_counts():

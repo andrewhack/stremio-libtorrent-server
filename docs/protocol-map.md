@@ -296,6 +296,8 @@ SANITIZED — placeholder infoHash/name, redacted peer IPs):
 >
 > **`GET /:infoHash/:idx/stats.json`** = same object **plus** the per-file fields
 > `streamProgress` (0..1), `streamName` (the selected file's name), `streamLen` (bytes).
+> Since stremio-core 0.64 (web 5.0.0-beta.41) a stream without a `fileIdx` asks the torrent-level
+> route, and core accepts the three per-file fields missing; the web player then hides "Completed".
 
 **CONFIRMED — `GET /hlsv2/:id/:track.m3u8` media playlist** (Stage 3 contract; fMP4/CMAF):
 ```m3u8

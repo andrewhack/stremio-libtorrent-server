@@ -36,14 +36,7 @@ def serialize_stats(handle, idx: int | None = None) -> dict:
                 "path": fs.file_path(i), "name": fs.file_name(i),
                 "length": fs.file_size(i), "offset": fs.file_offset(i),
             })
-    # stream_* are REQUIRED top-level by stremio-core's Statistics struct (defaults; per-file below).
-    stream_len, stream_name, stream_progress = 0, "", 0.0
-    if idx is not None and ti:
-        flen = ti.files().file_size(idx)
-        stream_len = flen
-        stream_name = ti.files().file_name(idx)
-        stream_progress = (st.total_done / flen) if flen else 0.0
-    return {
+    out = {
         "infoHash": str(st.info_hashes.v1), "name": (ti.name() if ti else ""),
         "peers": st.num_peers, "unchoked": unchoked, "queued": 0, "unique": st.num_peers,
         # `queued`, `connectionTries` and `swarmPaused` are CONSTANTS, present only because the stock
@@ -59,7 +52,6 @@ def serialize_stats(handle, idx: int | None = None) -> dict:
         "downloaded": st.total_done, "uploaded": st.total_upload,
         "downloadSpeed": st.download_rate, "uploadSpeed": st.upload_rate,
         "sources": [], "peerSearchRunning": True,
-        "streamLen": stream_len, "streamName": stream_name, "streamProgress": stream_progress,
         # opts MUST be a fully-populated Options object or stremio-core fails to parse the whole
         # stats response (-> blank Statistics panel). Values are nominal; the panel doesn't show them.
         "opts": {
@@ -70,6 +62,15 @@ def serialize_stats(handle, idx: int | None = None) -> dict:
             "swarmCap": {"maxSpeed": 12582912, "minPeers": 20},
         },
     }
+    # The per-file route always carries stream*: stremio-core before 0.64 requires them and asks
+    # only that route. The torrent-level route leaves them out, like the stock server — only core
+    # 0.64+ asks it, and the web player hides "Completed" when they are missing.
+    if idx is not None:
+        flen = ti.files().file_size(idx) if ti else 0
+        out["streamLen"] = flen
+        out["streamName"] = ti.files().file_name(idx) if ti else ""
+        out["streamProgress"] = (st.total_done / flen) if flen else 0.0
+    return out
 
 
 def serialize_active(handle) -> dict:
