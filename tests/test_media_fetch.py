@@ -296,3 +296,37 @@ def test_head_never_arriving_refuses_rather_than_falls_through(tmp_path):
     with pytest.raises(HTTPException) as ei:
         media_fetch.resolve_media_input(r, f"http://127.0.0.1:11470/{IH}/0")
     assert ei.value.status_code == 504
+
+
+class _SplitHeadHandle(_FakeHandle):
+    """The file's first piece holds only its first 3 bytes, and the next piece never arrives."""
+    def piece_length(self): return 3
+    def num_pieces(self): return 100
+    def have_piece(self, p): return p == 0
+
+
+def test_a_head_cut_short_by_a_missing_piece_is_refused(tmp_path, monkeypatch):
+    # A crafted torrent can end the file's first piece 3 bytes in and hold back the next one: the
+    # reader then ends at the piece boundary, the sniff saw "#EX" rather than "#EXTM3U" and let the
+    # file through, and ffprobe read the whole manifest once the piece landed.
+    from functools import partial
+
+    from stremiosrv.stream import fileserver
+    monkeypatch.setattr(fileserver, "wait_and_read", partial(fileserver.wait_and_read, timeout=0.2))
+    body = b"#EXTM3U\n#EXTINF:2.0,\nhttp://169.254.169.254/latest/meta-data/\n#EXT-X-ENDLIST\n"
+    (tmp_path / "evil.mkv").write_bytes(body)
+    r = _req()
+    r.app.state.engine = _FakeEngine(str(tmp_path), _SplitHeadHandle("evil.mkv", len(body)))
+    with pytest.raises(HTTPException) as ei:
+        media_fetch.resolve_media_input(r, f"http://127.0.0.1:11470/{IH}/0")
+    assert ei.value.status_code == 504
+
+
+def test_a_file_smaller_than_the_head_is_still_sniffed_whole(tmp_path):
+    # The full-head rule must not refuse a file that is simply shorter than the 64 bytes asked for.
+    tiny = b"\x00\x00\x00\x18ftypmp42"
+    (tmp_path / "tiny.mp4").write_bytes(tiny)
+    r = _req()
+    r.app.state.engine = _FakeEngine(str(tmp_path), _FakeHandle("tiny.mp4", len(tiny)))
+    url = f"http://127.0.0.1:11470/{IH}/0"
+    assert media_fetch.resolve_media_input(r, url) == url

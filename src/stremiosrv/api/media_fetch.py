@@ -193,7 +193,8 @@ def _torrent_head(request: Request, ih: str, idx: int, n: int = 64) -> bytes | N
       * b""   -- nothing to inspect (no engine, no media file, or the torrent went away before its
                  head could be reached): ffprobe would fail on it too, so the caller lets it through;
       * None  -- the engine holds the torrent but its head did not arrive within the stream's own
-                 patience, or reading a present head failed. The caller MUST refuse: ffprobe runs
+                 patience, or reading a present head failed or came back short of the whole head
+                 (the next piece missed its timeout). The caller MUST refuse: ffprobe runs
                  AFTER this returns, on its own clock, and would read the head (and follow a
                  manifest's segment URLs) once the piece lands. Failing loud here is what stops the
                  two sequential waits from leaving a gap (mirrors embedded_ass._wait_for_head).
@@ -228,9 +229,13 @@ def _torrent_head(request: Request, ih: str, idx: int, n: int = 64) -> bytes | N
             return None  # head never arrived within the stream's read window -> refuse
         time.sleep(0.2)
     try:
-        return b"".join(wait_and_read(eng.save_path(), h, idx, 0, n - 1, count=False))
+        head = b"".join(wait_and_read(eng.save_path(), h, idx, 0, n - 1, count=False))
+        want = min(n, h.file_size(idx))
     except Exception:  # noqa: BLE001 — the piece is present but the read failed: REFUSE, don't let
         return None    # ffprobe read the same on-disk (possibly manifest) bytes we could not sniff
+    # The reader stops at a piece boundary when the next piece misses its timeout, so a head can come
+    # back short: "#EX" is not "#EXTM3U". A head that is not whole is one this sniff could not vet.
+    return head if len(head) == want else None
 
 
 def _refuse_own_manifest(request: Request, media_url: str) -> None:
