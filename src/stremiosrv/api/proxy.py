@@ -168,6 +168,10 @@ def _response_headers(resp: http.client.HTTPResponse, o: opts.ProxyOpts) -> dict
         value = _relayable(raw) if raw is not None else None
         if value is not None:
             out[name] = value
+    # As stock (server.js v4.22.1): an HTML body is never cached. Set before `r`, which may still
+    # override it.
+    if "text/html" in out.get("content-type", "").lower():
+        out["cache-control"] = "no-cache"
     for name, value in o.res_headers:
         if name.lower() not in _NOT_SETTABLE:
             out[name.lower()] = value

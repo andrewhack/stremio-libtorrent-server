@@ -259,6 +259,22 @@ def test_every_answer_is_sandboxed(upstream):
     assert listing.headers["content-security-policy"] == "sandbox"
 
 
+def test_an_html_answer_is_not_cached_as_stock_v4_22_1_does(upstream):
+    """Stock marks a relayed HTML body `cache-control: no-cache` (server.js v4.22.1); any other
+    body is relayed without one."""
+    page = _client().get(f"/proxy/{_opts(upstream)}/page.html")
+    assert page.headers["cache-control"] == "no-cache"
+    blob = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/blob")
+    assert "cache-control" not in blob.headers
+
+
+def test_r_still_sets_the_cache_policy_of_an_html_answer(upstream):
+    """Stock sets no-cache before it applies `r`, so the addon's own header wins."""
+    forced = "r=Cache-Control%3Amax-age%3D60"
+    page = _client().get(f"/proxy/{_opts(upstream, forced)}/page.html")
+    assert page.headers["cache-control"] == "max-age=60"
+
+
 def test_r_cannot_act_on_this_origin(upstream):
     """Cookies, stored data, the page's policy and redirects belong to the web player's origin."""
     forced = ("r=Set-Cookie%3Asid%3Dx", "r=Content-Security-Policy%3Ascript-src%20*",

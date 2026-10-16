@@ -11,9 +11,10 @@ family's `/create` — so check `.all` too when re-reading the bundle.
 **Checked against v4.22.1**, the `server.js` that `stremio-shell-ng` bundles since 2026-10-13
 (`stremio-linux-shell` carries v4.22.0). Its route registrations differ from v4.21.1 in one family:
 `/embedded-ass`, added in v4.22.0 (§4). Two other changes reach this server: `/proxy` answers
-`cache-control: no-cache` for an HTML body, and the default tracker list changed (ours includes
-all of it since 1.6.43). The rest is desktop-only: external players inside Flatpak, Celluloid as a
-player, and a random port once 11470–11474 are all taken. Line numbers below are still v4.21.1's.
+`cache-control: no-cache` for an HTML body (so does ours since 1.6.44), and the default tracker list
+changed (ours includes all of it since 1.6.43). The rest is desktop-only: external players inside
+Flatpak, Celluloid as a player, and a random port once 11470–11474 are all taken. Line numbers below
+are still v4.21.1's.
 
 > Status legend per endpoint:
 > - **route ✓** = registration confirmed in server.js (this pass).
@@ -99,22 +100,23 @@ ffprobe stream index.
 > `/proxy` (served since 1.6.7): `<opts>` is a query string read from the raw path — `d` the
 > destination origin, `h` a request header `Name:value` (repeatable), `r` a response header
 > (repeatable). stremio-video builds it for any stream whose addon sets
-> `behaviorHints.proxyHeaders`; stremio-core builds it for external players. Redirects are
-> followed as stock does (Location against the origin, `h` re-applied, the fifth is an error) and
-> `.m3u`/`.m3u8` playlists are rewritten to come back through the proxy. Our additions, because
-> this server may face the internet and serves the web player on the same origin: a client on the
-> home network (`STREMIOSRV_LIBRARY_ADDON_ALLOW`, by default the private ranges) may proxy
-> anywhere but to link-local addresses and two cloud-metadata addresses outside them
-> (`100.100.100.200`, `fd00:ec2::254`), any other client -- or a web page on another site -- only
-> to public addresses. A page is this server's own, not another site, when it is the Stremio web
-> app, or when its host, at any port, is the host the request went to, the host `SERVER_URL`
-> names, or an address on the home network. Every answer carries `Content-Security-Policy:
-> sandbox`, and `r` may not set cookies, that policy, Clear-Site-Data, Refresh or Location; a
-> request carrying this server's own proxy marker is refused on every route, so the proxy cannot
-> reach this server itself; at most 16 proxied requests run at once, of which internet clients may
-> hold 12 (503 beyond, counted in `/stats.json` `proxyRefused`); the upstream has 30 s, name
-> lookups aside, to connect and answer, redirects included, and to deliver a playlist (504
-> beyond); and a playlist is read, decompressed and rewritten within fixed sizes.
+> `behaviorHints.proxyHeaders`; stremio-core builds it for external players. Redirects are followed
+> as stock does (Location against the origin, `h` re-applied, the fifth is an error), `.m3u`/`.m3u8`
+> playlists are rewritten to come back through the proxy, and an HTML body is marked `Cache-Control:
+> no-cache` before `r` applies (stock since v4.22.1, ours since 1.6.44). Our additions, because this
+> server may face the internet and serves the web player on the same origin: a client on the home
+> network (`STREMIOSRV_LIBRARY_ADDON_ALLOW`, by default the private ranges) may proxy anywhere but
+> to link-local addresses and two cloud-metadata addresses outside them (`100.100.100.200`,
+> `fd00:ec2::254`), any other client -- or a web page on another site -- only to public addresses. A
+> page is this server's own, not another site, when it is the Stremio web app, or when its host, at
+> any port, is the host the request went to, the host `SERVER_URL` names, or an address on the home
+> network. Every answer carries `Content-Security-Policy: sandbox`, and `r` may not set cookies,
+> that policy, Clear-Site-Data, Refresh or Location; a request carrying this server's own proxy
+> marker is refused on every route, so the proxy cannot reach this server itself; at most 16 proxied
+> requests run at once, of which internet clients may hold 12 (503 beyond, counted in `/stats.json`
+> `proxyRefused`); the upstream has 30 s, name lookups aside, to connect and answer, redirects
+> included, and to deliver a playlist (504 beyond); and a playlist is read, decompressed and
+> rewritten within fixed sizes.
 
 ## 4. Subtitles
 
