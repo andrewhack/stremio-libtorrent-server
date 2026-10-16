@@ -133,7 +133,7 @@ def test_discovery_answers_the_file_s_ass_tracks_and_fonts(client, tools):
     r = client.get("/embedded-ass", params=_media())
     assert r.status_code == 200
     assert r.json() == {
-        "tracks": [{"number": 1, "codec": "ass", "lang": "eng", "label": "Signs (styled)"}],
+        "tracks": [{"number": 2, "codec": "ass", "lang": "eng", "label": "Signs (styled)"}],
         "fonts": [{"id": 3}, {"id": 4}],
     }
     assert metrics.playback_stats()["embeddedAssAsks"] == 1
@@ -158,7 +158,7 @@ def test_the_counters_reach_stats_json(client, tools):
 ])
 def test_anything_but_a_torrent_this_server_plays_is_404_and_never_probed(client, tools, media):
     assert client.get("/embedded-ass", params=media).status_code == 404
-    assert client.get("/embedded-ass/1.ass",
+    assert client.get("/embedded-ass/2.ass",
                       params={**media, "from": "0", "to": "60000"}).status_code == 404
     assert client.get("/embedded-ass/font/3", params=media).status_code == 404
     assert tools.runs == []
@@ -170,7 +170,7 @@ def test_discovery_takes_cores_minus_one_as_the_file_the_stream_plays(client, to
     file /<ih>/-1 serves -- the same guess -- so it is read, and remembered, by its real index."""
     r = client.get("/embedded-ass", params=_media(idx=-1))
     assert r.status_code == 200
-    assert [t["number"] for t in r.json()["tracks"]] == [1]
+    assert [t["number"] for t in r.json()["tracks"]] == [2]
     assert client.get("/embedded-ass", params=_media(idx=0)).status_code == 200
     [probe] = tools.of("ffprobe")
     assert probe[-1].endswith(f"/{IH}/0")
@@ -185,7 +185,7 @@ def test_minus_one_on_a_torrent_with_no_video_is_404(client, tools):
 def test_a_file_is_probed_once_whatever_is_asked(client, tools):
     client.get("/embedded-ass", params=_media())
     client.get("/embedded-ass", params=_media())
-    client.get("/embedded-ass/1.ass", params={**_media(), "from": "0", "to": "60000"})
+    client.get("/embedded-ass/2.ass", params={**_media(), "from": "0", "to": "60000"})
     client.get("/embedded-ass/font/3", params=_media())
     assert len(tools.of("ffprobe")) == 1
 
@@ -239,7 +239,7 @@ def test_a_probe_that_fails_is_a_counted_5xx(client, tools, setup, status):
 
 
 def test_a_window_is_ffmpeg_s_output_as_ass(client, tools):
-    r = client.get("/embedded-ass/1.ass", params={**_media(), "from": "30000", "to": "60000"})
+    r = client.get("/embedded-ass/2.ass", params={**_media(), "from": "30000", "to": "60000"})
     assert r.status_code == 200
     assert r.content == ASS
     assert r.headers["content-type"] == "text/x-ssa; charset=utf-8"
@@ -255,11 +255,12 @@ def test_a_window_is_ffmpeg_s_output_as_ass(client, tools):
     {"from": "60000", "to": "0"}, {"from": "0", "to": "300001"},
 ])
 def test_a_window_that_is_not_one_is_400_and_runs_nothing(client, tools, window):
-    assert client.get("/embedded-ass/1.ass", params={**_media(), **window}).status_code == 400
+    assert client.get("/embedded-ass/2.ass", params={**_media(), **window}).status_code == 400
     assert tools.runs == []
 
 
-@pytest.mark.parametrize("number", [2, 3, 9])  # a SubRip track, a font, no stream at all
+# The ASS track's old number (its stream index), the video's, a SubRip track's, a font's, nothing.
+@pytest.mark.parametrize("number", [1, 0, 3, 4, 9])
 def test_only_an_ass_track_is_extracted(client, tools, number):
     params = {**_media(), "from": "0", "to": "60000"}
     assert client.get(f"/embedded-ass/{number}.ass", params=params).status_code == 404
@@ -273,7 +274,7 @@ def test_an_extraction_that_fails_is_a_counted_5xx(client, tools, setup, status)
     else:
         tools.ffmpeg_rc = 1
     params = {**_media(), "from": "0", "to": "60000"}
-    assert client.get("/embedded-ass/1.ass", params=params).status_code == status
+    assert client.get("/embedded-ass/2.ass", params=params).status_code == status
     assert metrics.playback_stats()["embeddedAssFailures"] == 1
     assert metrics.playback_stats()["embeddedAssWindows"] == 0
 
@@ -285,7 +286,7 @@ def test_a_third_extraction_waits_then_is_503(client, tools, monkeypatch):
     monkeypatch.setattr(embedded_ass, "_WORK", busy)
     monkeypatch.setattr(embedded_ass, "_WORK_WAIT", 0.05)
     params = {**_media(), "from": "0", "to": "60000"}
-    assert client.get("/embedded-ass/1.ass", params=params).status_code == 503
+    assert client.get("/embedded-ass/2.ass", params=params).status_code == 503
     assert tools.of("ffmpeg") == []
     assert metrics.playback_stats()["embeddedAssFailures"] == 1
 
@@ -336,7 +337,7 @@ def test_a_window_never_waits_behind_a_font_dump(client, tools):
     font.start()
     time.sleep(0.3)  # the dump is running, holding the file lock
     started = time.monotonic()
-    r = client.get("/embedded-ass/1.ass", params={**_media(), "from": "0", "to": "60000"})
+    r = client.get("/embedded-ass/2.ass", params={**_media(), "from": "0", "to": "60000"})
     took = time.monotonic() - started
     font.join()
     assert r.status_code == 200

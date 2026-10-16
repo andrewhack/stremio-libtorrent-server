@@ -312,9 +312,10 @@ def _window(number: int, request: Request, media_url: str | None, from_q: str | 
         raise HTTPException(status_code=400,
                             detail="from and to are whole milliseconds, 0 < to - from <= 300000")
     info_hash, idx = _resolve(request, media_url)
-    if not _discovery(request, info_hash, idx).has_track(number):
+    index = _discovery(request, info_hash, idx).stream_index(number)
+    if index is None:
         raise HTTPException(status_code=404, detail="no such ASS track")
-    text = _run(window_argv(reader_url(request, info_hash, idx), number, *window), info_hash, idx)
+    text = _run(window_argv(reader_url(request, info_hash, idx), index, *window), info_hash, idx)
     metrics.record_embedded_ass("window")
     return Response(content=text, media_type="text/x-ssa; charset=utf-8")
 

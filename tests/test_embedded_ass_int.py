@@ -144,13 +144,13 @@ def test_discovery_over_the_real_path(server):
     status, ctype, body = _get(server, "/embedded-ass")
     assert (status, ctype) == (200, "application/json")
     assert json.loads(body) == {
-        "tracks": [{"number": 1, "codec": "ass", "lang": "eng", "label": "Signs (styled)"}],
+        "tracks": [{"number": 2, "codec": "ass", "lang": "eng", "label": "Signs (styled)"}],
         "fonts": [{"id": 3}, {"id": 4}],
     }
 
 
 def test_a_window_over_the_real_path(server):
-    status, ctype, body = _get(server, "/embedded-ass/1.ass", **{"from": "30000", "to": "60000"})
+    status, ctype, body = _get(server, "/embedded-ass/2.ass", **{"from": "30000", "to": "60000"})
     assert (status, ctype) == (200, "text/x-ssa; charset=utf-8")
     text = body.decode("utf-8")
     assert "[Script Info]" in text and "Style: Default,Fixture Sans" in text

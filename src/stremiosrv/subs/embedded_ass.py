@@ -8,8 +8,9 @@ server three things (stremio-video withStreamingServer.js and withHTMLSubtitles.
     GET /embedded-ass/<number>.ass?mediaURL=<u>&from=&to=   one track's events, a window at a time
     GET /embedded-ass/font/<id>?mediaURL=<u>                one font attachment's bytes
 
-No published stock server answers these (server.js v4.21.1 has none of them), so the contract here
-is the client's code. The routes are api/embedded_ass.py; this module is what they compute.
+Stock answers them since server.js 4.22.0, which reads the Matroska file itself; there a track is
+named by its Matroska TrackNumber. The routes are api/embedded_ass.py; this module is what they
+compute.
 """
 from __future__ import annotations
 
@@ -45,8 +46,11 @@ class Discovery:
         """The body of GET /embedded-ass."""
         return {"tracks": [dict(t) for t in self.tracks], "fonts": [{"id": i} for i in self.fonts]}
 
-    def has_track(self, number: int) -> bool:
-        return any(t["number"] == number for t in self.tracks)
+    def stream_index(self, number: int) -> int | None:
+        """The ffprobe stream index of the ASS track the client names `number`, or None."""
+        if any(t["number"] == number for t in self.tracks):
+            return number - 1
+        return None
 
 
 def _tags(stream: dict) -> dict:
@@ -75,16 +79,27 @@ def track_label(stream: dict) -> str:
     suffix is what tells the two apart."""
     tags = _tags(stream)
     name = (str(tags.get("title") or "").strip() or str(tags.get("language") or "").strip()
-            or f"Track {stream.get('index')}")
+            or f"Track {track_number(stream)}")
     return f"{name} (styled)"
+
+
+def track_number(stream: dict) -> int:
+    """The number a track is offered by: its Matroska TrackNumber, as stock 4.22.0 numbers it.
+
+    stremio-video 0.0.99 pairs `EMBEDDED_ASS_<number>` with the TV's own entry for the same track,
+    whose number it takes from the stock server, and hides one of the two. ffprobe 4.4 does not
+    report TrackNumber, but muxers write it from 1 in track order, which is ffprobe's stream order:
+    the stream index + 1. The client's Tizen code makes the same assumption (`id - 1` is the
+    player's own track index)."""
+    return stream["index"] + 1
 
 
 def discover(ffprobe_json: dict) -> Discovery:
     """Map `ffprobe -show_streams` output to what the client is offered.
 
-    A track's `number` and a font's `id` are ffprobe stream indices -- the numbering stock already
-    uses for `subtitle<id>.m3u8` -- and the routes hand them straight to ffmpeg's `-map 0:<n>` and
-    `-dump_attachment:<n>`."""
+    A track's `number` is track_number(); `Discovery.stream_index` turns it back into the stream
+    index ffmpeg's `-map 0:<n>` takes. A font's `id` is its stream index, which
+    `-dump_attachment:<n>` takes as it is: the client only ever hands it back."""
     tracks: list[dict] = []
     fonts: dict[int, str] = {}
     for s in ffprobe_json.get("streams") or []:
@@ -93,7 +108,7 @@ def discover(ffprobe_json: dict) -> Discovery:
         codec = str(s.get("codec_name") or "").lower()
         if s.get("codec_type") == "subtitle" and codec in ASS_CODECS:
             lang = str(_tags(s).get("language") or "").strip() or "und"
-            tracks.append({"number": s["index"], "codec": codec, "lang": lang,
+            tracks.append({"number": track_number(s), "codec": codec, "lang": lang,
                            "label": track_label(s)})
         elif is_font_attachment(s):
             mime = _mime(s)
@@ -122,9 +137,9 @@ def probe_argv(url: str) -> list[str]:
             url]
 
 
-def window_argv(url: str, number: int, from_ms: int, to_ms: int) -> list[str]:
-    """ffmpeg for one window: the track's header and styles, then its events from LEAD_MS before
-    `from_ms` up to `to_ms`, at the file's own times.
+def window_argv(url: str, index: int, from_ms: int, to_ms: int) -> list[str]:
+    """ffmpeg for one window of the track at stream `index`: its header and styles, then its events
+    from LEAD_MS before `from_ms` up to `to_ms`, at the file's own times.
 
     `-copyts` keeps the times absolute, which the client needs: it swaps each window in whole
     (`assRenderer.setTrack`) and draws it against the video's own clock. With `-copyts` the end
@@ -132,7 +147,7 @@ def window_argv(url: str, number: int, from_ms: int, to_ms: int) -> list[str]:
     all when measured against the image's ffmpeg 4.4.1."""
     return ["ffmpeg", "-hide_banner", "-v", "error", "-copyts",
             "-ss", _secs(max(0, from_ms - LEAD_MS)), "-i", url,
-            "-map", f"0:{number}", "-c:s", "copy", "-to", _secs(to_ms), "-f", "ass", "pipe:1"]
+            "-map", f"0:{index}", "-c:s", "copy", "-to", _secs(to_ms), "-f", "ass", "pipe:1"]
 
 
 def font_dump_argv(url: str, ids: list[int], out_dir: str) -> list[str]:

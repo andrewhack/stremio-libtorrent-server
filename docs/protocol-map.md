@@ -8,6 +8,13 @@ follow-up handler reading. **The first pass missed every route registered with `
 among them `/:infoHash/create` (issue #3), `/create`, `/proxy/:opts/:pathname` and each archive
 family's `/create` — so check `.all` too when re-reading the bundle.
 
+**Checked against v4.22.1**, the `server.js` that `stremio-shell-ng` bundles since 2026-10-13
+(`stremio-linux-shell` carries v4.22.0). Its route registrations differ from v4.21.1 in one family:
+`/embedded-ass`, added in v4.22.0 (§4). Two other changes reach this server: `/proxy` answers
+`cache-control: no-cache` for an HTML body, and the default tracker list changed. The rest is
+desktop-only: external players inside Flatpak, Celluloid as a player, and a random port once
+11470–11474 are all taken. Line numbers below are still v4.21.1's.
+
 > Status legend per endpoint:
 > - **route ✓** = registration confirmed in server.js (this pass).
 > - **shape ⏳** = response body shape still to be captured as a live fixture (Stage 0 Task 0.3).
@@ -118,9 +125,9 @@ ffprobe stream index.
 | GET | `/opensubHash` | 46706 | **OpenSubtitles hash** — must match algorithm exactly |
 | GET | `/tracks/:url` | 46644 | track extraction |
 | GET | `/subtitleSignature` | *(absent)* | embedded-subtitle signature — **client-only, no reference** |
-| GET | `/embedded-ass` | *(absent)* | a file's ASS tracks and fonts, for a TV's styled subtitles — **client-only** |
-| GET | `/embedded-ass/:number.ass` | *(absent)* | one ASS track, a window of events at a time |
-| GET | `/embedded-ass/font/:id` | *(absent)* | one font attachment |
+| GET | `/embedded-ass` | *(v4.22.0)* | a file's ASS tracks and fonts, for a TV's styled subtitles |
+| GET | `/embedded-ass/:number.ass` | *(v4.22.0)* | one ASS track, a window of events at a time |
+| GET | `/embedded-ass/font/:id` | *(v4.22.0)* | one font attachment |
 
 ### `/subtitleSignature` — the one route the reference does not define
 
@@ -142,11 +149,12 @@ upstream, and wrong subtitle matching is far harder to trace than absent subtitl
 when a server release defines the algorithm — `subtitleSignatureAsks` in `/stats.json` counts the
 demand in the meantime.
 
-### `/embedded-ass` — a TV's styled subtitles, also without a reference
+### `/embedded-ass` — a TV's styled subtitles
 
 `stremio-video` 0.0.97 (2026-09-17) lets a TV draw a file's embedded ASS/SSA tracks with their own
 styles and fonts. A TV never transcodes (`supportsTranscoding()` is false on Tizen and webOS), so
-with the player's ASS styling setting on, a direct play asks:
+a direct play asks (with the player's ASS styling setting on; since 0.0.100, always, to list the
+tracks as plain text when styling is off):
 
 - `GET /embedded-ass?mediaURL=<stream>` →
   `{"tracks":[{"number","codec","lang","label"}],"fonts":[{"id"}]}`. The player lists each track as
@@ -156,12 +164,23 @@ with the player's ASS styling setting on, a direct play asks:
   on a 30 s grid and swaps each one in whole.
 - `GET /embedded-ass/font/<id>?mediaURL=<stream>` → one font attachment's bytes.
 
-`server.reference.js` (v4.21.1) has none of the three, so the client's code
-(`withStreamingServer.js`, `withHTMLSubtitles.js`) is the contract, and the numbering is ours:
-`number` and `id` are ffprobe stream indices, the numbering the reference uses for
-`subtitle<id>.m3u8`. We answer only this server's own torrent streams (anything else is a 404,
-which the client drops silently), offer only `ass`/`ssa` tracks, and label each
-`<title or language> (styled)`. Each window includes events that start up to 10 s before it, so a
+v4.21.1 has none of the three; stock answers them since v4.22.0, reading the Matroska file itself.
+There `number` is the track's Matroska TrackNumber, a font's `id` its position among the
+attachments, a failure is a 422 with `{"error"}`, and only uncompressed, indexed tracks are listed.
+
+Since `stremio-video` 0.0.99 the number is more than a name in a URL: the player pairs
+`EMBEDDED_ASS_<number>` with the TV's own entry for the same track — numbered by stock
+`/tracks/<url>`, which it asks of `127.0.0.1:11470` — and hides one of the two. So here, too,
+`number` is the TrackNumber (since 1.6.42; before, the bare ffprobe stream index, one lower).
+ffprobe 4.4 does not report TrackNumber, but muxers write it from 1 in track order, so it is the
+stream index + 1 — what the client's Tizen code assumes as well. A font's `id` stays its ffprobe
+stream index: the client only ever hands it back. 0.0.100 can also ask `&deferFonts=1` and then
+`GET /embedded-ass/fonts`, which no stock version has; we list the fonts in the first answer, which
+the client takes as it is.
+
+We answer only this server's own torrent streams (anything else is a 404, which the client drops
+silently), offer every `ass`/`ssa` track — compressed or unindexed ones too, which ffmpeg reads —
+and label each `<title or language> (styled)`. Each window includes events that start up to 10 s before it, so a
 line still on screen when a window begins stays. ffmpeg reads the file through a loopback-only
 reader that never refocuses the torrent, so the TV's playhead keeps its priority.
 `embeddedAssAsks`, `embeddedAssWindows` and `embeddedAssFailures` in `/stats.json` show when a

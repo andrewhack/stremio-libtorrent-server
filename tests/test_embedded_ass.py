@@ -1,7 +1,7 @@
 """Embedded ASS for TV players, the pure half: what a file offers, and the ffmpeg that extracts it.
 
-The contract is stremio-video 0.0.98's code (no published stock server answers these routes). The
-tests at the bottom run the argv against a real file; they skip where ffmpeg is not installed.
+The contract is stremio-video's code and, since server.js v4.22.0, stock's numbering. The tests at
+the bottom run the argv against a real file; they skip where ffmpeg is not installed.
 """
 from __future__ import annotations
 
@@ -32,16 +32,27 @@ def test_only_ass_and_ssa_tracks_are_offered():
         _sub(4, "hdmv_pgs_subtitle"),
     ]})
     assert found.answer()["tracks"] == [
-        {"number": 1, "codec": "ass", "lang": "eng", "label": "Signs (styled)"},
-        {"number": 3, "codec": "ssa", "lang": "bul", "label": "bul (styled)"},
+        {"number": 2, "codec": "ass", "lang": "eng", "label": "Signs (styled)"},
+        {"number": 4, "codec": "ssa", "lang": "bul", "label": "bul (styled)"},
     ]
-    assert found.has_track(1) and found.has_track(3)
-    assert not found.has_track(2), "a SubRip track stays with the TV's native player"
+    assert (found.stream_index(2), found.stream_index(4)) == (1, 3)
+    assert found.stream_index(3) is None, "a SubRip track stays with the TV's native player"
+
+
+def test_a_track_s_number_is_its_matroska_track_number_not_its_stream_index():
+    """Stock 4.22.0 numbers a track by its Matroska TrackNumber, and stremio-video 0.0.99 pairs
+    `EMBEDDED_ASS_<number>` with the TV's own entry for that track by it. Muxers number tracks
+    from 1 in stream order, so it is the stream index + 1 -- what the client's Tizen code assumes
+    too. The old number, the bare index, names no track."""
+    found = ea.discover({"streams": [_sub(0, "ass"), _sub(1, "ass")]})
+    assert [t["number"] for t in found.tracks] == [1, 2]
+    assert (found.stream_index(1), found.stream_index(2)) == (0, 1)
+    assert found.stream_index(0) is None and found.stream_index(3) is None
 
 
 def test_a_track_with_no_tags_is_und_and_named_by_its_number():
     [track] = ea.discover({"streams": [_sub(7, "ass")]}).answer()["tracks"]
-    assert track == {"number": 7, "codec": "ass", "lang": "und", "label": "Track 7 (styled)"}
+    assert track == {"number": 8, "codec": "ass", "lang": "und", "label": "Track 8 (styled)"}
 
 
 def test_tag_keys_are_read_whatever_their_case():
@@ -137,7 +148,7 @@ def test_discover_on_a_real_file(fixture):
     out = subprocess.run(ea.probe_argv(str(fixture["path"])), capture_output=True, check=True)
     found = ea.discover(json.loads(out.stdout))
     assert found.answer() == {
-        "tracks": [{"number": 1, "codec": "ass", "lang": "eng", "label": "Signs (styled)"}],
+        "tracks": [{"number": 2, "codec": "ass", "lang": "eng", "label": "Signs (styled)"}],
         "fonts": [{"id": 3}, {"id": 4}],
     }
     assert found.fonts == {3: "application/x-truetype-font", 4: "application/octet-stream"}
