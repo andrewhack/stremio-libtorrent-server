@@ -11,9 +11,9 @@ family's `/create` — so check `.all` too when re-reading the bundle.
 **Checked against v4.22.1**, the `server.js` that `stremio-shell-ng` bundles since 2026-10-13
 (`stremio-linux-shell` carries v4.22.0). Its route registrations differ from v4.21.1 in one family:
 `/embedded-ass`, added in v4.22.0 (§4). Two other changes reach this server: `/proxy` answers
-`cache-control: no-cache` for an HTML body, and the default tracker list changed. The rest is
-desktop-only: external players inside Flatpak, Celluloid as a player, and a random port once
-11470–11474 are all taken. Line numbers below are still v4.21.1's.
+`cache-control: no-cache` for an HTML body, and the default tracker list changed (ours includes
+all of it since 1.6.43). The rest is desktop-only: external players inside Flatpak, Celluloid as a
+player, and a random port once 11470–11474 are all taken. Line numbers below are still v4.21.1's.
 
 > Status legend per endpoint:
 > - **route ✓** = registration confirmed in server.js (this pass).

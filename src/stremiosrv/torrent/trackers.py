@@ -44,6 +44,16 @@ DEFAULT_TRACKERS = [
     "udp://tracker1.myporn.club:9337/announce",
     "https://tracker.tamersunion.org:443/announce",
     "https://tracker.gbitt.info:443/announce",
+    # ... and the ones stock added by server.js v4.22.1.
+    "udp://tracker.skynetcloud.site:6969/announce",
+    "udp://tracker.ducks.party:1984/announce",
+    "udp://tracker.nyaa.vc:6969/announce",
+    "udp://tracker.corpscorp.online:80/announce",
+    "udp://tracker.gmi.gd:6969/announce",
+    "udp://tracker.farted.net:6969/announce",
+    "http://tracker.dler.org:6969/announce",
+    "http://tracker.dler.com:6969/announce",
+    "http://tracker.renfei.net:8080/announce",
 ]
 
 # Accepted tracker URL schemes (BitTorrent tracker + WebTorrent). Anything else (comments, junk,
