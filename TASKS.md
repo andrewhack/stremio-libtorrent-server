@@ -95,10 +95,10 @@ what "done" looks like, so it can be picked up without context.
   an HDR source is converted to 8-bit without tone mapping. *Done =* HDR→SDR tone mapping on the
   hardware paths that support it, leaving direct play of HDR untouched.
 
-- [ ] **VAAPI assumes one device and one capability.** Only `renderD128` is recognised, and a GPU
-  that cannot decode the source profile (HEVC 10-bit on older iGPUs) fails the job instead of
-  falling back. *Done =* render nodes are discovered, and an early hardware failure retries with
-  software decode + hardware encode, then software.
+- [ ] **VAAPI assumes one device and that it can encode.** Only `renderD128` is recognised. A source
+  the GPU cannot decode (HEVC 10-bit on older iGPUs, AV1) is decoded in software and still encoded
+  on the GPU since 1.6.41, but a GPU that cannot encode H.264 fails the job. *Done =* render nodes
+  are discovered, and an early hardware-encode failure retries in software.
 
 - [ ] **Two players on one file start two encodes.** Each playback attempt gets its own transcode
   job, so a reload or a second device runs a second full encode until the idle reaper ends the
