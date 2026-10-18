@@ -198,6 +198,10 @@ what "done" looks like, so it can be picked up without context.
   what the 30-second saver had written. The app's lifespan now runs it when uvicorn stops, before
   the cache root is given back. It also saves the DHT table, which no save had ever written: see
   the next item.
+- [x] **The DHT routing table is really written (1.6.46).** Every save asked the session for
+  `session_state()`, which the libtorrent 2.0.11 binding does not have, and the error was swallowed
+  by design: no server ever had a `dht.state`, so every start depended on the bootstrap routers.
+  `save_state()` writes what `read_session_params` reads back.
 
 - [ ] **Behind a TLS-terminating reverse proxy the server sees plain HTTP from one address.** nginx
   sets `X-Forwarded-Proto` and `X-Forwarded-For` from its own connection, so the library refuses

@@ -13,6 +13,7 @@ import os
 import shutil
 import threading
 import time
+import warnings
 
 try:
     import libtorrent as lt
@@ -800,13 +801,20 @@ class Engine:
                 pass
 
     def save_dht_state(self) -> bool:
-        """Persist the DHT routing table. Best-effort — never raises, never blocks a caller."""
+        """Persist the DHT routing table. Best-effort — never raises, never blocks a caller.
+
+        The libtorrent 2.0.11 binding has no `session.session_state()`. Until 1.6.45 this asked for
+        it, and every save failed silently: no server ever had a `dht.state`. `save_state()` writes
+        the "dht state" entry `read_session_params` reads at the next start (with the settings,
+        which load_session_params overrides with ours) -- measured: a session started from it
+        rejoins the DHT with its bootstrap routers unreachable, where one without it does not."""
         try:
-            params = self._ses.session_state()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)  # the binding's 1.x name
+                state = self._ses.save_state()
         except Exception:  # noqa: BLE001 — an lt API change must not take the saver thread down
             return False
-        return dht_state.save_session_params(
-            self._dht_state_path, params, write_buf=lt.write_session_params_buf)
+        return dht_state.save_session_params(self._dht_state_path, state, write_buf=lt.bencode)
 
     def _resume_saver_loop(self) -> None:
         """Background loop: periodically persist resume data so a crash/kill loses < interval of
