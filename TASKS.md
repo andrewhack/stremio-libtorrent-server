@@ -194,9 +194,10 @@ what "done" looks like, so it can be picked up without context.
   leaves a claim that expires after five minutes: a dead predecessor cannot be told from a live
   rival.
 
-- [x] **A stop saves resume data and the DHT table (1.6.45).** `Engine.shutdown()` had no caller,
-  so a stop kept only what the 30-second saver had written. The app's lifespan now runs it when
-  uvicorn stops, before the cache root is given back.
+- [x] **A stop saves resume data (1.6.45).** `Engine.shutdown()` had no caller, so a stop kept only
+  what the 30-second saver had written. The app's lifespan now runs it when uvicorn stops, before
+  the cache root is given back. It also saves the DHT table, which no save had ever written: see
+  the next item.
 
 - [ ] **Behind a TLS-terminating reverse proxy the server sees plain HTTP from one address.** nginx
   sets `X-Forwarded-Proto` and `X-Forwarded-For` from its own connection, so the library refuses
