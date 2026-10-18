@@ -194,11 +194,9 @@ what "done" looks like, so it can be picked up without context.
   leaves a claim that expires after five minutes: a dead predecessor cannot be told from a live
   rival.
 
-- [ ] **Stopping does not save resume data or the DHT table.** `Engine.shutdown()` (save every
-  resume record and the DHT state) has no caller, so a stop keeps only what the periodic saves
-  wrote; the README's "and on shutdown" for `dht.state` is not true yet. Since 1.6.31 a stop does
-  reach the server, so the app's shutdown can call it.
-  *Done =* a `docker stop` leaves fresh resume records and `dht.state`, within the stop timeout.
+- [x] **A stop saves resume data and the DHT table (1.6.45).** `Engine.shutdown()` had no caller,
+  so a stop kept only what the 30-second saver had written. The app's lifespan now runs it when
+  uvicorn stops, before the cache root is given back.
 
 - [ ] **Behind a TLS-terminating reverse proxy the server sees plain HTTP from one address.** nginx
   sets `X-Forwarded-Proto` and `X-Forwarded-For` from its own connection, so the library refuses

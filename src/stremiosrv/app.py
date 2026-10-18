@@ -1,6 +1,8 @@
+import asyncio
 import contextlib
 import contextvars
 import logging
+import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -140,8 +142,18 @@ class SuppressClientDisconnect:
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
     yield
-    # Stopping: give the cache root back, so a recreated container evicts from its first pass
-    # instead of waiting out the claim this one would otherwise leave behind.
+    # Stopping. First save what the next start needs -- every torrent's resume data and the DHT
+    # routing table (Engine.shutdown); the periodic saver runs only every 30 s. Off the event loop:
+    # it waits for libtorrent to write the resume files.
+    engine = getattr(app.state, "engine", None)
+    if engine is not None:
+        try:
+            await asyncio.to_thread(engine.shutdown)
+        except Exception as exc:  # noqa: BLE001 — the claim below must go back regardless
+            print(f"[engine] saving on shutdown failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr, flush=True)
+    # Then give the cache root back, so a recreated container evicts from its first pass instead
+    # of waiting out the claim this one would otherwise leave behind.
     cache.release_owner(app.state.settings.cache_root)
 
 
