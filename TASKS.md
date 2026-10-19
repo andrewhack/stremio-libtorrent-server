@@ -6,7 +6,7 @@ yet, and why each item is still open.
 Convention: `- [ ]` open · `- [x]` done · `- [~]` in progress · `- [!]` blocked. Every entry states
 what "done" looks like, so it can be picked up without context.
 
-**Last updated:** 2026-10-04
+**Last updated:** 2026-10-19
 
 ---
 
@@ -104,6 +104,16 @@ what "done" looks like, so it can be picked up without context.
   job, so a reload or a second device runs a second full encode until the idle reaper ends the
   first. *Done =* identical workloads share one ffmpeg, with the reaper counting its readers.
 
+- [ ] **Sometimes a play does not start while its download runs.** Reported in use: the library
+  shows the file downloading past 30% and the player still has not started; going back to the
+  title and playing again starts at once. Not traced, and no pattern found yet. Two known
+  mechanisms look like this from the outside. A transcoded play whose `/hlsv2/probe` waits out the
+  first-piece timeout (the head-check item above) leaves the client gone while the download goes
+  on. A re-check of a torrent that lost its resume data looks like a download on the library page,
+  which has no checking state. Neither leaves a trace: the hlsv2 504s are not logged. *Done =* the
+  hlsv2 504s are logged once each, a stuck start is traced to its cause, and that cause is fixed or
+  shown to be the head-check item.
+
 ## Library UI
 
 - [x] **A title the player streamed can be kept, not only removed.** The library UI used to pin
@@ -182,6 +192,15 @@ what "done" looks like, so it can be picked up without context.
 
 - [ ] **No way to play a title from the library page.** *Done =* a card (and each file of a pack)
   offers Watch, opening it in the bundled player through its own deep link.
+
+- [ ] **"Next episode" after a My Library row does not play.** Reported in use: after an episode
+  played from a My Library row, the next episode opens an empty player on the TV (Tizen); the
+  desktop player opens a release but does not play it. Picking a release on the title page plays
+  it. Our rows tie a torrent's episodes together with `bingeGroup`, but a row exists only for an
+  episode the server holds complete in that torrent, so the next episode of a partly fetched pack,
+  or one in another torrent, has no row in the group. Not traced yet. *Done =* a
+  wire trace from both players shows what "next episode" asks for and what the server answers,
+  and with the fix the next episode plays whenever the server holds it.
 
 ## Deployment & image
 
