@@ -161,8 +161,38 @@ def test_anything_but_a_torrent_this_server_plays_is_404_and_never_probed(client
     assert client.get("/embedded-ass/2.ass",
                       params={**media, "from": "0", "to": "60000"}).status_code == 404
     assert client.get("/embedded-ass/font/3", params=media).status_code == 404
+    assert client.get("/embedded-ass/fonts", params=media).status_code == 404
     assert tools.runs == []
     assert metrics.playback_stats()["embeddedAssAsks"] == 0
+
+
+def test_defer_fonts_answers_fonts_null_as_stock_v4_22_3_does(client, tools):
+    """A TV that draws subtitles itself (stremio-video 0.0.100+) asks with deferFonts=1, adds the
+    tracks at once, and asks /embedded-ass/fonts only when the answer's `fonts` is null."""
+    r = client.get("/embedded-ass", params={**_media(), "deferFonts": "1"})
+    assert r.status_code == 200
+    assert r.json() == {
+        "tracks": [{"number": 2, "codec": "ass", "lang": "eng", "label": "Signs (styled)"}],
+        "fonts": None,
+    }
+    assert metrics.playback_stats()["embeddedAssAsks"] == 1
+
+
+@pytest.mark.parametrize("value", ["0", "true", ""])
+def test_only_defer_fonts_1_defers_them(client, tools, value):
+    r = client.get("/embedded-ass", params={**_media(), "deferFonts": value})
+    assert r.json()["fonts"] == [{"id": 3}, {"id": 4}]
+
+
+def test_the_fonts_route_lists_the_fonts_from_the_same_probe(client, tools):
+    """GET /embedded-ass/fonts (stock since server.js v4.22.3): the fonts as a bare list. Asked
+    right after a deferred discovery, it reuses that probe."""
+    client.get("/embedded-ass", params={**_media(), "deferFonts": "1"})
+    r = client.get("/embedded-ass/fonts", params=_media())
+    assert r.status_code == 200
+    assert r.json() == [{"id": 3}, {"id": 4}]
+    assert len(tools.of("ffprobe")) == 1
+    assert metrics.playback_stats()["embeddedAssAsks"] == 1
 
 
 def test_discovery_takes_cores_minus_one_as_the_file_the_stream_plays(client, tools):

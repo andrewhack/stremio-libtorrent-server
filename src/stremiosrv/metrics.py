@@ -82,7 +82,7 @@ def record_library_subtitles(reported: bool, learned: int) -> None:
 
 def record_embedded_ass(kind: str) -> None:
     """A TV's embedded-ASS routes (api/embedded_ass.py): `ask` a discovery answered, `window` a
-    window of subtitles served, `failure` any 5xx from the three routes.
+    window of subtitles served, `failure` any 5xx from those routes.
 
     The first `ask` a box ever records is the evidence that a client runs stremio-video >= 0.0.97
     with ASS styling on. No stremio-web release carried that when these routes shipped."""

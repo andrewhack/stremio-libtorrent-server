@@ -84,6 +84,15 @@ def test_a_file_with_no_ass_answers_empty_lists():
     assert ea.discover({}).answer() == {"tracks": [], "fonts": []}
 
 
+def test_deferred_fonts_are_null_in_the_answer_and_listed_on_their_own():
+    found = ea.discover({"streams": [_sub(1, "ass"), _att(3, filename="a.ttf")]})
+    assert found.answer(defer_fonts=True)["fonts"] is None
+    assert found.answer(defer_fonts=True)["tracks"] == found.answer()["tracks"]
+    assert found.font_list() == [{"id": 3}] == found.answer()["fonts"]
+    # stock answers null even for a file without fonts; the client then asks for none
+    assert ea.discover({}).answer(defer_fonts=True) == {"tracks": [], "fonts": None}
+
+
 def test_streams_without_an_index_are_skipped():
     assert ea.discover({"streams": [{"codec_type": "subtitle", "codec_name": "ass"}, "junk"]}
                        ).tracks == ()

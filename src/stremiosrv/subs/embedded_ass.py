@@ -2,15 +2,16 @@
 
 stremio-video 0.0.97+ lets a TV draw a file's embedded ASS/SSA tracks with their own styles and
 fonts. A TV never transcodes -- it plays the file directly -- so the player asks the streaming
-server three things (stremio-video withStreamingServer.js and withHTMLSubtitles.js):
+server these things (stremio-video withStreamingServer.js and withHTMLSubtitles.js):
 
-    GET /embedded-ass?mediaURL=<u>                          which ASS tracks and fonts the file has
+    GET /embedded-ass?mediaURL=<u>[&deferFonts=1]           which ASS tracks and fonts the file has
+    GET /embedded-ass/fonts?mediaURL=<u>                    its fonts, if the answer deferred them
     GET /embedded-ass/<number>.ass?mediaURL=<u>&from=&to=   one track's events, a window at a time
     GET /embedded-ass/font/<id>?mediaURL=<u>                one font attachment's bytes
 
-Stock answers them since server.js 4.22.0, which reads the Matroska file itself; there a track is
-named by its Matroska TrackNumber. The routes are api/embedded_ass.py; this module is what they
-compute.
+Stock answers them since server.js 4.22.0 (deferFonts and /fonts since 4.22.3), reading the
+Matroska file itself; there a track is named by its Matroska TrackNumber. The routes are
+api/embedded_ass.py; this module is what they compute.
 """
 from __future__ import annotations
 
@@ -42,9 +43,15 @@ class Discovery:
     tracks: tuple[dict, ...] = ()
     fonts: dict[int, str] = field(default_factory=dict)
 
-    def answer(self) -> dict:
-        """The body of GET /embedded-ass."""
-        return {"tracks": [dict(t) for t in self.tracks], "fonts": [{"id": i} for i in self.fonts]}
+    def answer(self, defer_fonts: bool = False) -> dict:
+        """The body of GET /embedded-ass. With deferFonts=1, `fonts` is null even when the file has
+        none, as stock answers it: the client then asks /embedded-ass/fonts if it got tracks."""
+        return {"tracks": [dict(t) for t in self.tracks],
+                "fonts": None if defer_fonts else self.font_list()}
+
+    def font_list(self) -> list[dict]:
+        """The body of GET /embedded-ass/fonts, and the discovery answer's `fonts`."""
+        return [{"id": i} for i in self.fonts]
 
     def stream_index(self, number: int) -> int | None:
         """The ffprobe stream index of the ASS track the client names `number`, or None."""

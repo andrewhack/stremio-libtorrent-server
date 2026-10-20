@@ -120,7 +120,7 @@ def private_reader(secret: str, info_hash: str, idx: int, request: Request) -> R
     return StreamingResponse(body, status_code=206, headers=headers)
 
 
-# --- the three routes the TV calls ---
+# --- the routes the TV calls ---
 
 PROBE_TIMEOUT = 30
 FFMPEG_TIMEOUT = 30
@@ -283,16 +283,30 @@ def _run(argv: list[str], info_hash: str, idx: int) -> bytes:
 
 
 @router.get("/embedded-ass")
-async def embedded_ass(request: Request, mediaURL: str | None = None) -> dict:
-    """`{"tracks": [{number, codec, lang, label}], "fonts": [{id}]}` for the file being played."""
-    return await _off_pool(_embedded_ass, request, mediaURL)
+async def embedded_ass(request: Request, mediaURL: str | None = None,
+                       deferFonts: str | None = None) -> dict:
+    """`{"tracks": [{number, codec, lang, label}], "fonts": [{id}]}` for the file being played;
+    `fonts` is null with deferFonts=1, which a TV drawing subtitles itself sends (0.0.100+)."""
+    return await _off_pool(_embedded_ass, request, mediaURL, deferFonts == "1")
 
 
-def _embedded_ass(request: Request, media_url: str | None) -> dict:
+def _embedded_ass(request: Request, media_url: str | None, defer_fonts: bool) -> dict:
     info_hash, idx = _resolve(request, media_url)
     found = _discovery(request, info_hash, idx)
     metrics.record_embedded_ass("ask")
-    return found.answer()
+    return found.answer(defer_fonts)
+
+
+@router.get("/embedded-ass/fonts")
+async def embedded_ass_fonts(request: Request, mediaURL: str | None = None) -> list[dict]:
+    """`[{id}]`: the fonts a deferred discovery left out. Stock since server.js v4.22.3. Ours come
+    from the same probe, so there is nothing to gain by deferring them -- answered as stock does."""
+    return await _off_pool(_fonts, request, mediaURL)
+
+
+def _fonts(request: Request, media_url: str | None) -> list[dict]:
+    info_hash, idx = _resolve(request, media_url)
+    return _discovery(request, info_hash, idx).font_list()
 
 
 @router.get("/embedded-ass/{number:int}.ass")
