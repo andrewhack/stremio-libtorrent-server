@@ -8,13 +8,19 @@ follow-up handler reading. **The first pass missed every route registered with `
 among them `/:infoHash/create` (issue #3), `/create`, `/proxy/:opts/:pathname` and each archive
 family's `/create` — so check `.all` too when re-reading the bundle.
 
-**Checked against v4.22.1**, the `server.js` that `stremio-shell-ng` bundles since 2026-10-13
-(`stremio-linux-shell` carries v4.22.0). Its route registrations differ from v4.21.1 in one family:
-`/embedded-ass`, added in v4.22.0 (§4). Two other changes reach this server: `/proxy` answers
-`cache-control: no-cache` for an HTML body (so does ours since 1.6.44), and the default tracker list
-changed (ours includes all of it since 1.6.43). The rest is desktop-only: external players inside
-Flatpak, Celluloid as a player, and a random port once 11470–11474 are all taken. Line numbers below
-are still v4.21.1's.
+**Checked against v4.22.3**, the `server.js` that `stremio-shell-ng` bundles since 2026-10-20
+(v5.0.27; `stremio-linux-shell` carries v4.22.0). Its route registrations differ from v4.21.1 in one
+family: `/embedded-ass`, added in v4.22.0, with `/embedded-ass/fonts` added in v4.22.3 (§4). Other
+changes reach this server:
+- `/proxy` answers `cache-control: no-cache` for an HTML body (v4.22.1; ours since 1.6.44);
+- after `r`, it sets `x-content-type-options: nosniff` on every answer and
+  `content-disposition: attachment` on an HTML one (v4.22.3; ours since 1.6.48);
+- the default tracker list changed (ours has all of v4.22.3's since 1.6.48).
+
+The rest is desktop-only: external players inside Flatpak, Celluloid as a player, a random port once
+11470–11474 are all taken, and, in v4.22.3, external players launched without a shell. v4.22.3 also
+escapes a subtitle path it burns into a transcode, a filter this server never builds. Line numbers
+below are still v4.21.1's.
 
 > Status legend per endpoint:
 > - **route ✓** = registration confirmed in server.js (this pass).
@@ -110,15 +116,17 @@ ffprobe stream index.
 > `behaviorHints.proxyHeaders`; stremio-core builds it for external players. Redirects are followed
 > as stock does (Location against the origin, `h` re-applied, the fifth is an error), `.m3u`/`.m3u8`
 > playlists are rewritten to come back through the proxy, and an HTML body is marked `Cache-Control:
-> no-cache` before `r` applies (stock since v4.22.1, ours since 1.6.44). Our additions, because this
+> no-cache` before `r` applies (stock since v4.22.1, ours since 1.6.44). After `r`, every answer
+> carries `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`, and an HTML one
+> `Content-Disposition: attachment` (stock since v4.22.3; ours since 1.6.48, the sandbox since
+> 1.6.7). Our additions, because this
 > server may face the internet and serves the web player on the same origin: a client on the home
 > network (`STREMIOSRV_LIBRARY_ADDON_ALLOW`, by default the private ranges) may proxy anywhere but
 > to link-local addresses and two cloud-metadata addresses outside them (`100.100.100.200`,
 > `fd00:ec2::254`), any other client -- or a web page on another site -- only to public addresses. A
 > page is this server's own, not another site, when it is the Stremio web app, or when its host, at
 > any port, is the host the request went to, the host `SERVER_URL` names, or an address on the home
-> network. Every answer carries `Content-Security-Policy: sandbox`, and `r` may not set cookies,
-> that policy, Clear-Site-Data, Refresh or Location; a request carrying this server's own proxy
+> network. `r` may not set cookies, the sandbox policy, Clear-Site-Data, Refresh or Location; a request carrying this server's own proxy
 > marker is refused on every route, so the proxy cannot reach this server itself; at most 16 proxied
 > requests run at once, of which internet clients may hold 12 (503 beyond, counted in `/stats.json`
 > `proxyRefused`); the upstream has 30 s, name lookups aside, to connect and answer, redirects
@@ -137,6 +145,7 @@ ffprobe stream index.
 | GET | `/embedded-ass` | *(v4.22.0)* | a file's ASS tracks and fonts, for a TV's styled subtitles |
 | GET | `/embedded-ass/:number.ass` | *(v4.22.0)* | one ASS track, a window of events at a time |
 | GET | `/embedded-ass/font/:id` | *(v4.22.0)* | one font attachment |
+| GET | `/embedded-ass/fonts` | *(v4.22.3)* | the fonts, when the first answer deferred them |
 
 ### `/subtitleSignature` — the one route the reference does not define
 
@@ -165,15 +174,19 @@ styles and fonts. A TV never transcodes (`supportsTranscoding()` is false on Tiz
 a direct play asks (with the player's ASS styling setting on; since 0.0.100, always, to list the
 tracks as plain text when styling is off):
 
-- `GET /embedded-ass?mediaURL=<stream>` →
+- `GET /embedded-ass?mediaURL=<stream>[&deferFonts=1]` →
   `{"tracks":[{"number","codec","lang","label"}],"fonts":[{"id"}]}`. The player lists each track as
   `EMBEDDED_ASS_<number>` beside its own native entry, and fetches every font when one is selected.
+  With `deferFonts=1`, which 0.0.100 sends on a TV that draws subtitles itself, `fonts` is `null`.
+- `GET /embedded-ass/fonts?mediaURL=<stream>` → `[{"id"}]`, asked only when `fonts` came back `null`
+  and there are tracks.
 - `GET /embedded-ass/<number>.ass?mediaURL=<stream>&from=<ms>&to=<ms>` → the track's header and
   styles, then its events in that window at the file's own times. The player asks for 60 s windows
   on a 30 s grid and swaps each one in whole.
 - `GET /embedded-ass/font/<id>?mediaURL=<stream>` → one font attachment's bytes.
 
-v4.21.1 has none of the three; stock answers them since v4.22.0, reading the Matroska file itself.
+v4.21.1 has none of them; stock answers them since v4.22.0 (`deferFonts` and `/fonts` since
+v4.22.3), reading the Matroska file itself.
 There `number` is the track's Matroska TrackNumber, a font's `id` its position among the
 attachments, a failure is a 422 with `{"error"}`, and only uncompressed, indexed tracks are listed.
 
@@ -183,9 +196,9 @@ Since `stremio-video` 0.0.99 the number is more than a name in a URL: the player
 `number` is the TrackNumber (since 1.6.42; before, the bare ffprobe stream index, one lower).
 ffprobe 4.4 does not report TrackNumber, but muxers write it from 1 in track order, so it is the
 stream index + 1 — what the client's Tizen code assumes as well. A font's `id` stays its ffprobe
-stream index: the client only ever hands it back. 0.0.100 can also ask `&deferFonts=1` and then
-`GET /embedded-ass/fonts`, which no stock version has; we list the fonts in the first answer, which
-the client takes as it is.
+stream index: the client only ever hands it back. We answer `deferFonts=1` and `/fonts` as stock
+does since 1.6.48 (before, the fonts always came in the first answer, which the client also takes).
+Ours come from the same probe as the tracks, so deferring them saves nothing here.
 
 We answer only this server's own torrent streams (anything else is a 404, which the client drops
 silently), offer every `ass`/`ssa` track — compressed or unindexed ones too, which ffmpeg reads —
