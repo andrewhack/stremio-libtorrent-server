@@ -54,6 +54,10 @@ DEFAULT_TRACKERS = [
     "http://tracker.dler.org:6969/announce",
     "http://tracker.dler.com:6969/announce",
     "http://tracker.renfei.net:8080/announce",
+    # ... and by v4.22.3.
+    "udp://tracker.tryhackx.org:6969/announce",
+    "http://tracker2.dler.org:80/announce",
+    "udp://tracker.peerfect.org:6969/announce",
 ]
 
 # Accepted tracker URL schemes (BitTorrent tracker + WebTorrent). Anything else (comments, junk,
