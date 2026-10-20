@@ -268,6 +268,27 @@ def test_an_html_answer_is_not_cached_as_stock_v4_22_1_does(upstream):
     assert "cache-control" not in blob.headers
 
 
+def test_every_answer_says_nosniff_as_stock_v4_22_3_does(upstream):
+    """Stock sets it after `r` (server.js v4.22.3): a relayed body is only ever the type it is
+    labelled, never one a browser guesses from its bytes."""
+    forced = "r=X-Content-Type-Options%3Asniff"
+    for r in (_client().get(f"/proxy/{_opts(upstream)}/page.html"),
+              _client().head(f"/proxy/{_opts(upstream, TOKEN)}/blob"),
+              _client().get(f"/proxy/{_opts(upstream, TOKEN)}/list.m3u8"),
+              _client().get(f"/proxy/{_opts(upstream, TOKEN, forced)}/blob")):
+        assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_an_html_answer_is_a_download_as_stock_v4_22_3_does(upstream):
+    """Stock sets it after `r`, for an HTML body only; any other is relayed without one."""
+    page = _client().get(f"/proxy/{_opts(upstream)}/page.html")
+    assert page.headers["content-disposition"] == "attachment"
+    forced = _client().get(f"/proxy/{_opts(upstream, 'r=Content-Disposition%3Ainline')}/page.html")
+    assert forced.headers["content-disposition"] == "attachment"
+    blob = _client().get(f"/proxy/{_opts(upstream, TOKEN)}/blob")
+    assert "content-disposition" not in blob.headers
+
+
 def test_r_still_sets_the_cache_policy_of_an_html_answer(upstream):
     """Stock sets no-cache before it applies `r`, so the addon's own header wins."""
     forced = "r=Cache-Control%3Amax-age%3D60"

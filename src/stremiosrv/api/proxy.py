@@ -176,6 +176,11 @@ def _response_headers(resp: http.client.HTTPResponse, o: opts.ProxyOpts) -> dict
         if name.lower() not in _NOT_SETTABLE:
             out[name.lower()] = value
     out["content-security-policy"] = SANDBOX
+    # As stock (server.js v4.22.3), after `r`: a body is only ever the type it is labelled, and an
+    # HTML body is a download, never a page shown on this origin.
+    out["x-content-type-options"] = "nosniff"
+    if "text/html" in out.get("content-type", "").lower():
+        out["content-disposition"] = "attachment"
     return out
 
 
