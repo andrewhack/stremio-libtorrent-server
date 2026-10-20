@@ -65,11 +65,11 @@ what "done" looks like, so it can be picked up without context.
   none. The list now gives the position (`id` keeps the ffprobe index), and an extraction that runs
   past 60 s answers 504 instead of escaping as a 500.
 
-- [ ] **Every audio track in a transcoded stream.** Our HLS output carries the first audio track only;
-  stock lists each as an `#EXT-X-MEDIA:TYPE=AUDIO` rendition. A file with two or more audio tracks is
-  always transcoded by the player (it refuses direct play), and then loses every language but the
-  first. *Done =* the master playlist offers every audio track, as stock does, proven against the
-  real-browser gate.
+- [x] **Every audio track in a transcoded stream (1.6.47).** Our HLS output carried the first audio
+  track only, so a file with two or more audio tracks, which the player always transcodes, lost
+  every language but the first. Such a file now gets one rendition per track (up to 8, each encoded
+  to AAC stereo) in a master the server writes in stock's shape, with DEFAULT on the track the file
+  marks default. A file with one audio track keeps the output it had.
 
 - [ ] **Embedded subtitles in a transcoded stream (the browser half).** A transcoded stream carries
   no subtitle track; stock serves WebVTT renditions (`subtitle<id>.m3u8`). Needs the two items above

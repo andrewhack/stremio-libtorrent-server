@@ -62,6 +62,13 @@ Query params observed on hlsv2 requests (from live logs): `mediaURL`, `videoCode
 `audioCodecs` (repeatable), `maxAudioChannels`, `maxWidth`. **master.m3u8** is requested too
 (legacy route family below also exists).
 
+Stock's master lists every audio track as an `#EXT-X-MEDIA:TYPE=AUDIO` rendition (`audio0.m3u8`,
+`audio1.m3u8`, …) named by its title, else its language, with the video in `video0.m3u8`. Ours does
+the same for a file with two or more audio tracks (since 1.6.47; up to 8, each encoded to AAC
+stereo) with two differences: DEFAULT goes to the track the file marks default (stock: the first),
+and two tracks never share a NAME. A file with one audio track keeps ffmpeg's own single-rendition
+master. Our child URIs carry no query; the player follows whatever the master names.
+
 `mediaURL` here — and on the per-stream subtitle routes `/{infoHash}/{fileIdx}/subtitles.json` and
 `/{infoHash}/{fileIdx}/subtitles.vtt` — is never opened by ffprobe/ffmpeg directly once it points
 outside this server: the server fetches it through `/_hls-media-read/<secret>/<ticket>`, ffmpeg's own

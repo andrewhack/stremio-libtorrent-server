@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -42,8 +43,12 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
         # ffmpeg takes the short body for the end of the file and finishes the playlist there.
         # HTTP-only: on a file input ffmpeg rejects the option and does not start.
         argv += ["-reconnect", "1", "-reconnect_delay_max", "30"]
+    tracks = (a or {}).get("tracks")
     argv += ["-i", media_url, "-map", "0:v:0"]
-    if a is not None:
+    if tracks:
+        for t in tracks:
+            argv += ["-map", f"0:{t['index']}"]
+    elif a is not None:
         argv += ["-map", "0:a:0?"]
 
     # Video
@@ -76,6 +81,21 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
         else:
             argv += ["-c:a", "aac", "-ac", "2", "-ab", "384000"]
 
+    if tracks:
+        # One rendition per stream: video0, then audio0, audio1... in track order, the names the
+        # stock server gives them. A name becomes a file name, so it is never the track's tag text.
+        # No ffmpeg master: its own names every track "audio_N" and cannot mark the file's default
+        # one, so the server writes it (audio_master).
+        renditions = ["v:0,name:video0"] + [f"a:{n},name:audio{n}" for n in range(len(tracks))]
+        argv += [
+            "-f", "hls", "-hls_time", "4", "-hls_playlist_type", "event",
+            "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments",
+            "-hls_fmp4_init_filename", "%v_init.mp4",
+            "-hls_segment_filename", f"{out_dir}/%v_%d.m4s",
+            "-var_stream_map", " ".join(renditions), f"{out_dir}/%v.m3u8",
+        ]
+        return argv
+
     argv += [
         "-f", "hls", "-hls_time", "4", "-hls_playlist_type", "event",
         "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments",
@@ -84,6 +104,54 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
         "-master_pl_name", "master.m3u8", f"{out_dir}/index.m3u8",
     ]
     return argv
+
+
+_LANGUAGE_TAG = re.compile(r"[A-Za-z0-9-]{1,35}")
+
+# Required on every variant. With one video rendition there is nothing for a player to choose
+# between, so the value is nominal: the stock server sends this constant for the same playlist.
+_NOMINAL_BANDWIDTH = 164000
+
+
+def _quoted_text(text: str) -> str:
+    """Tag text made safe inside an HLS quoted-string, which has no escape: a double quote would
+    end the attribute and a line break the tag."""
+    text = "".join(c if c.isprintable() else " " for c in text.replace('"', "'"))
+    return " ".join(text.split())
+
+
+def audio_master(tracks: list[dict]) -> str:
+    """The master playlist of a multi-track transcode: one audio rendition per track, grouped
+    under the video rendition, in the shape the stock server serves.
+
+    A track is named by its title, else its language, else its position, and two tracks never
+    share a name. DEFAULT goes to the track the file marks default, else the first.
+    """
+    default = next((n for n, t in enumerate(tracks) if t.get("default")), 0)
+    seen: dict[str, int] = {}
+    lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"]
+    for n, t in enumerate(tracks):
+        lang = t.get("lang") or ""
+        name = (_quoted_text(t.get("title") or "") or _quoted_text(lang)
+                or f"Audio {n + 1}")
+        seen[name] = seen.get(name, 0) + 1
+        if seen[name] > 1:
+            name = f"{name} ({seen[name]})"
+        language = f',LANGUAGE="{lang}"' if _LANGUAGE_TAG.fullmatch(lang) else ""
+        lines.append(
+            f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="{name}"{language},'
+            f'AUTOSELECT=YES,DEFAULT={"YES" if n == default else "NO"},URI="audio{n}.m3u8"')
+    lines += [f'#EXT-X-STREAM-INF:BANDWIDTH={_NOMINAL_BANDWIDTH},AUDIO="audio"', "video0.m3u8"]
+    return "\n".join(lines) + "\n"
+
+
+def first_playlist(decision: dict) -> str:
+    """The playlist whose arrival shows ffmpeg is producing output.
+
+    For a single track that is ffmpeg's own master. A multi-track job's master is the server's,
+    written before ffmpeg starts, so it proves nothing: the video rendition's playlist does.
+    """
+    return "video0.m3u8" if (decision.get("audio") or {}).get("tracks") else "master.m3u8"
 
 
 class Converter:
@@ -156,6 +224,11 @@ class Converter:
                 return self.job_dir(job_id)
             d = self.job_dir(job_id)
             d.mkdir(parents=True, exist_ok=True)
+            tracks = (decision.get("audio") or {}).get("tracks")
+            if tracks:
+                tmp = d / "master.m3u8.tmp"
+                tmp.write_text(audio_master(tracks), encoding="utf-8")
+                tmp.replace(d / "master.m3u8")
             argv = build_hls_cmd(media_url, decision, self.profile, d)
             # Not a context manager on purpose: this handle IS ffmpeg's stderr for the lifetime
             # of the child process, so closing it at the end of a with-block would truncate the

@@ -70,7 +70,12 @@ def map_probe(ffprobe_json: dict) -> dict:
                 hasBFrames=bool(s.get("has_b_frames")),
             )
         elif ct == "audio":
-            entry.update(channels=s.get("channels"), lang=(s.get("tags") or {}).get("language"))
+            tags = s.get("tags") or {}
+            # title as the stock probe names it; default is the file's own choice of track, which
+            # the master playlist of a multi-track transcode marks DEFAULT.
+            entry.update(channels=s.get("channels"), lang=tags.get("language"),
+                         title=tags.get("title"),
+                         default=bool((s.get("disposition") or {}).get("default")))
         elif ct == "subtitle":
             entry["lang"] = (s.get("tags") or {}).get("language")
         streams.append(entry)

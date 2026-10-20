@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from stremiosrv.api.media_fetch import resolve_media_input
+from stremiosrv.transcode.converter import first_playlist
 from stremiosrv.transcode.fingerprint import decide
 from stremiosrv.transcode.probe import ProbeTimeoutError, probe_media
 
@@ -84,7 +85,7 @@ def master(
         d = conv.ensure_job(job_id, media, dec)
     except ValueError as e:
         raise HTTPException(status_code=400, detail="invalid job id") from e
-    if not _wait_file(d / "master.m3u8", 25):
+    if not _wait_file(d / first_playlist(dec), 25):
         raise HTTPException(status_code=504, detail="transcode did not start")
     return FileResponse(d / "master.m3u8", media_type=_M3U8)
 
