@@ -98,6 +98,12 @@ Stremio UI playing through our engine — no separate client needed.
   server's own. TLS options: see [`cert-guide.md`](cert-guide.md) (self-signed default /
   bring-your-own / Let's Encrypt).
 - **Login & addons** are handled by the web player against Stremio's cloud — not by this server.
+- The image changes two things in the bundled build, and its build fails if either file has moved:
+  `docker/install-web-player-loader.sh` installs our loader (it seeds the server URL once and keeps
+  the user's pick), and `docker/web-player-hls-worker-off.sh` switches hls.js's Web Worker off.
+  That worker cannot start in the web build, and the fallback hls.js takes can leave a transcode
+  with separate audio tracks without an audio buffer, so the start fails. Other copies of the web
+  app still start the worker, so they can fail such a start until their build is fixed.
 
 ### Ports / networking
 - **8080** — web player + API (HTTP/LAN, no cert).

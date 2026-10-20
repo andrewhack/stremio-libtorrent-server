@@ -21,6 +21,9 @@ RUN uv sync --no-dev --python 3.12 && chmod +x docker/entrypoint.sh
 # The web player's loader seeds the streaming-server URL once and then keeps the user's pick; the
 # base image's own reverted it every 5 s. Fails the build if the web build's layout has moved.
 RUN sh docker/install-web-player-loader.sh /srv/stremio-server/build docker/web-player-loader.js
+# hls.js's worker cannot start in this web build, and the fallback can leave a transcode with separate
+# audio tracks without an audio buffer. Fails the build if the setting has moved.
+RUN sh docker/web-player-hls-worker-off.sh /srv/stremio-server/build
 
 ENV STREMIOSRV_CACHE_ROOT=/root/.stremio-server
 ENV PATH="/srv/app/.venv/bin:${PATH}"

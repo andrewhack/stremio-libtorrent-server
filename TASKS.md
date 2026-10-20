@@ -69,7 +69,10 @@ what "done" looks like, so it can be picked up without context.
   track only, so a file with two or more audio tracks, which the player always transcodes, lost
   every language but the first. Such a file now gets one rendition per track (up to 8, each encoded
   to AAC stereo) in a master the server writes in stock's shape, with DEFAULT on the track the file
-  marks default. A file with one audio track keeps the output it had.
+  marks default. A file with one audio track keeps the output it had. The bundled web player runs
+  hls.js without its worker, which cannot start in that build and whose fallback could leave such a
+  start without an audio buffer; other copies of the web app keep that failure until their build
+  is fixed.
 
 - [ ] **Embedded subtitles in a transcoded stream (the browser half).** A transcoded stream carries
   no subtitle track; stock serves WebVTT renditions (`subtitle<id>.m3u8`). Needs the two items above
