@@ -28,11 +28,13 @@ def _converter(request: Request):
     return getattr(request.app.state, "converter", None)
 
 
-def _wait_file(path: Path, timeout: float) -> bool:
+def _wait_file(path: Path, timeout: float, while_waiting=None) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if path.exists() and path.stat().st_size > 0:
             return True
+        if while_waiting is not None:
+            while_waiting()
         time.sleep(0.2)
     return path.exists()
 
@@ -104,7 +106,9 @@ def master(
         d = conv.ensure_job(job_id, media, dec, key=_workload_key(request, mediaURL, dec))
     except ValueError as e:
         raise HTTPException(status_code=400, detail="invalid job id") from e
-    if not _wait_file(d / first_playlist(dec), 25):
+    # An encode that fails on the GPU before its first playlist is restarted in software meanwhile.
+    if not _wait_file(d / first_playlist(dec), 25,
+                      while_waiting=lambda: conv.retry_in_software(job_id)):
         raise HTTPException(status_code=504, detail="transcode did not start")
     return FileResponse(d / "master.m3u8", media_type=_M3U8)
 

@@ -239,7 +239,7 @@ def test_the_master_route_waits_for_ffmpegs_first_playlist(tmp_path, monkeypatch
 
     waited: list[pathlib.Path] = []
 
-    def fake_wait(path, timeout):
+    def fake_wait(path, timeout, while_waiting=None):
         waited.append(path)
         return False
 

@@ -101,10 +101,13 @@ what "done" looks like, so it can be picked up without context.
   an HDR source is converted to 8-bit without tone mapping. *Done =* HDR→SDR tone mapping on the
   hardware paths that support it, leaving direct play of HDR untouched.
 
-- [ ] **VAAPI assumes one device and that it can encode.** Only `renderD128` is recognised. A source
-  the GPU cannot decode (HEVC 10-bit on older iGPUs, AV1) is decoded in software and still encoded
-  on the GPU since 1.6.41, but a GPU that cannot encode H.264 fails the job. *Done =* render nodes
-  are discovered, and an early hardware-encode failure retries in software.
+- [x] **VAAPI finds its device and falls back to software (1.6.52).** Only `renderD128` was
+  recognised, and its existence was taken for an encoder. Every render node is now tried in number
+  order with a few frames of real H.264 encode, the first that succeeds is used, and each result is
+  printed at startup. A source the GPU cannot decode (HEVC 10-bit on older iGPUs, AV1) is still
+  decoded in software and encoded on the GPU, as since 1.6.41; an encode that fails on the GPU
+  before its first playlist is restarted once in software, keeping the failed attempt's log as
+  `ffmpeg-hw.log`.
 
 - [x] **Two players on one file share one encode (1.6.51).** Each playback attempt gets its own
   transcode job, so a reload or a second device ran a second full encode until the idle reaper

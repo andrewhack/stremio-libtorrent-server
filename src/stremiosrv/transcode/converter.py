@@ -179,6 +179,9 @@ class Converter:
         self._owner: dict[str, str] = {}
         self._readers: dict[str, set[str]] = {}
         self._by_key: dict[str, str] = {}
+        # job_id -> what its encode was started from, and whether it ran on the GPU and has not yet
+        # been retried in software (retry_in_software).
+        self._spec: dict[str, tuple[str, dict, bool]] = {}
         self._lock = threading.Lock()
 
     def job_dir(self, job_id: str) -> Path:
@@ -263,12 +266,9 @@ class Converter:
                 tmp = d / "master.m3u8.tmp"
                 tmp.write_text(audio_master(tracks), encoding="utf-8")
                 tmp.replace(d / "master.m3u8")
-            argv = build_hls_cmd(media_url, decision, self.profile, d)
-            # Not a context manager on purpose: this handle IS ffmpeg's stderr for the lifetime
-            # of the child process, so closing it at the end of a with-block would truncate the
-            # job's log the moment it starts writing. Released when the Popen is collected.
-            log = open(d / "ffmpeg.log", "wb")  # noqa: SIM115
-            self._jobs[job_id] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
+            self._jobs[job_id] = self._spawn(d, build_hls_cmd(media_url, decision, self.profile, d))
+            on_gpu = self.profile is not None and (decision.get("video") or {}).get("action") == "transcode"
+            self._spec[job_id] = (media_url, decision, on_gpu)
             if key is not None:
                 self._by_key[key] = job_id
             # Counts as activity immediately, or the reaper could take a transcode in the window
@@ -278,6 +278,40 @@ class Converter:
             # master.m3u8 mid-playback reuses this job, and counting requests would multiply it.
             metrics.record_hls_session(decision)
             return d
+
+    @staticmethod
+    def _spawn(d: Path, argv: list[str]) -> subprocess.Popen:
+        # Not a context manager on purpose: this handle IS ffmpeg's stderr for the lifetime of the
+        # child process, so closing it at the end of a with-block would truncate the job's log the
+        # moment it starts writing. Released when the Popen is collected.
+        log = open(d / "ffmpeg.log", "wb")  # noqa: SIM115
+        return subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
+
+    def retry_in_software(self, job_id: str) -> bool:
+        """Restart in software an encode that failed on the GPU. True when it was restarted.
+
+        Called while a player waits for the first playlist, so only an early failure is retried: a
+        GPU that cannot encode H.264, or a driver that gives up on this source. Once per encode; an
+        encode still running, finished cleanly, or never on the GPU is left alone. The failed
+        attempt's log is kept as ffmpeg-hw.log."""
+        with self._lock:
+            owner = self._owner.get(job_id, job_id)
+            p = self._jobs.get(owner)
+            spec = self._spec.get(owner)
+            if p is None or spec is None or not spec[2] or p.poll() in (None, 0):
+                return False
+            media_url, decision, _ = spec
+            d = self.job_dir(owner)
+            try:
+                (d / "ffmpeg.log").replace(d / "ffmpeg-hw.log")
+            except OSError:
+                pass
+            self._jobs[owner] = self._spawn(d, build_hls_cmd(media_url, decision, None, d))
+            self._spec[owner] = (media_url, decision, False)
+            rc = p.poll()
+        logger.warning("transcode: the hardware encode of job %s failed (exit %s); retrying it "
+                       "in software", owner, rc)
+        return True
 
     def touch(self, job_id: str) -> None:
         """Record that a client just asked for this job's playlist or a segment."""
@@ -329,6 +363,7 @@ class Converter:
     def _forget(self, owner: str) -> subprocess.Popen | None:
         """Drop an encode and every job reading it from the books. Caller holds the lock."""
         p = self._jobs.pop(owner, None)
+        self._spec.pop(owner, None)
         for r in self._readers.pop(owner, {owner}):
             self._seen.pop(r, None)
             self._owner.pop(r, None)
@@ -371,6 +406,7 @@ class Converter:
             self._owner.clear()
             self._readers.clear()
             self._by_key.clear()
+            self._spec.clear()
         for job_id, p in jobs:
             self._end(p)
             self._remove_job_dir(job_id)

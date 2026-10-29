@@ -11,12 +11,15 @@ replacement for the closed Stremio `server.js`: it implements the streaming-serv
 - An NVIDIA GPU with a driver new enough for the host kernel, plus the NVIDIA Container Toolkit
   (`nvidia-ctk runtime configure`). For GPU driver install — including on a Proxmox/LXC host where the
   driver must be installed at the host level — see `NVIDIA-GPU.md` in the companion image repo.
-- (Optional) An Intel iGPU exposed at `/dev/dri/renderD128` for the VAAPI fallback.
+- (Optional) An Intel or AMD GPU exposed under `/dev/dri` for the VAAPI fallback.
 
 ### Build & run
 The image **always starts**, with or without a GPU — it autodetects the transcode profile at startup
-(NVIDIA → `nvenc-linux`, else a VAAPI render node → `vaapi-renderD128`, else CPU/libx264). The GPU is
-optional at the orchestration level too, so a missing/broken NVIDIA driver never blocks startup.
+(NVIDIA → `nvenc-linux`, else the first VAAPI render node that encodes a few test frames of H.264 →
+`vaapi-renderD<n>`, else CPU/libx264). Each render node's result is printed at startup
+(`[transcode] VAAPI: …`). A hardware encode that fails before its first segment is restarted in
+software, and the failed attempt's log is kept beside it as `ffmpeg-hw.log`. The GPU is optional at
+the orchestration level too, so a missing/broken NVIDIA driver never blocks startup.
 
 **Recommended — durable launcher** (auto-detects GPU, degrades to VAAPI/CPU, safe to re-run):
 ```sh
@@ -85,7 +88,7 @@ Sizes and rates accept units (`64GiB`, `512MiB`) as well as plain byte counts. `
 | `STREMIOSRV_CACHE_EVICT_GRACE` | `1800` | seconds a served torrent is safe from eviction |
 | `STREMIOSRV_RESUME_RETENTION_DAYS` | `365` | days an *unclaimed* fast-resume record is kept (0 = forever) |
 | `STREMIOSRV_BT_MAX_CONNECTIONS` | `400` | libtorrent connection cap |
-| `STREMIOSRV_TRANSCODE_PROFILE` | autodetect | force a HW profile |
+| `STREMIOSRV_TRANSCODE_PROFILE` | autodetect | force a HW profile (`nvenc-linux`, `vaapi-renderD129`) |
 | `STREMIOSRV_LIBRARY_ADDON_ALLOW` | *(unset)* | CIDRs that count as the home network: they may reach the library addon, and `/proxy` fetches any address but a link-local or cloud-metadata one for them, and only public ones for anyone else or for a web page on another site — a page opened on an IP address in these ranges, or on the server's host or `SERVER_URL`'s, counts as the server's own (default: private ranges + CGNAT). Behind a reverse proxy, or when Docker forwards IPv6 clients into an IPv4-only container, clients arrive from a local address — list your LAN ranges explicitly |
 
 ### Web player (all-in-one)
