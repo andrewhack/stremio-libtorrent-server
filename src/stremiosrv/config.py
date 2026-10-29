@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # a retention target. Cached, kept and wanted torrents are exempt at any age. 0 disables it.
     resume_retention_days: int = 365
     transcode_profile: str | None = None  # set by HW autodetect (later stage)
+    # HDR to SDR when a transcode is chosen for an HDR source; without it the picture comes out grey
+    # and flat. On the GPU when startup shows its tone map changes the picture (None: test it; set
+    # to force). On the CPU only when opted in: correct, but well below realtime on a small box.
+    transcode_gpu_tonemap: bool | None = None
+    transcode_cpu_tonemap: bool = False
     # Transcode output GC. HLS segments live in <cache_root>/transcode, which the evictor is
     # forbidden to touch (it is in cache.PROTECTED), so nothing but this reclaims them. At
     # `-hls_time 4` an hour of transcoded playback writes ~900 segment files, and a client that

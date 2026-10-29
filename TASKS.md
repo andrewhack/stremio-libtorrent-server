@@ -98,9 +98,14 @@ what "done" looks like, so it can be picked up without context.
   and asks again from the byte it stopped at. Shown on the image's ffmpeg with a source whose first
   response is cut at 40%: 22.5 s of a 60 s clip before, all 60 s after.
 
-- [ ] **HDR sources that are transcoded come out washed out.** When a transcode is already chosen,
-  an HDR source is converted to 8-bit without tone mapping. *Done =* HDR→SDR tone mapping on the
-  hardware paths that support it, leaving direct play of HDR untouched.
+- [x] **HDR sources that are transcoded are tone-mapped (1.6.53).** When a transcode was already
+  chosen, an HDR source was converted to 8-bit without tone mapping and came out grey and flat. It
+  is now tone-mapped on a VAAPI GPU whose `tonemap_vaapi` startup shows to change an HDR10 test
+  frame -- an older Intel GPU runs it without an error and changes nothing -- and on the CPU
+  (zscale, hable) only with `STREMIOSRV_TRANSCODE_CPU_TONEMAP=true`, because on a machine with few
+  cores that runs below realtime. A stream played as it is stays HDR. Still open: NVENC has no GPU
+  tone map in the bundled ffmpeg (CPU opt-in only), and Dolby Vision profile 5, which has no HDR10
+  base layer, is not tone-mapped correctly by either path.
 
 - [x] **VAAPI finds its device and falls back to software (1.6.52).** Only `renderD128` was
   recognised, and its existence was taken for an encoder. Every render node is now tried in number

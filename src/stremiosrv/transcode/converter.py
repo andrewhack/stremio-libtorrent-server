@@ -20,7 +20,18 @@ from stremiosrv import metrics
 logger = logging.getLogger("stremiosrv.transcode")
 
 
-def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: str | Path) -> list[str]:
+# HDR to SDR on the CPU: to linear light (SDR white at 100 nits), BT.2020 primaries to BT.709, the
+# hable curve for highlights above SDR white, then back to BT.709 video levels.
+CPU_TONEMAP = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+               "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv")
+# The same on Intel's video processor, where its driver does it (Converter.tonemap_mode decides).
+VAAPI_TONEMAP = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709"
+
+
+def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: str | Path,
+                  tonemap: str | None = None) -> list[str]:
+    """`tonemap` converts an HDR source's light levels for the 8-bit SDR output: "vaapi" on the
+    GPU's video processor, "cpu" with the zscale chain, None not at all."""
     out_dir = str(out_dir)
     v = decision.get("video", {})
     a = decision.get("audio")
@@ -33,10 +44,14 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
         elif profile and profile.startswith("vaapi"):
             # A named device (profile "vaapi-renderD128" -> /dev/dri/renderD128), shared by the
             # decoder and the filters: hwupload needs one to upload frames the decoder could not.
+            # A CPU tone map needs the decoded frames in system memory, so they are not kept on
+            # the GPU then: the hardware still decodes what it can, and hwupload takes them back.
             node = profile.split("-", 1)[1] if "-" in profile else "renderD128"
             argv += ["-init_hw_device", f"vaapi=va:/dev/dri/{node}", "-hwaccel", "vaapi",
-                     "-hwaccel_device", "va", "-hwaccel_output_format", "vaapi",
-                     "-filter_hw_device", "va"]
+                     "-hwaccel_device", "va"]
+            if tonemap != "cpu":
+                argv += ["-hwaccel_output_format", "vaapi"]
+            argv += ["-filter_hw_device", "va"]
 
     if media_url.startswith(("http://", "https://")):
         # The byte route ends a response when a torrent piece misses its timeout; without this,
@@ -56,9 +71,10 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
         argv += ["-c:v", "copy"]
     else:
         w = v.get("scale_width")
+        scale = f"scale={w}:-2:flags=lanczos," if w else ""
+        cpu_tm = f"{CPU_TONEMAP}," if tonemap == "cpu" else ""
         if profile == "nvenc-linux":
-            argv += ["-vf", f"scale={w}:-2:flags=lanczos,format=yuv420p" if w else "format=yuv420p",
-                     "-c:v", "h264_nvenc", "-preset", "p4"]
+            argv += ["-vf", f"{scale}{cpu_tm}format=yuv420p", "-c:v", "h264_nvenc", "-preset", "p4"]
         elif profile and profile.startswith("vaapi"):
             # -hwaccel_output_format vaapi means a 10-bit source decodes to p010 surfaces, and
             # h264_vaapi is 8-bit only: without an explicit conversion ffmpeg fails at init with
@@ -66,13 +82,20 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
             # A source the hardware cannot decode (10-bit HEVC on older Intel, AV1 before its
             # decoder exists) arrives as software frames, which scale_vaapi cannot take: those are
             # converted and uploaded, while hardware-decoded frames pass straight through.
-            vf = f"scale_vaapi=w={w}:h=-2:format=nv12" if w else "scale_vaapi=format=nv12"
-            argv += ["-vf", f"format=nv12|vaapi,hwupload,{vf}", "-c:v", "h264_vaapi"]
+            if tonemap == "vaapi":  # p010 in, so the 10-bit light levels reach the tone map
+                vf = "format=p010|vaapi,hwupload," + VAAPI_TONEMAP + (
+                    f",scale_vaapi=w={w}:h=-2" if w else "")
+            elif tonemap == "cpu":
+                vf = f"{scale}{CPU_TONEMAP},format=nv12,hwupload"
+            else:
+                vf = "format=nv12|vaapi,hwupload," + (
+                    f"scale_vaapi=w={w}:h=-2:format=nv12" if w else "scale_vaapi=format=nv12")
+            argv += ["-vf", vf, "-c:v", "h264_vaapi"]
         else:
             # libx264 would keep a 10-bit source 10-bit (H.264 High 10), which hardware decoders
             # cannot play and browsers decode only in software; 8-bit like the NVENC branch.
-            argv += ["-vf", f"scale={w}:-2:flags=lanczos,format=yuv420p" if w else "format=yuv420p",
-                     "-c:v", "libx264", "-preset", "veryfast"]
+            argv += ["-vf", f"{scale}{cpu_tm}format=yuv420p", "-c:v", "libx264",
+                     "-preset", "veryfast"]
 
     # Audio
     if a is not None:
@@ -160,9 +183,14 @@ class Converter:
     # request open behind a wedged child.
     STOP_TIMEOUT = 5.0
 
-    def __init__(self, cache_root: str, profile: str | None):
+    def __init__(self, cache_root: str, profile: str | None, gpu_tonemap: bool = False,
+                 cpu_tonemap: bool = False):
         self.base = Path(cache_root) / "transcode"
         self.profile = profile
+        # HDR tone mapping (tonemap_mode): the GPU's when startup showed it works, the CPU's only
+        # when the operator opted in -- it is correct but runs well below realtime on small boxes.
+        self.gpu_tonemap = gpu_tonemap
+        self.cpu_tonemap = cpu_tonemap
         self._jobs: dict[str, subprocess.Popen] = {}
         # job_id -> monotonic time of the last request a CLIENT made for this job's output. The
         # sweep below spares any job whose ffmpeg is alive, which means a transcode nobody is
@@ -266,7 +294,8 @@ class Converter:
                 tmp = d / "master.m3u8.tmp"
                 tmp.write_text(audio_master(tracks), encoding="utf-8")
                 tmp.replace(d / "master.m3u8")
-            self._jobs[job_id] = self._spawn(d, build_hls_cmd(media_url, decision, self.profile, d))
+            self._jobs[job_id] = self._spawn(d, build_hls_cmd(
+                media_url, decision, self.profile, d, self.tonemap_mode(decision, self.profile)))
             on_gpu = self.profile is not None and (decision.get("video") or {}).get("action") == "transcode"
             self._spec[job_id] = (media_url, decision, on_gpu)
             if key is not None:
@@ -278,6 +307,14 @@ class Converter:
             # master.m3u8 mid-playback reuses this job, and counting requests would multiply it.
             metrics.record_hls_session(decision)
             return d
+
+    def tonemap_mode(self, decision: dict, profile: str | None) -> str | None:
+        """Where an HDR transcode's tone map runs (build_hls_cmd's `tonemap`), if anywhere."""
+        if not (decision.get("video") or {}).get("tonemap"):
+            return None
+        if self.gpu_tonemap and profile and profile.startswith("vaapi"):
+            return "vaapi"
+        return "cpu" if self.cpu_tonemap else None
 
     @staticmethod
     def _spawn(d: Path, argv: list[str]) -> subprocess.Popen:
@@ -306,7 +343,8 @@ class Converter:
                 (d / "ffmpeg.log").replace(d / "ffmpeg-hw.log")
             except OSError:
                 pass
-            self._jobs[owner] = self._spawn(d, build_hls_cmd(media_url, decision, None, d))
+            self._jobs[owner] = self._spawn(d, build_hls_cmd(
+                media_url, decision, None, d, self.tonemap_mode(decision, None)))
             self._spec[owner] = (media_url, decision, False)
             rc = p.poll()
         logger.warning("transcode: the hardware encode of job %s failed (exit %s); retrying it "

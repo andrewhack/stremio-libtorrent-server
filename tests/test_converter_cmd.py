@@ -106,3 +106,47 @@ def test_build_hls_cmd_has_a_protocol_whitelist_before_input():
     i = argv.index("-protocol_whitelist")
     assert argv[i + 1] == "file,crypto,data,http,tcp,tls,https"
     assert i < argv.index("-i")
+
+
+# --- HDR to SDR. The output is 8-bit SDR, and converting a PQ/HLG source's pixels without its
+# light levels came out grey and flat. `tonemap` says where the conversion runs: "vaapi" on a GPU
+# whose tonemap_vaapi was shown at startup to change the picture, "cpu" when the operator opted in
+# to the (slow) zscale chain, None as before.
+
+DEC_HDR = {"video": {"action": "transcode", "scale_width": 1920, "tonemap": True},
+           "audio": {"action": "copy"}}
+CPU_TM = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+          "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv")
+
+
+def test_hdr_tone_mapped_on_the_gpu_stays_on_the_gpu():
+    cmd = build_hls_cmd("http://x/0", DEC_HDR, "vaapi-renderD128", "/tmp/j", tonemap="vaapi")
+    assert cmd[cmd.index("-vf") + 1] == (
+        "format=p010|vaapi,hwupload,tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,"
+        "scale_vaapi=w=1920:h=-2")
+    assert cmd[cmd.index("-hwaccel_output_format") + 1] == "vaapi"
+    assert "h264_vaapi" in cmd
+
+
+def test_hdr_tone_mapped_on_the_cpu_still_encodes_on_the_gpu():
+    # Decoded frames come back to system memory (no -hwaccel_output_format) for the CPU chain, and
+    # go up again for the encoder.
+    cmd = build_hls_cmd("http://x/0", DEC_HDR, "vaapi-renderD128", "/tmp/j", tonemap="cpu")
+    assert cmd[cmd.index("-vf") + 1] == (
+        f"scale=1920:-2:flags=lanczos,{CPU_TM},format=nv12,hwupload")
+    assert "-hwaccel_output_format" not in cmd
+    assert cmd[cmd.index("-filter_hw_device") + 1] == "va"
+    assert "h264_vaapi" in cmd
+
+
+def test_hdr_tone_mapped_on_the_cpu_with_a_software_or_nvenc_encoder():
+    for profile, encoder in ((None, "libx264"), ("nvenc-linux", "h264_nvenc")):
+        cmd = build_hls_cmd("http://x/0", DEC_HDR, profile, "/tmp/j", tonemap="cpu")
+        assert cmd[cmd.index("-vf") + 1] == f"scale=1920:-2:flags=lanczos,{CPU_TM},format=yuv420p"
+        assert encoder in cmd
+
+
+def test_hdr_without_a_tone_map_is_transcoded_as_before():
+    assert (build_hls_cmd("http://x/0", DEC_HDR, "vaapi-renderD128", "/tmp/j")
+            == build_hls_cmd("http://x/0", DEC_TRANSCODE | {"audio": {"action": "copy"}},
+                             "vaapi-renderD128", "/tmp/j"))

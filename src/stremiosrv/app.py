@@ -228,10 +228,12 @@ def build_app() -> FastAPI:
     from stremiosrv.torrent.tracker_source import TrackerSource
     from stremiosrv.torrent.trackers import parse_tracker_string
     from stremiosrv.transcode.converter import Converter, run_transcode_gc
-    from stremiosrv.transcode.profiler import detect_profile
+    from stremiosrv.transcode.profiler import detect_gpu_tonemap, detect_profile
 
     settings = Settings()
     settings.transcode_profile = settings.transcode_profile or detect_profile()
+    if settings.transcode_gpu_tonemap is None:
+        settings.transcode_gpu_tonemap = detect_gpu_tonemap(settings.transcode_profile)
     # Optional live tracker list: fetched in a daemon thread (best-effort, never blocks startup or
     # the request path). start() is a no-op when no URL is configured -> fully static/offline-safe.
     tracker_source = TrackerSource(
@@ -266,7 +268,9 @@ def build_app() -> FastAPI:
         enable_upnp=settings.enable_upnp,
     )
     engine.load_pins_into_session()
-    converter = Converter(settings.cache_root, settings.transcode_profile)
+    converter = Converter(settings.cache_root, settings.transcode_profile,
+                          gpu_tonemap=settings.transcode_gpu_tonemap,
+                          cpu_tonemap=settings.transcode_cpu_tonemap)
     # Every transcode directory on disk right now belongs to a process that no longer exists, so
     # this sweep takes no grace. Without it a crash or a `docker restart` orphans the whole segment
     # tree permanently: the evictor may not touch it, and only its own job id could have destroyed

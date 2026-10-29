@@ -27,6 +27,10 @@ def decide(
                 "action": "transcode",
                 "scale_width": min(v.get("width", max_width), max_width),
             }
+            if v.get("isHdr"):
+                # The output is 8-bit SDR: without tone mapping, PQ/HLG-coded light comes out grey
+                # and flat. A copied stream is left as HDR for a player that takes it.
+                out["video"]["tonemap"] = True
         else:
             out["video"] = {"action": "copy"}
     if v is not None and len(audios) > 1:
