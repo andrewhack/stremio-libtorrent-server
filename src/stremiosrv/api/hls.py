@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from stremiosrv.api.media_fetch import is_own_media_url, resolve_media_input
+from stremiosrv.proxy import client
 from stremiosrv.transcode.converter import first_playlist
 from stremiosrv.transcode.fingerprint import decide
 from stremiosrv.transcode.probe import ProbeTimeoutError, probe_media
@@ -42,11 +43,13 @@ def _workload_key(request: Request, media_url: str, decision: dict) -> str:
 
     Our own torrent stream is named by its path alone: the host a player reached the server by and
     the trackers it appends (`?tr=`) do not change the bytes. Anything else by the URL the player
-    sent, not the resolved one, which carries a fresh reader ticket on every request."""
+    sent, not the resolved one, which carries a fresh reader ticket on every request -- and by
+    whether the destination guard treats the client as home: a home client may follow that URL into
+    the LAN where an internet client may not, so the two never read one encode."""
     if is_own_media_url(request, media_url):
-        media = urllib.parse.urlsplit(media_url).path.lower()
+        media: object = urllib.parse.urlsplit(media_url).path.lower()
     else:
-        media = media_url
+        media = [media_url, client.is_home_client(request)]
     return json.dumps([media, decision], sort_keys=True)
 
 

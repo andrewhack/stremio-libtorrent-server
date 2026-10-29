@@ -191,3 +191,21 @@ def test_an_external_source_is_keyed_by_the_url_the_player_sent(monkeypatch, tmp
     ])
     assert k[0] == k[1] != k[2]
     assert "#resolved" not in k[0]
+
+
+def test_a_home_and_an_internet_client_never_share_an_external_source(monkeypatch, tmp_path):
+    # The destination guard lets a home-network client follow an external URL into the LAN (a
+    # redirect, say) and refuses the same hop for an internet client. Joining the home client's
+    # encode would hand the internet client output its own guard refused.
+    from stremiosrv.api import hls
+
+    home = iter([True, False, True, False])
+    monkeypatch.setattr(hls.client, "is_home_client", lambda request: next(home))
+    k = _keys_for(monkeypatch, tmp_path, [
+        {"mediaURL": "https://cdn.example/v.mkv", "videoCodecs": "h264"},
+        {"mediaURL": "https://cdn.example/v.mkv", "videoCodecs": "h264"},
+        {"mediaURL": f"http://127.0.0.1:11470/{IH}/0", "videoCodecs": "h264"},
+        {"mediaURL": f"http://127.0.0.1:11470/{IH}/0", "videoCodecs": "h264"},
+    ])
+    assert k[0] != k[1]
+    assert k[2] == k[3]  # our own torrent stream passes no guard: one workload for everyone
