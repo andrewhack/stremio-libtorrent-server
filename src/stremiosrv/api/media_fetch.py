@@ -217,6 +217,21 @@ def _torrent_head(request: Request, ih: str, idx: int, n: int = 64) -> bytes | N
         first = h.file_offset(idx) // h.piece_length()
     except Exception:  # noqa: BLE001 — cannot resolve the file at all: ffprobe would fail too, pass
         return b""
+    # Ask for the head before waiting on it, as the stream's own first read would. On a cold torrent
+    # nothing else rushes that piece, so the wait below ran out its whole timeout and the probe
+    # answered 504; a torrent the seed policy paused fetches nothing at all. focus_file makes the
+    # file wanted (a piece of a file at priority 0 lands in the partfile, not in the file read
+    # below). No refocus, which would drop the window of someone already watching it, and
+    # keep_existing leaves that viewer's deadline on the piece alone. Best-effort: the wait stays
+    # fail-closed either way.
+    from stremiosrv.torrent.engine import should_resume_on_open
+    try:
+        h.focus_file(idx)
+        if should_resume_on_open(paused=h.is_paused(), finished=h.is_finished()):
+            h.resume()
+        h.boost_piece(first, 0, keep_existing=True)
+    except Exception:  # noqa: BLE001
+        pass
     give_up = time.monotonic() + request.app.state.settings.stream_first_piece_timeout
     while True:
         try:

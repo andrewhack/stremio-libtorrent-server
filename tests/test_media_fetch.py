@@ -298,6 +298,59 @@ def test_head_never_arriving_refuses_rather_than_falls_through(tmp_path):
     assert ei.value.status_code == 504
 
 
+class _ColdHandle(_FakeHandle):
+    """A cold torrent: the file's first piece arrives only once something asks for it, and never
+    while the torrent is paused. Records what was asked of it."""
+    def __init__(self, name: str, size: int, paused: bool = False):
+        super().__init__(name, size, present=False)
+        self.calls: list[tuple] = []
+        self._paused = paused
+
+    def focus_file(self, i): self.calls.append(("focus_file", i))
+    def refocus(self): self.calls.append(("refocus",))
+    def is_paused(self): return self._paused
+    def is_finished(self): return False
+
+    def resume(self):
+        self.calls.append(("resume",))
+        self._paused = False
+
+    def boost_piece(self, p, ms, keep_existing=False):
+        self.calls.append(("boost_piece", p, keep_existing))
+        if not self._paused:
+            self._present = True
+
+
+_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 200
+
+
+def test_a_cold_heads_piece_is_asked_for_before_the_wait(tmp_path):
+    # The wait polled for the head's piece without asking for it, so a cold torrent's first
+    # /hlsv2/probe waited out the whole first-piece timeout and answered 504. The piece is now
+    # rushed the way a viewer's own read would, but never over a viewer's deadline (keep_existing),
+    # and without refocus, which would drop the window of someone already watching.
+    (tmp_path / "movie.mp4").write_bytes(_MP4)
+    h = _ColdHandle("movie.mp4", len(_MP4))
+    r = _req(first_piece_timeout=2)
+    r.app.state.engine = _FakeEngine(str(tmp_path), h)
+    url = f"http://127.0.0.1:11470/{IH}/0"
+    assert media_fetch.resolve_media_input(r, url) == url
+    assert h.calls[:2] == [("focus_file", 0), ("boost_piece", 0, True)]
+    assert ("refocus",) not in h.calls
+
+
+def test_a_paused_torrent_is_resumed_for_a_head_it_does_not_have(tmp_path):
+    # The seed policy pauses a torrent once its wanted files are done. Probing another file of it
+    # (the next episode of a pack) waited on a torrent that downloads nothing until a stream opens.
+    (tmp_path / "movie.mp4").write_bytes(_MP4)
+    h = _ColdHandle("movie.mp4", len(_MP4), paused=True)
+    r = _req(first_piece_timeout=2)
+    r.app.state.engine = _FakeEngine(str(tmp_path), h)
+    url = f"http://127.0.0.1:11470/{IH}/0"
+    assert media_fetch.resolve_media_input(r, url) == url
+    assert h.calls[:3] == [("focus_file", 0), ("resume",), ("boost_piece", 0, True)]
+
+
 class _SplitHeadHandle(_FakeHandle):
     """The file's first piece holds only its first 3 bytes, and the next piece never arrives."""
     def piece_length(self): return 3
