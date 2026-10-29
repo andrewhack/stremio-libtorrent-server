@@ -58,11 +58,11 @@ def _vf(argv):
 @pytest.mark.parametrize("profile,gpu,cpu,expect", [
     ("vaapi-renderD128", True, False, "tonemap_vaapi"),
     ("vaapi-renderD128", True, True, "tonemap_vaapi"),   # the GPU's, when it has been shown to work
-    ("vaapi-renderD128", False, True, "tonemap=tonemap=hable"),
+    ("vaapi-renderD128", False, True, "tonemap=tonemap=mobius"),
     ("vaapi-renderD128", False, False, None),
-    (None, False, True, "tonemap=tonemap=hable"),
+    (None, False, True, "tonemap=tonemap=mobius"),
     (None, True, False, None),                           # a GPU tone map needs the GPU profile
-    ("nvenc-linux", False, True, "tonemap=tonemap=hable"),
+    ("nvenc-linux", False, True, "tonemap=tonemap=mobius"),
 ])
 def test_where_an_hdr_transcode_is_tone_mapped(tmp_path, started, profile, gpu, cpu, expect):
     conv = Converter(str(tmp_path), profile, gpu_tonemap=gpu, cpu_tonemap=cpu)
@@ -88,7 +88,7 @@ def test_the_software_retry_of_a_gpu_tone_map_follows_the_cpu_setting(tmp_path, 
     started[0].rc = 1
     assert conv.retry_in_software("a") is True
     assert "libx264" in started[1].argv
-    assert ("tonemap=tonemap=hable" in _vf(started[1].argv)) is expect_tm
+    assert ("tonemap=tonemap=mobius" in _vf(started[1].argv)) is expect_tm
 
 
 # --- startup: does this GPU's tonemap_vaapi change the picture?

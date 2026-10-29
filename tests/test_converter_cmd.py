@@ -116,7 +116,7 @@ def test_build_hls_cmd_has_a_protocol_whitelist_before_input():
 DEC_HDR = {"video": {"action": "transcode", "scale_width": 1920, "tonemap": True},
            "audio": {"action": "copy"}}
 CPU_TM = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
-          "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv")
+          "tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv")
 
 
 def test_hdr_tone_mapped_on_the_gpu_stays_on_the_gpu():
