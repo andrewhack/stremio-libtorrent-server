@@ -5,13 +5,15 @@ server byte-for-byte — the player follows whatever URIs we publish.
 """
 from __future__ import annotations
 
+import json
 import time
+import urllib.parse
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
-from stremiosrv.api.media_fetch import resolve_media_input
+from stremiosrv.api.media_fetch import is_own_media_url, resolve_media_input
 from stremiosrv.transcode.converter import first_playlist
 from stremiosrv.transcode.fingerprint import decide
 from stremiosrv.transcode.probe import ProbeTimeoutError, probe_media
@@ -32,6 +34,20 @@ def _wait_file(path: Path, timeout: float) -> bool:
             return True
         time.sleep(0.2)
     return path.exists()
+
+
+def _workload_key(request: Request, media_url: str, decision: dict) -> str:
+    """What makes two transcode jobs the same: the same media under the same decision, so that a
+    reload or a second player on the file joins the running encode (Converter.ensure_job).
+
+    Our own torrent stream is named by its path alone: the host a player reached the server by and
+    the trackers it appends (`?tr=`) do not change the bytes. Anything else by the URL the player
+    sent, not the resolved one, which carries a fresh reader ticket on every request."""
+    if is_own_media_url(request, media_url):
+        media = urllib.parse.urlsplit(media_url).path.lower()
+    else:
+        media = media_url
+    return json.dumps([media, decision], sort_keys=True)
 
 
 # HEAD is accepted on the read routes below. FastAPI, unlike bare Starlette, does NOT add HEAD to a
@@ -82,7 +98,7 @@ def master(
         raise HTTPException(status_code=415, detail="playlist inputs are not accepted")
     dec = decide(pr, videoCodecs or ["h264"], audioCodecs or ["aac"], maxAudioChannels, maxWidth)
     try:
-        d = conv.ensure_job(job_id, media, dec)
+        d = conv.ensure_job(job_id, media, dec, key=_workload_key(request, mediaURL, dec))
     except ValueError as e:
         raise HTTPException(status_code=400, detail="invalid job id") from e
     if not _wait_file(d / first_playlist(dec), 25):

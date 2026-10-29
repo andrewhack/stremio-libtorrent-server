@@ -244,7 +244,7 @@ def test_the_master_route_waits_for_ffmpegs_first_playlist(tmp_path, monkeypatch
         return False
 
     class Conv:
-        def ensure_job(self, job_id, media, dec):
+        def ensure_job(self, job_id, media, dec, key=None):
             (tmp_path / "master.m3u8").write_text(audio_master(dec["audio"]["tracks"]))
             return tmp_path
 

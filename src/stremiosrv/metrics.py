@@ -93,7 +93,8 @@ def record_embedded_ass(kind: str) -> None:
 def record_hls_session(decision: dict) -> None:
     """A NEW hlsv2 job was started. Recorded behind `Converter.ensure_job`'s live-job check, so it
     follows jobs rather than requests — a player re-fetches `master.m3u8` several times per
-    playback, and counting the route would inflate this severalfold.
+    playback, and counting the route would inflate this severalfold. A job that joins a running
+    encode of the same workload is not counted either: it starts no ffmpeg.
 
     Two numbers, because they cost wildly different amounts. `decision` comes from
     `transcode.fingerprint.decide()`, which marks each stream `copy` or `transcode`. When *every*

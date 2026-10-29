@@ -170,6 +170,15 @@ class Converter:
         # tilt forever, and because each playback attempt carries a fresh job id, repeated attempts
         # stacked several at once. Whether the encoder runs is not evidence that anyone is watching.
         self._seen: dict[str, float] = {}
+        # Shared encodes. Each playback attempt carries a fresh job id, so a reload or a second
+        # device on the same file started a second full ffmpeg. A job asking for the same workload
+        # (media and decision, `key`) as a running one joins it instead: `_owner` maps the joined id
+        # to the job that started the encode, whose directory it reads; `_readers` holds every id
+        # reading an owner's output, the owner's own included; `_by_key` finds the owner. Absent
+        # from `_readers` means the owner alone, as for a job started without a key.
+        self._owner: dict[str, str] = {}
+        self._readers: dict[str, set[str]] = {}
+        self._by_key: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def job_dir(self, job_id: str) -> Path:
@@ -201,6 +210,10 @@ class Converter:
         if not filename or filename in (".", "..") or "/" in filename or chr(92) in filename:
             raise ValueError(f"unsafe transcode file name: {filename!r}")
         d = self.job_dir(job_id)
+        with self._lock:
+            owner = self._owner.get(job_id)
+        if owner is not None:  # a joined job reads the shared encode's directory
+            d = self.job_dir(owner)
         candidate = d / filename
         try:
             if candidate.resolve().parent != d.resolve():
@@ -216,12 +229,33 @@ class Converter:
             return  # never delete a tree an unsafe id named; the route rejects it separately
         shutil.rmtree(d, ignore_errors=True)
 
-    def ensure_job(self, job_id: str, media_url: str, decision: dict) -> Path:
+    def ensure_job(self, job_id: str, media_url: str, decision: dict,
+                   key: str | None = None) -> Path:
+        """Start the encode for `job_id`, or join the one already running for the same `key`.
+
+        `key` names the workload: the same media under the same decision produces the same output,
+        so a second job asking for it reads the first one's directory rather than starting a second
+        ffmpeg. An encode that finished cleanly is joined too, its output being whole; one that
+        failed is not. Without a key a job is never shared."""
         with self._lock:
             existing = self._jobs.get(job_id)
-            if existing is not None and existing.poll() is None:
+            # A clean finish counts as running: restarting it would rewrite, from the start, output
+            # a joined player may be reading.
+            if existing is not None and existing.poll() in (None, 0):
                 self._seen[job_id] = time.monotonic()
                 return self.job_dir(job_id)
+            owner = self._owner.get(job_id)
+            if owner is not None:  # already joined: one more request for the playlist
+                self._seen[job_id] = time.monotonic()
+                return self.job_dir(owner)
+            owner = self._by_key.get(key) if key is not None else None
+            shared = self._jobs.get(owner) if owner is not None else None
+            if owner != job_id and shared is not None and shared.poll() in (None, 0):
+                self._owner[job_id] = owner
+                self._readers.setdefault(owner, {owner}).add(job_id)
+                self._seen[job_id] = time.monotonic()
+                logger.info("transcode: job %s joins the encode of job %s", job_id, owner)
+                return self.job_dir(owner)
             d = self.job_dir(job_id)
             d.mkdir(parents=True, exist_ok=True)
             tracks = (decision.get("audio") or {}).get("tracks")
@@ -235,6 +269,8 @@ class Converter:
             # job's log the moment it starts writing. Released when the Popen is collected.
             log = open(d / "ffmpeg.log", "wb")  # noqa: SIM115
             self._jobs[job_id] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
+            if key is not None:
+                self._by_key[key] = job_id
             # Counts as activity immediately, or the reaper could take a transcode in the window
             # between starting it and the player's first segment request.
             self._seen[job_id] = time.monotonic()
@@ -246,7 +282,7 @@ class Converter:
     def touch(self, job_id: str) -> None:
         """Record that a client just asked for this job's playlist or a segment."""
         with self._lock:
-            if job_id in self._jobs:
+            if job_id in self._jobs or job_id in self._owner:
                 self._seen[job_id] = time.monotonic()
 
     def reap_idle(self, idle_after: float) -> list[str]:
@@ -256,14 +292,18 @@ class Converter:
         refuses the stream, and a dropped connection all skip it, and the process left behind holds
         a GPU as firmly as a wanted one. A job with no recorded activity at all is reaped too --
         treating "unknown" as "still wanted" is exactly how this went unnoticed.
+
+        A shared encode is idle only when every job reading it is: one viewer leaving without
+        /destroy must not end it for the other. The id returned is the job that started it.
         """
         now = time.monotonic()
         with self._lock:
             idle = [jid for jid, p in self._jobs.items()
-                    if p.poll() is None and now - self._seen.get(jid, 0.0) >= idle_after]
+                    if p.poll() is None and all(now - self._seen.get(r, 0.0) >= idle_after
+                                                for r in self._readers.get(jid, {jid}))]
         for job_id in idle:
             logger.info("transcode gc: no client for %.0fs, ending job %s", idle_after, job_id)
-            self.stop(job_id)
+            self._end_encode(job_id)
         return idle
 
     def active_count(self) -> int:
@@ -286,24 +326,51 @@ class Converter:
         except subprocess.TimeoutExpired:
             p.kill()
 
+    def _forget(self, owner: str) -> subprocess.Popen | None:
+        """Drop an encode and every job reading it from the books. Caller holds the lock."""
+        p = self._jobs.pop(owner, None)
+        for r in self._readers.pop(owner, {owner}):
+            self._seen.pop(r, None)
+            self._owner.pop(r, None)
+        self._seen.pop(owner, None)
+        for k in [k for k, o in self._by_key.items() if o == owner]:
+            del self._by_key[k]
+        return p
+
+    def _end_encode(self, owner: str) -> None:
+        with self._lock:
+            p = self._forget(owner)
+        self._end(p)
+        self._remove_job_dir(owner)
+
     def stop(self, job_id: str) -> None:
         """End a job and reclaim its disk.
 
         The directory goes even when no process is tracked: after a restart the handles are gone but
         the segments are not, and a client calling /destroy on a job this process never started is
         the only signal we will ever get that its output is finished with.
+
+        A job reading a shared encode only leaves it: the encode and its directory go with the last
+        job reading it, whichever job started it.
         """
         with self._lock:
-            p = self._jobs.pop(job_id, None)
+            owner = self._owner.pop(job_id, job_id)
             self._seen.pop(job_id, None)
-        self._end(p)
-        self._remove_job_dir(job_id)
+            readers = self._readers.get(owner)
+            if readers is not None:
+                readers.discard(job_id)
+                if readers:
+                    return
+        self._end_encode(owner)
 
     def stop_all(self) -> None:
         with self._lock:
             jobs = list(self._jobs.items())
             self._jobs.clear()
             self._seen.clear()
+            self._owner.clear()
+            self._readers.clear()
+            self._by_key.clear()
         for job_id, p in jobs:
             self._end(p)
             self._remove_job_dir(job_id)
@@ -328,7 +395,9 @@ class Converter:
         mono = time.monotonic()
         with self._lock:
             live = {jid for jid, p in self._jobs.items()
-                    if p.poll() is None or mono - self._seen.get(jid, float("-inf")) < max_age}
+                    if p.poll() is None
+                    or any(mono - self._seen.get(r, float("-inf")) < max_age
+                           for r in self._readers.get(jid, {jid}))}
         now = time.time()
         removed: list[str] = []
         for name in names:
@@ -351,8 +420,7 @@ class Converter:
         if removed:
             with self._lock:
                 for name in removed:
-                    self._jobs.pop(name, None)
-                    self._seen.pop(name, None)
+                    self._forget(name)
             logger.info("transcode gc: reclaimed %d orphaned job dir(s)", len(removed))
         return len(removed)
 

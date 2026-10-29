@@ -106,9 +106,13 @@ what "done" looks like, so it can be picked up without context.
   on the GPU since 1.6.41, but a GPU that cannot encode H.264 fails the job. *Done =* render nodes
   are discovered, and an early hardware-encode failure retries in software.
 
-- [ ] **Two players on one file start two encodes.** Each playback attempt gets its own transcode
-  job, so a reload or a second device runs a second full encode until the idle reaper ends the
-  first. *Done =* identical workloads share one ffmpeg, with the reaper counting its readers.
+- [x] **Two players on one file share one encode (1.6.51).** Each playback attempt gets its own
+  transcode job, so a reload or a second device ran a second full encode until the idle reaper
+  ended the first. A job asking for the same workload as a running one -- the same file (our own
+  torrent stream by its path, whatever host or trackers the URL carries; anything else by the URL
+  the player sent) under the same copy/transcode decision -- now reads that encode's output. An
+  encode that finished cleanly is joined too, one that failed is not. `/destroy` and the idle
+  reaper end an encode only when the last job reading it has gone.
 
 - [ ] **Sometimes a play does not start while its download runs.** Reported in use: the library
   shows the file downloading past 30% and the player still has not started; going back to the
