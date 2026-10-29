@@ -85,10 +85,11 @@ what "done" looks like, so it can be picked up without context.
   refusal (1.6.20) waited for the file's first piece without asking for it, so a cold torrent's
   first `/hlsv2/probe` answered whenever rarest-first happened to fetch that piece, or 504 after the
   first-piece timeout. The check now focuses the file, resumes a torrent the seed policy paused,
-  and sets the head piece to top priority -- not a deadline, which libtorrent serves one block at a
-  time from the peers it reserves for it. The wait stays fail-closed. Traced on a cold torrent from
-  one upload-capped seeder: before, 504 after 120 s with a quarter of the file downloaded but not
-  its first piece; after, the probe answers about a second after the first byte arrives.
+  and sets the head piece to top priority, with no deadline or refocus that could disturb someone
+  already watching. The wait stays fail-closed. Traced on a cold torrent from one upload-capped
+  seeder: before, 504 after 120 s with a quarter of the file downloaded but not its first piece;
+  after, the probe answers as soon as the head lands, usually about a second after the first byte.
+  In some runs of every build, old and new, that one seeder's transfer stalled for 60 s.
 
 - [x] **Transcoding a torrent still downloading no longer ends at the first long stall (1.6.38).**
   The byte route ends a response when a piece misses its timeout, and ffmpeg took a body shorter

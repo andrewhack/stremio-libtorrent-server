@@ -221,11 +221,10 @@ def _torrent_head(request: Request, ih: str, idx: int, n: int = 64) -> bytes | N
     # the wait below ran out its whole timeout and the probe answered 504 while the rest of the file
     # arrived; a torrent the seed policy paused fetches nothing at all. focus_file makes the file
     # wanted (a piece of a file at priority 0 lands in the partfile, not in the file read below).
-    # Top priority, no deadline: a deadlined piece is fetched in libtorrent's time-critical mode,
-    # one block at a time from the peers it reserves for it, which from one upload-capped seeder
-    # took a minute for a 1 MiB head. No refocus either, which would drop the window of someone
-    # already watching, and a viewer's deadline on the piece stays as it is. Best-effort: the wait
-    # stays fail-closed either way.
+    # Top priority is enough: with the file focused, the head arrived about a second after the first
+    # byte from one upload-capped seeder, as fast as with a deadline. No deadline, then, and no
+    # refocus, so the window and the deadlines of someone already watching stay as they are.
+    # Best-effort: the wait stays fail-closed either way.
     from stremiosrv.torrent.engine import should_resume_on_open
     try:
         h.focus_file(idx)

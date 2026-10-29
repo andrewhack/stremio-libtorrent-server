@@ -316,8 +316,7 @@ class _ColdHandle(_FakeHandle):
         self._paused = False
 
     def boost_piece(self, p, ms, keep_existing=False):
-        # A deadline: libtorrent's time-critical mode, one block at a time from the peers it
-        # reserves for it. The head does not arrive within these tests' patience that way.
+        # Recorded only: the check asks by priority, so a deadline here would be a regression.
         self.calls.append(("boost_piece", p))
 
     def prioritize_pieces(self, pieces, prio=7):
@@ -332,9 +331,8 @@ _MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 200
 def test_a_cold_heads_piece_is_asked_for_before_the_wait(tmp_path):
     # The wait polled for the head's piece without asking for it, so a cold torrent's first
     # /hlsv2/probe waited out the whole first-piece timeout and answered 504. The piece is now
-    # asked for at top priority, without a deadline: libtorrent fetches a deadlined piece one block
-    # at a time, which from one upload-capped seeder took a minute for a 1 MiB head. And without
-    # refocus, which would drop the window of someone already watching.
+    # asked for at top priority, which is enough with the file focused, and without a deadline or a
+    # refocus, either of which would disturb the window of someone already watching.
     (tmp_path / "movie.mp4").write_bytes(_MP4)
     h = _ColdHandle("movie.mp4", len(_MP4))
     r = _req(first_piece_timeout=2)
