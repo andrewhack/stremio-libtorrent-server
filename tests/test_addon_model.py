@@ -333,29 +333,35 @@ def test_an_episode_the_pack_does_not_hold_is_not_offered():
     assert am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:9", ORIGIN) == []
 
 
-def test_an_episode_present_but_with_no_bytes_yet_is_not_offered():
+def test_an_episode_present_but_with_no_bytes_yet_streams_from_peers():
     e = _entry(
         label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
         files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
                 "progress": 1.0},
                {"index": 7, "name": "Show.S01E08.mkv", "size": 4 * GB, "downloaded": 0,
                 "progress": 0.0}])
-    assert am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:8", ORIGIN) == []
+    [eight] = am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:8", ORIGIN)
+    assert eight["url"] == f"{ORIGIN}/{IH}/7"
+    assert "streaming from peers" in eight["title"], eight["title"]
+    assert "% downloaded" not in eight["title"], eight["title"]
 
 
-def test_boundary_spill_from_a_neighbour_is_not_an_episode():
+def test_boundary_spill_from_a_neighbour_does_not_read_as_the_episode_on_disk():
     """The real shape this was written against: a nine-file pack where two episodes nobody asked
     for hold a few MB each, left behind because a piece straddles the boundary between files. The
-    server reported them as present and the addon would have offered a stream that stalls on the
-    first seek. `wanted`, 64 MiB, or 2% -- the same rule the library page draws the line with."""
+    server reported them as present, and a row offered as the local copy stalls on the first seek.
+    The row streams it from peers and says so."""
     e = _entry(
         label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
         files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
                 "progress": 1.0},
                {"index": 0, "name": "Show.S01E01.mkv", "size": 4 * GB, "downloaded": 11_300_000,
                 "progress": 0.003}])
-    assert am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:1", ORIGIN) == []
-    assert len(am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:5", ORIGIN)) == 1
+    [one] = am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:1", ORIGIN)
+    assert one["url"] == f"{ORIGIN}/{IH}/0"
+    assert "streaming from peers" in one["title"], one["title"]
+    [five] = am.streams_for_meta_id({"entries": [e]}, "tt0000010:1:5", ORIGIN)
+    assert "streaming from peers" not in five["title"], five["title"]
 
 
 def test_a_single_file_episode_still_matches_on_its_label_alone():
@@ -510,20 +516,25 @@ def test_anywhere_else_an_unnamed_single_file_is_named():
     assert s["title"].startswith("Some.File.mkv\n"), s["title"]
 
 
-def test_an_episode_still_downloading_is_not_offered():
-    """A partial file can be streamed -- the server fetches as it goes -- but a row saying "play the
-    local copy" promises something it cannot keep: the first open stalls while the head and the
-    index arrive, and the size on the row reads as what is already here. On a real box an episode at
-    18% was offered, did not play, and played on a retry a minute later."""
+def test_an_episode_still_downloading_streams_from_peers_and_says_how_much_is_here():
+    """Complete only (1.6.14) kept a row from reading as the local copy while it was not all here --
+    on a real box an episode at 18% was offered that way, did not play, and played on a retry a
+    minute later. It also left Stremio's "next episode" nothing to play from a pack still
+    arriving: the app asks only the addon that played the current episode. The row is offered
+    again, and says what it is."""
     e = _entry(
         label={"type": "series", "metaId": "tt0000010", "season": 1, "episode": 5, "name": "Pack"},
         files=[{"index": 3, "name": "Show.S01E05.mkv", "size": 4 * GB, "downloaded": 4 * GB,
                 "progress": 1.0},
-               {"index": 8, "name": "Show.S01E09.mkv", "size": 4 * GB, "downloaded": 842_000_000,
-                "progress": 0.18, "wanted": True}])
+               {"index": 8, "name": "Show.S01E09.mkv", "size": 4 * GB,
+                "downloaded": int(0.18 * 4 * GB), "progress": 0.18, "wanted": True}])
     state = {"entries": [e]}
-    assert am.streams_for_meta_id(state, "tt0000010:1:9", ORIGIN) == []
-    assert len(am.streams_for_meta_id(state, "tt0000010:1:5", ORIGIN)) == 1
+    [nine] = am.streams_for_meta_id(state, "tt0000010:1:9", ORIGIN)
+    assert nine["url"] == f"{ORIGIN}/{IH}/8"
+    assert "streaming from peers" in nine["title"], nine["title"]
+    assert "18% downloaded" in nine["title"], nine["title"]
+    [five] = am.streams_for_meta_id(state, "tt0000010:1:5", ORIGIN)
+    assert "streaming from peers" not in five["title"], five["title"]
 
 
 def test_a_partly_downloaded_single_file_title_is_not_offered_either():
@@ -605,12 +616,13 @@ def test_find_entry_matches_case_insensitively_and_misses_cleanly():
     assert am.find_entry(state, "b" * 40) is None
 
 
-def test_a_file_still_downloading_gets_no_row_even_when_the_disk_says_it_is_whole(
+def test_a_file_still_downloading_streams_from_peers_even_when_the_disk_says_it_is_whole(
         tmp_path, monkeypatch):
     """On ZFS a hole lookup on a file libtorrent is writing can answer "no holes" -- the whole
-    file present -- while it is still arriving, and a row offered on that answer plays a file
-    that is not there yet. The session's handle counts what has actually arrived, and the row
-    goes by that: none while it arrives, one as soon as the handle says the file is whole."""
+    file present -- while it is still arriving, and a row offered on that answer reads as a local
+    copy that is not there yet. The session's handle counts what has actually arrived, and the row
+    goes by that: streaming from peers while it arrives, the local copy once the handle says the
+    file is whole."""
     from stremiosrv import cache as cachemod
     from stremiosrv.library import labels
 
@@ -625,20 +637,23 @@ def test_a_file_still_downloading_gets_no_row_even_when_the_disk_says_it_is_whol
                 "progress": 0.25, "wanted": True}
 
     state = statemod.build(str(tmp_path), _FakeEngine({name: ih}, [], live={ih: [arriving]}))
-    assert am.streams_for_meta_id(state, "tt0000011:1:5", ORIGIN) == []
+    [row] = am.streams_for_meta_id(state, "tt0000011:1:5", ORIGIN)
+    assert "streaming from peers" in row["title"], row["title"]
 
     whole = dict(arriving, downloaded=4096, progress=1.0)
     state = statemod.build(str(tmp_path), _FakeEngine({name: ih}, [], live={ih: [whole]}))
-    assert len(am.streams_for_meta_id(state, "tt0000011:1:5", ORIGIN)) == 1
+    [row] = am.streams_for_meta_id(state, "tt0000011:1:5", ORIGIN)
+    assert "streaming from peers" not in row["title"], row["title"]
 
 
-# --- an episode's file is its largest video, offered only once complete (1.6.14) -------------
+# --- an episode's file is its largest video (1.6.14), streaming from peers until here (1.6.49) --
 
 
 def test_a_complete_sample_never_stands_in_for_its_episode():
     """Picked among complete files only, a single-episode release's sample -- complete long before
     the episode, as in any whole-torrent download -- was offered on the episode's page. The label
-    here is another episode's, so only the episode's own files can answer."""
+    here is another episode's, so only the episode's own files can answer, and the episode is
+    offered streaming from peers until it is here."""
     e = _entry(label={"type": "series", "metaId": "tt0000040", "season": 1, "episode": 9,
                       "name": "Pack"},
                files=[{"index": 0, "name": "Show.S01E01.1080p.mkv", "size": 3 * GB,
@@ -646,10 +661,13 @@ def test_a_complete_sample_never_stands_in_for_its_episode():
                       {"index": 1, "name": "show.s01e01.1080p.sample.mkv", "size": 80 * 1024 ** 2,
                        "downloaded": 80 * 1024 ** 2, "progress": 1.0}])
     state = {"entries": [e]}
-    assert am.streams_for_meta_id(state, "tt0000040:1:1", ORIGIN) == []
+    [row] = am.streams_for_meta_id(state, "tt0000040:1:1", ORIGIN)
+    assert row["url"] == f"{ORIGIN}/{IH}/0"
+    assert "streaming from peers" in row["title"], row["title"]
     e["files"][0].update(downloaded=3 * GB, progress=1.0)
-    assert [s["url"] for s in am.streams_for_meta_id(state, "tt0000040:1:1", ORIGIN)] == [
-        f"{ORIGIN}/{IH}/0"]
+    [row] = am.streams_for_meta_id(state, "tt0000040:1:1", ORIGIN)
+    assert row["url"] == f"{ORIGIN}/{IH}/0"
+    assert "streaming from peers" not in row["title"], row["title"]
 
 
 def test_a_subtitle_is_never_offered_as_its_episode():
@@ -665,8 +683,9 @@ def test_a_subtitle_is_never_offered_as_its_episode():
 
 
 def test_of_two_files_named_as_one_episode_the_larger_decides():
-    """Two qualities of one episode in one pack: the larger is the episode's file, and it is waited
-    for rather than stood in for -- the rule that keeps a sample off the page."""
+    """Two qualities of one episode in one pack: the larger is the episode's file, streamed from
+    peers while it arrives rather than stood in for -- the rule that keeps a sample off the
+    page."""
     e = _entry(label={"type": "series", "metaId": "tt0000042", "season": 1, "episode": 9,
                       "name": "Pack"},
                files=[{"index": 0, "name": "Show.S01E01.720p.mkv", "size": 2 * GB,
@@ -674,7 +693,9 @@ def test_of_two_files_named_as_one_episode_the_larger_decides():
                       {"index": 1, "name": "Show.S01E01.1080p.mkv", "size": 4 * GB,
                        "downloaded": GB, "progress": 0.25}])
     state = {"entries": [e]}
-    assert am.streams_for_meta_id(state, "tt0000042:1:1", ORIGIN) == []
+    [row] = am.streams_for_meta_id(state, "tt0000042:1:1", ORIGIN)
+    assert row["url"] == f"{ORIGIN}/{IH}/1"
+    assert "streaming from peers" in row["title"], row["title"]
     e["files"][1].update(downloaded=4 * GB, progress=1.0)
     assert [s["url"] for s in am.streams_for_meta_id(state, "tt0000042:1:1", ORIGIN)] == [
         f"{ORIGIN}/{IH}/1"]
@@ -761,7 +782,7 @@ def test_a_malformed_learned_file_reads_as_none():
     assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/0"]
 
 
-def test_the_learned_file_is_offered_once_complete_and_nothing_before():
+def test_the_learned_file_streams_from_peers_until_complete_and_nothing_stands_in():
     """Nothing stands in for it meanwhile -- here, a complete sample."""
     e = _entry(label=_learned(1, 1, "Show.S01E01.mkv", 4 * GB),
                files=[{"index": 0, "name": "Show.S01E01.mkv", "size": 4 * GB,
@@ -769,10 +790,13 @@ def test_the_learned_file_is_offered_once_complete_and_nothing_before():
                       {"index": 1, "name": "show.s01e01.sample.mkv", "size": 50 * 1024 ** 2,
                        "downloaded": 50 * 1024 ** 2, "progress": 1.0}])
     state = {"entries": [e]}
-    assert am.streams_for_meta_id(state, "tt0000050:1:1", ORIGIN) == []
+    [row] = am.streams_for_meta_id(state, "tt0000050:1:1", ORIGIN)
+    assert row["url"] == f"{ORIGIN}/{IH}/0"
+    assert "streaming from peers" in row["title"], row["title"]
     e["files"][0].update(downloaded=4 * GB, progress=1.0)
-    streams = am.streams_for_meta_id(state, "tt0000050:1:1", ORIGIN)
-    assert [s["url"] for s in streams] == [f"{ORIGIN}/{IH}/0"]
+    [row] = am.streams_for_meta_id(state, "tt0000050:1:1", ORIGIN)
+    assert row["url"] == f"{ORIGIN}/{IH}/0"
+    assert "streaming from peers" not in row["title"], row["title"]
 
 
 # --- a card's page lists complete videos, and one the card cannot play (1.6.14) ---------------
@@ -835,3 +859,96 @@ def test_a_card_whose_largest_file_is_no_video_lists_its_video():
                       {"index": 1, "name": "Film.mkv", "size": 4 * GB, "downloaded": 4 * GB,
                        "progress": 1.0}])
     assert [v["id"] for v in am.meta_for(e)["videos"]] == [am.format_id(IH, 1)]
+
+
+# --- "next episode" after a My Library row (1.6.49) -------------------------------------------
+#
+# Stremio asks for the next episode's streams only from the addon that played the current one, and
+# plays one only from a row in the current row's binge group.
+
+
+def _episode(index, name, done=1.0):
+    size = 4 * GB
+    return {"index": index, "name": name, "size": size, "downloaded": int(size * done),
+            "progress": done}
+
+
+def test_episodes_of_one_show_in_two_torrents_share_a_binge_group():
+    """A group per torrent left a show held as one torrent per episode with no next episode,
+    though the server held it whole."""
+    one = _entry(infoHash="a" * 40, files=[_episode(0, "Show.S01E01.mkv")],
+                 label={"type": "series", "metaId": "tt0000060", "season": 1, "episode": 1})
+    two = _entry(infoHash="b" * 40, files=[_episode(0, "Show.S01E02.mkv")],
+                 label={"type": "series", "metaId": "tt0000060", "season": 1, "episode": 2})
+    state = {"entries": [one, two]}
+    [first] = am.streams_for_meta_id(state, "tt0000060:1:1", ORIGIN)
+    [second] = am.streams_for_meta_id(state, "tt0000060:1:2", ORIGIN)
+    assert second["url"] == f"{ORIGIN}/{'b' * 40}/0"
+    assert first["behaviorHints"]["bingeGroup"] == "stremiosrv:tt0000060"
+    assert second["behaviorHints"]["bingeGroup"] == "stremiosrv:tt0000060"
+
+
+def test_a_labelled_torrents_own_page_rows_share_the_shows_binge_group():
+    """The library's own page plays a torrent's files by our ids. Its rows are in the same group
+    as the title page's, so either one leads on to the other's next row."""
+    e = _entry(label={"type": "series", "metaId": "tt0000060", "season": 1, "episode": 1},
+               files=[_episode(0, "Show.S01E01.mkv"), _episode(1, "Show.S01E02.mkv")])
+    s = am.stream_for(e, ORIGIN, file_idx=1, own_page=True)
+    assert s["behaviorHints"]["bingeGroup"] == "stremiosrv:tt0000060"
+
+
+def test_an_episode_with_no_bytes_is_offered_from_the_torrents_own_record():
+    """A pack started from another source fetches only what is watched, and the entry's file list
+    holds only files with bytes -- so the next episode is in the torrent's own record alone."""
+    e = _entry(label={"type": "series", "metaId": "tt0000061", "season": 1, "episode": 1},
+               files=[_episode(5, "Show.S01E01.mkv")],
+               torrentVideos=[{"index": 5, "name": "Show.S01E01.mkv", "size": 4 * GB},
+                              {"index": 1, "name": "Show.S01E02.mkv", "size": 3 * GB}])
+    [two] = am.streams_for_meta_id({"entries": [e]}, "tt0000061:1:2", ORIGIN)
+    assert two["url"] == f"{ORIGIN}/{IH}/1"
+    assert two["title"].startswith("Show.S01E02.mkv\n"), two["title"]
+    assert "3.00 GB" in two["title"], two["title"]
+    assert "streaming from peers" in two["title"], two["title"]
+    assert "% downloaded" not in two["title"], two["title"]
+    assert two["behaviorHints"]["bingeGroup"] == "stremiosrv:tt0000061"
+    # an episode the torrent does not contain is still not offered
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000061:1:3", ORIGIN) == []
+
+
+def test_a_learned_file_with_no_bytes_is_offered_from_the_torrents_own_record():
+    """The label's own file, learned while it had no bytes: not in the listing, but in the record,
+    and the one file the label means."""
+    e = _entry(label=_learned(1, 1, "[Group] Show - 01 [1080p].mkv", 4 * GB), numVideos=2,
+               numFiles=2,
+               files=[{"index": 2, "name": "[Group] Show - 02 [1080p].mkv", "size": 5 * GB,
+                       "downloaded": 5 * GB, "progress": 1.0}],
+               torrentVideos=[{"index": 1, "name": "[Group] Show - 01 [1080p].mkv", "size": 4 * GB},
+                              {"index": 2, "name": "[Group] Show - 02 [1080p].mkv", "size": 5 * GB}])
+    [one] = am.streams_for_meta_id({"entries": [e]}, "tt0000050:1:1", ORIGIN)
+    assert one["url"] == f"{ORIGIN}/{IH}/1"
+    assert "streaming from peers" in one["title"], one["title"]
+
+
+def test_a_complete_copy_comes_before_one_streaming_from_peers():
+    """Stremio plays the first row of the group, so a copy that is all here wins over one that is
+    not, whichever torrent the server happens to list first."""
+    label = {"type": "series", "metaId": "tt0000062", "season": 1, "episode": 1}
+    arriving = _entry(infoHash="a" * 40, label=label,
+                      files=[_episode(0, "Show.S01E01.mkv"), _episode(1, "Show.S01E02.mkv", 0.4)])
+    whole = _entry(infoHash="b" * 40, label=dict(label, episode=2),
+                   files=[_episode(0, "Show.S01E02.1080p.mkv")])
+    urls = [s["url"] for s in am.streams_for_meta_id({"entries": [arriving, whole]},
+                                                     "tt0000062:1:2", ORIGIN)]
+    assert urls == [f"{ORIGIN}/{'b' * 40}/0", f"{ORIGIN}/{'a' * 40}/1"]
+
+
+def test_a_film_still_arriving_is_still_not_offered():
+    """Next episode is what needs a row before the file is here. A film's row stays the promise of
+    the local copy."""
+    e = _entry(label={"type": "movie", "metaId": "tt0000063", "name": "Film"},
+               files=[_episode(0, "Film.mkv", 0.25)])
+    assert am.streams_for_meta_id({"entries": [e]}, "tt0000063", ORIGIN) == []
+    learned = _entry(label={"type": "movie", "metaId": "tt0000063",
+                            "file": {"name": "Film.mkv", "size": 4 * GB}},
+                     files=[_episode(0, "Film.mkv", 0.25)])
+    assert am.streams_for_meta_id({"entries": [learned]}, "tt0000063", ORIGIN) == []

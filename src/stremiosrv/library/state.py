@@ -161,6 +161,30 @@ def _torrent_files(cache_root: str, name: str, info_hash: str,
     return (out, resume.count, videos) if out else _fresh_single_file(base, name, live)
 
 
+def with_record_videos(cache_root: str, state: dict) -> dict:
+    """`state` with each torrent's own videos added as `torrentVideos`: index, name and size, for
+    every video in its resume record, whether or not any of it is here.
+
+    An entry's `files` holds only files with bytes, which is what the library page shows. The addon
+    needs the rest too: a pack started from another source fetches only the episode watched, so the
+    next one is in the record alone, and Stremio's "next episode" after a My Library row asks this
+    addon and no other. Added for the addon only -- the page has no use for a list that can run to
+    thousands of files. A torrent with no readable record gets none.
+    """
+    for e in state.get("entries", []):
+        ih = e.get("infoHash")
+        rec = torrentfiles.listing(cache_root, ih) if ih else None
+        if rec is None:
+            continue
+        videos = []
+        for tf in rec.files:
+            fname = tf.parts[-1] if tf.parts else e.get("name") or ""
+            if is_video(fname):
+                videos.append({"index": tf.index, "name": fname, "size": tf.size})
+        e["torrentVideos"] = videos
+    return state
+
+
 def _fresh_single_file(base: str, name: str,
                        live: list[dict] | None) -> tuple[list[dict], int, int] | None:
     """The session's own record for a single file at the cache root that its resume record does not

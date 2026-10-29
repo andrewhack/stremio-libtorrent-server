@@ -119,16 +119,42 @@ def test_a_single_file_release_is_learned_from_its_size_and_name(tmp_path):
     assert [ih for ih, _ in hits] == [FILE_IH]
 
 
-def test_a_single_file_release_is_offered_only_when_complete(tmp_path, monkeypatch):
+def test_a_single_file_release_streams_from_peers_until_complete(tmp_path, monkeypatch):
     _root_file(tmp_path)
     labels.put(str(tmp_path), FILE_IH, {"metaId": "tt0000002", "type": "series", "season": 4,
                                         "episode": 5, "videoId": "tt0000002:4:5"})
-    streams = model.streams_for_meta_id(statemod.build(str(tmp_path), None),
-                                        "tt0000002:4:5", "http://o")
-    assert [s["url"] for s in streams] == [f"http://o/{FILE_IH}/0"]
+    [row] = model.streams_for_meta_id(statemod.build(str(tmp_path), None),
+                                      "tt0000002:4:5", "http://o")
+    assert row["url"] == f"http://o/{FILE_IH}/0"
+    assert "streaming from peers" not in row["title"], row["title"]
     monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: st.st_size // 2)
-    assert model.streams_for_meta_id(statemod.build(str(tmp_path), None),
-                                     "tt0000002:4:5", "http://o") == []
+    [row] = model.streams_for_meta_id(statemod.build(str(tmp_path), None),
+                                      "tt0000002:4:5", "http://o")
+    assert row["url"] == f"http://o/{FILE_IH}/0"
+    assert "streaming from peers" in row["title"], row["title"]
+
+
+def test_the_addons_state_carries_every_video_of_the_torrents_own_record(tmp_path):
+    """The listing holds only files with bytes. The addon also needs the ones with none -- the
+    next episode of a pack nobody has fetched yet -- and the torrent's own record knows them all."""
+    _pack(tmp_path)
+    state = statemod.with_record_videos(str(tmp_path), statemod.build(str(tmp_path), None))
+    [e] = [e for e in state["entries"] if e.get("infoHash")]
+    got = {v["name"]: (v["index"], v["size"]) for v in e["torrentVideos"]}
+    assert got == {f"The Show S02 {ep}.mkv": (i, _size(ep)) for i, ep in enumerate(PACK)}
+    labels.put(str(tmp_path), PACK_IH, {"metaId": "tt0000001", "type": "series",
+                                        "season": 2, "episode": 1, "videoId": "tt0000001:2:1"})
+    state = statemod.with_record_videos(str(tmp_path), statemod.build(str(tmp_path), None))
+    [seven] = model.streams_for_meta_id(state, "tt0000001:2:7", "http://o")
+    assert seven["url"] == f"http://o/{PACK_IH}/6"
+    assert "streaming from peers" in seven["title"], seven["title"]
+
+
+def test_a_torrent_with_no_record_carries_no_record_videos(tmp_path):
+    (tmp_path / "Loose Folder").mkdir()
+    (tmp_path / "Loose Folder" / "clip.mkv").write_bytes(b"x" * 100)
+    state = statemod.with_record_videos(str(tmp_path), statemod.build(str(tmp_path), None))
+    assert all(not e.get("torrentVideos") for e in state["entries"])
 
 
 def test_a_folder_whose_first_file_is_not_a_video_offers_the_videos_own_index(tmp_path):
@@ -325,7 +351,7 @@ def test_a_brand_new_root_file_that_is_not_a_video_is_not_listed(tmp_path):
 def test_an_episode_still_arriving_is_not_answered_with_another_one(tmp_path, monkeypatch):
     """The label names the episode a pack was learned from, not a file. That episode, played
     part-way and left for the next, stays partial -- and the label's fallback, picking a file by
-    itself, offered the next episode's on its page."""
+    itself, offered the next episode's on its page. It streams its own file from peers."""
     _pack(tmp_path, present=("E01", "E02"))
     labels.put(str(tmp_path), PACK_IH, {"metaId": "tt0000001", "type": "series", "season": 2,
                                         "episode": 1, "videoId": "tt0000001:2:1"})
@@ -335,7 +361,9 @@ def test_an_episode_still_arriving_is_not_answered_with_another_one(tmp_path, mo
 
     monkeypatch.setattr(cachemod, "data_bytes", arrived)
     state = statemod.build(str(tmp_path), None)
-    assert model.streams_for_meta_id(state, "tt0000001:2:1", "http://o") == []
+    [one] = model.streams_for_meta_id(state, "tt0000001:2:1", "http://o")
+    assert one["url"] == f"http://o/{PACK_IH}/5"
+    assert "streaming from peers" in one["title"], one["title"]
     assert [s["url"] for s in model.streams_for_meta_id(state, "tt0000001:2:2", "http://o")] == [
         f"http://o/{PACK_IH}/1"]
 
@@ -419,7 +447,7 @@ def test_a_lone_video_named_without_an_episode_plays_on_its_label_at_its_own_ind
 def test_a_root_file_the_session_holds_lists_itself_before_its_first_bytes(tmp_path):
     """Its record is saved but none of its bytes has arrived, so the record finds nothing, and a
     root file has no directory to walk. The session's own record lists it: the first play still
-    learns it, and it is not offered before it is complete."""
+    learns it, and until it is complete it streams from peers."""
     name, size = _root_file(tmp_path)
     live = [{"index": 0, "name": name, "size": size, "downloaded": 0, "progress": 0.0,
              "wanted": True}]
@@ -432,7 +460,9 @@ def test_a_root_file_the_session_holds_lists_itself_before_its_first_bytes(tmp_p
     assert [ih for ih, _ in hits] == [FILE_IH]
     labels.put(str(tmp_path), FILE_IH, dict(hits[0][1]))
     state = statemod.build(str(tmp_path), engine)
-    assert model.streams_for_meta_id(state, "tt0000002:4:5", "http://o") == []
+    [row] = model.streams_for_meta_id(state, "tt0000002:4:5", "http://o")
+    assert row["url"] == f"http://o/{FILE_IH}/0"
+    assert "streaming from peers" in row["title"], row["title"]
 
 
 def test_an_entry_carries_how_many_videos_its_torrent_holds(tmp_path):

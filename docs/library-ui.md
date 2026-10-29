@@ -90,12 +90,23 @@ under Addons → Add addon, and it produces two surfaces there:
   file's size and state, so two copies of one title can be told apart; only a title's own page in
   the library, which is already called by that file name, leaves the line out.
 
+**Next episode.** Stremio asks for the next episode only from the addon that played the current one,
+and plays it only from a row in the same *binge group*. So an episode's row is offered even when the
+file is not all here — still arriving, or never fetched, read from the torrent's own file list — and
+says so: `streaming from peers · 34% downloaded`. Playing it fetches that one episode, from where you
+watch, exactly as any other source's row for the same torrent would; it does not start downloading
+the rest of a pack. A copy that is all here is listed first. Every torrent labelled with the same
+show shares one binge group, so the next episode plays from whichever of them holds it. A film's row
+still waits until the whole file is here. An episode that no torrent on the server contains has no
+row, and the app falls back to its own handling — the web player opens that episode's stream list.
+
 The addon names a title only from `labels.json`, never from a folder name: guessing an identity from
 a folder name would risk putting the wrong film behind a right-looking row. Besides the downloads you
 start here, it learns a title when the app plays it. The app tells every installed subtitles addon
 what it is playing — the video, and the file's name and size — and a file on the server that matches
 exactly is labelled with that video, together with the file that played. That title's page then
-offers exactly that file, once all of it is here. A title learned this way is named for its page
+offers exactly that file: a film once all of it is here, an episode also while it is still arriving
+(see *Next episode* above). A title learned this way is named for its page
 in the app, not on the board: its card, like one for a pasted magnet, still shows its on-disk
 **folder name** and **no poster**. Only a download started here carries the title's name and poster.
 

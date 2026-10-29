@@ -85,7 +85,8 @@ def _origin(request: Request) -> str:
 
 def _state(request: Request) -> dict:
     s = _settings(request)
-    return statemod.build(s.cache_root, request.app.state.engine, budget=int(s.cache_size))
+    state = statemod.build(s.cache_root, request.app.state.engine, budget=int(s.cache_size))
+    return statemod.with_record_videos(s.cache_root, state)
 
 
 @router.get("/{token}/manifest.json")

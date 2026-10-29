@@ -196,14 +196,21 @@ what "done" looks like, so it can be picked up without context.
 - [ ] **No way to play a title from the library page.** *Done =* a card (and each file of a pack)
   offers Watch, opening it in the bundled player through its own deep link.
 
-- [ ] **"Next episode" after a My Library row does not play.** Reported in use: after an episode
-  played from a My Library row, the next episode opens an empty player on the TV (Tizen); the
-  desktop player opens a release but does not play it. Picking a release on the title page plays
-  it. Our rows tie a torrent's episodes together with `bingeGroup`, but a row exists only for an
-  episode the server holds complete in that torrent, so the next episode of a partly fetched pack,
-  or one in another torrent, has no row in the group. Not traced yet. *Done =* a
-  wire trace from both players shows what "next episode" asks for and what the server answers,
-  and with the fix the next episode plays whenever the server holds it.
+- [x] **"Next episode" after a My Library row plays whenever the server holds it (1.6.49).**
+  Reported in use: after an episode played from a My Library row, the next episode opened an empty
+  player on the TV (Tizen), and the desktop player opened a release but did not play it, while the
+  same episode started from another source went on to the next. stremio-core asks for the next
+  episode's streams only from the addon that played the current one, and plays only a row in the
+  same `bingeGroup`. Ours had a group per torrent and rows only for complete files, so a show held as
+  one torrent per episode, or a pack whose next episode had not arrived, had nothing to play. The
+  group is now per show, and an episode's row is offered while it is still arriving or not yet
+  fetched (read from the torrent's own record), marked *streaming from peers*, with a complete copy
+  first. Worked out from stremio-core's code and the owner's report, not a wire trace.
+
+- [ ] **"Next episode" when no torrent on the server holds it.** The addon has no row to offer, and
+  the web player then opens that episode's stream list. What the TV does there is untraced; the
+  empty player in the report above may have been this case. *Done =* a wire trace from the TV for
+  an episode the server does not hold, and the TV lands on the stream list.
 
 ## Deployment & image
 

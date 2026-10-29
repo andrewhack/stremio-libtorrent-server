@@ -245,7 +245,9 @@ the built-in routers for that first boot either.
 Turning on the library page also publishes it as a **Stremio addon**, so what is on the box shows up
 in the app itself: a **My Library** row on your board, and a **play the local copy** entry in the
 stream list next to every other source. It is read-only — keeping, removing and starting downloads
-stay on the page, because the addon protocol has no way to express an action.
+stay on the page, because the addon protocol has no way to express an action. An episode's entry also
+appears while the file is still arriving, marked *streaming from peers*, so Stremio's **next
+episode** keeps playing after you start from a My Library entry.
 
 **Installing it — four steps:**
 

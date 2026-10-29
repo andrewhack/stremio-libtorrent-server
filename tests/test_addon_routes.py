@@ -263,3 +263,37 @@ def test_a_learned_single_file_is_named_on_its_episode_page_but_not_twice_on_its
     own = c.get(f"/library/addon/{t}/stream/other/stremiosrv:{ih}:0.json", headers=LAN)
     titles = [s["title"] for s in own.json()["streams"]]
     assert titles and name not in titles[0], titles
+
+
+def test_the_next_episode_of_a_pack_nobody_fetched_is_offered_in_the_same_binge_group(
+        tmp_path, monkeypatch):
+    """Through the route, as Stremio asks after an episode played from a My Library row: the next
+    episode's stream request goes to this addon alone, and it plays only a row in the played row's
+    binge group. A pack started from another source holds only the episode watched."""
+    from bencode_helper import benc
+
+    from stremiosrv.library import torrentfiles
+
+    ih = "d" * 40
+    name = "Show S01"
+    (tmp_path / name).mkdir()
+    (tmp_path / name / "Show.S01E01.mkv").write_bytes(b"x" * 4096)
+    (tmp_path / ".resume").mkdir()
+    (tmp_path / ".resume" / f"{ih}.fastresume").write_bytes(benc({"info": {
+        "name": name, "files": [{"length": 4096, "path": ["Show.S01E01.mkv"]},
+                                {"length": 5000, "path": ["Show.S01E02.mkv"]}]}}))
+    cachemod.save_name_index(str(tmp_path), {name: ih})
+    monkeypatch.setattr(cachemod, "data_bytes", lambda path, st: st.st_size)  # no holes: complete
+    torrentfiles._read.cache_clear()
+    labelsmod.put(str(tmp_path), ih, {"metaId": "tt0000070", "type": "series",
+                                      "season": 1, "episode": 1})
+    c = _client(tmp_path)
+    t = _token(tmp_path)
+
+    [played] = c.get(f"/library/addon/{t}/stream/series/tt0000070:1:1.json",
+                     headers=LAN).json()["streams"]
+    [nxt] = c.get(f"/library/addon/{t}/stream/series/tt0000070:1:2.json",
+                  headers=LAN).json()["streams"]
+    assert nxt["url"].endswith(f"/{ih}/1"), nxt
+    assert "streaming from peers" in nxt["title"], nxt["title"]
+    assert nxt["behaviorHints"]["bingeGroup"] == played["behaviorHints"]["bingeGroup"]

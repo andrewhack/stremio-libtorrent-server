@@ -119,10 +119,11 @@ def _played(type_: str, video_id: str, extra: dict) -> tuple[dict, int, str] | N
     return label, int(size), _basename(extra.get("filename") or "")
 
 
-def _matching_files(entry: dict, size: int, name: str) -> list[dict]:
+def _matching_files(entry: dict, size: int, name: str,
+                    files: list[dict] | None = None) -> list[dict]:
     """The entry's files a report can mean: of the played size to the byte, and of the played name
-    when the app sent one."""
-    return [f for f in entry.get("files") or []
+    when the app sent one. `files` searches another list of the entry's files instead."""
+    return [f for f in (entry.get("files") or [] if files is None else files)
             if (f.get("size") or 0) == size
             and (not name or _basename(f.get("name") or "") == name)]
 
@@ -235,9 +236,17 @@ def describe_file(entry: dict, f: dict) -> str:
     The size is the file's, not the torrent's. A 24 GB season pack printed on the row for a 3.5 GB
     episode is not a rounding error, it is the wrong number -- and it is the number a viewer reads
     to decide what they are about to play.
+
+    A file not all here says so instead of the torrent's state: playing it fetches the rest, and
+    "on disk" or "seeding" under it would read as the local copy.
     """
     size = f.get("size") or f.get("downloaded") or 0
-    return " · ".join([human_size(size), *_state_bits(entry)])
+    if is_complete(f):
+        return " · ".join([human_size(size), *_state_bits(entry)])
+    # Capped, so a file one piece short never reads as 100%; nothing at all says nothing.
+    here = min(99, round((f.get("downloaded") or 0) * 100 / size)) if size else 0
+    return " · ".join([human_size(size), "streaming from peers",
+                       *([f"{here}% downloaded"] if here else [])])
 
 
 def is_complete(f: dict) -> bool:
@@ -297,7 +306,7 @@ def _basename(name: str) -> str:
     return (name or "").replace("\\", "/").rsplit("/", 1)[-1]
 
 
-def playable_index(entry: dict) -> int | None:
+def playable_index(entry: dict, arriving: bool = False) -> int | None:
     """Which file in the torrent this entry means, or None when nothing here can be addressed.
 
     A file is addressable only if its index is an int: the stream URL is
@@ -313,6 +322,9 @@ def playable_index(entry: dict) -> int | None:
     Anything wider with no addressable file -- state.py's disk fallback reports every file as index
     None -- is refused rather than guessed: on a real torrent index 0 was a text file and the video
     was index 1.
+
+    `arriving` answers before the file is all here: an episode's row streams from peers meanwhile
+    (see episode_index). The card and a film's row wait for the bytes.
     """
     files = entry.get("files") or []
     addressable = [f for f in files if isinstance(f.get("index"), int)]
@@ -321,29 +333,69 @@ def playable_index(entry: dict) -> int | None:
         wanted_base = _basename(wanted)
         for f in addressable:
             if _basename(f.get("name") or "") == wanted_base:
-                return f["index"] if is_complete(f) else None
-    # Complete only: offering a file still arriving cannot keep the promise the row makes.
+                return f["index"] if arriving or is_complete(f) else None
+    # Complete only, unless `arriving`: a film or card offered while its file still arrives cannot
+    # keep the promise the row makes.
     if addressable:
         main = max(addressable, key=lambda f: f.get("size") or 0)
-        return main["index"] if is_complete(main) else None
+        return main["index"] if arriving or is_complete(main) else None
     # No addressable index -- state.py's disk fallback reports every file as index None once the
     # engine handle is gone, which after a restart is most of the cache. A single file there is
     # still index 0, and its completeness is knowable even when its index is not.
     if len(files) == 1:
-        return 0 if is_complete(files[0]) else None
+        return 0 if arriving or is_complete(files[0]) else None
     # Nothing listed at all: no engine record and nothing readable on disk. Index 0 is the only
     # answer available, and for a single-file torrent it is the right one.
     return 0 if not files else None
 
 
+def _offerable_files(entry: dict) -> list[dict]:
+    """The entry's files, plus each video of its torrent's own record (`torrentVideos`, which only
+    the addon's state carries) that the listing leaves out for having no bytes here yet.
+
+    Those are listed with nothing downloaded: playing one fetches it, like any other source's row
+    for the same torrent. Matched on the torrent's index, which both sides carry.
+    """
+    files = list(entry.get("files") or [])
+    listed = {f.get("index") for f in files if isinstance(f.get("index"), int)}
+    for v in entry.get("torrentVideos") or []:
+        if isinstance(v.get("index"), int) and v["index"] not in listed:
+            files.append({"index": v["index"], "name": v.get("name") or "",
+                          "size": v.get("size") or 0, "downloaded": 0, "progress": 0.0})
+    return files
+
+
+def _binge_group(entry: dict) -> str:
+    """One group per show for a torrent whose label names one, else one per torrent.
+
+    Stremio plays the next episode only from a row in the played row's group, and asks only this
+    addon for it. A group per torrent held a show kept as one torrent per episode to the first
+    episode, with the next one complete on disk.
+    """
+    meta_id = (entry.get("label") or {}).get("metaId")
+    return f"{ID_PREFIX}{meta_id}" if meta_id else f"{ID_PREFIX}{entry['infoHash'].lower()}"
+
+
+def _file_at(entry: dict, idx: int) -> dict | None:
+    """The file a row for `idx` plays, when the entry knows it."""
+    files = entry.get("files") or []
+    chosen = next((f for f in _offerable_files(entry) if f.get("index") == idx), None)
+    if chosen is None and idx == 0 and len(files) == 1:
+        # Listed from disk with no index (no engine record, as after a restart), and offered as
+        # index 0 by playable_index: it is still that one file.
+        chosen = files[0]
+    return chosen
+
+
 def stream_for(entry: dict, origin: str, file_idx: int | None = None,
                own_page: bool = False) -> dict | None:
-    """One stream entry pointing at the copy already on disk, or None when there is no file index
+    """One stream entry pointing at a file of this torrent, or None when there is no file index
     to point it at -- see `playable_index` for when that happens.
 
-    `bingeGroup` ties every episode of one torrent together so the app can play the next one
-    without asking again. `own_page`: the row is for this library's own title page, which is
-    titled by `display_name` -- anywhere else, the app titles the page from its own catalog.
+    `bingeGroup` ties the episodes of one show together so the app can play the next one without
+    asking again (see `_binge_group`). `own_page`: the row is for this library's own title page,
+    which is titled by `display_name` -- anywhere else, the app titles the page from its own
+    catalog.
     """
     idx = playable_index(entry) if file_idx is None else file_idx
     if idx is None:
@@ -353,12 +405,7 @@ def stream_for(entry: dict, origin: str, file_idx: int | None = None,
     # row is the wrong number. The file name goes first, the way every other source row names what
     # it is about to play, so ours is recognisable beside them. A single-file torrent too: two
     # copies of one title otherwise differ only by a size.
-    files = entry.get("files") or []
-    chosen = next((f for f in files if f.get("index") == idx), None)
-    if chosen is None and idx == 0 and len(files) == 1:
-        # Listed from disk with no index (no engine record, as after a restart), and offered as
-        # index 0 by playable_index: it is still that one file.
-        chosen = files[0]
+    chosen = _file_at(entry, idx)
     if chosen is not None:
         title = describe_file(entry, chosen)
         name = _basename(chosen.get("name") or "")
@@ -375,12 +422,12 @@ def stream_for(entry: dict, origin: str, file_idx: int | None = None,
         "url": f"{origin}/{ih}/{idx}",
         "name": CATALOG_NAME,
         "title": title,
-        "behaviorHints": {"bingeGroup": f"{ID_PREFIX}{ih}"},
+        "behaviorHints": {"bingeGroup": _binge_group(entry)},
     }
 
 
 def episode_index(entry: dict, season: int, episode: int) -> int | None:
-    """The torrent file index holding this episode, or None if the pack does not hold it here.
+    """The torrent file index holding this episode, or None if the torrent does not contain it.
 
     There is one label per infohash and a season pack holds many episodes, so matching the label's
     own episode number answered for exactly one of them: on a real box, a pack with six episodes on
@@ -388,23 +435,24 @@ def episode_index(entry: dict, season: int, episode: int) -> int | None:
     know better, read the way the download path reads them (pins.names_episode), so the same names
     resolve the same way in both places.
 
-    Of the videos whose names read as the episode, the largest is the episode's file: the size
-    picks WHICH and the bytes decide WHEN, as for a torrent's main file in playable_index. Picking
+    Of the videos whose names read as the episode, the largest is the episode's file. Picking
     among complete files only let a sample stand in for its episode -- a release whose sample was
     complete while the episode was at 30%, which any whole-torrent download passes through, offered
     the sample. Videos only, because a tracked download's list holds every file with bytes, and a
     subtitle completed by the pieces it shares with its neighbours was offered as the episode.
 
-    Only a complete file is offered. Offering an episode that is not all here would start fetching
-    it on play, which is the opposite of what "play the local copy" promises.
+    The file is the answer whether or not it is all here (1.6.49), and the torrent's own record
+    counts as well as the listing: Stremio's "next episode" after a My Library row asks this addon
+    alone, and a pack started from another source holds only the episode watched. The row says
+    when it streams from peers (describe_file). Under the complete-only rule (1.6.14 to 1.6.48), a
+    pack still arriving left the next episode with nothing to play.
     """
-    named = [f for f in (entry.get("files") or [])
+    named = [f for f in _offerable_files(entry)
              if isinstance(f.get("index"), int) and is_video(f.get("name") or "")
              and pinsmod.names_episode(f.get("name") or "", season, episode)]
     if not named:
         return None
-    main = max(named, key=lambda f: f.get("size") or 0)
-    return main["index"] if is_complete(main) else None
+    return max(named, key=lambda f: f.get("size") or 0)["index"]
 
 
 # A file name that reads as an episode, in either form pins.select_wanted_file reads: S04E05 and
@@ -452,8 +500,10 @@ def _label_matches(label: dict, base: str, season: int | None, episode: int | No
     return label.get("season") == season and label.get("episode") == episode
 
 
-def _recorded_index(entry: dict, recorded: dict) -> int | None:
-    """Where the file a label recorded is in this entry's listing, if it is here and complete.
+def _recorded_index(entry: dict, recorded: dict, arriving: bool = False) -> int | None:
+    """Where the file a label recorded is in this entry's listing: once complete, or with
+    `arriving` (an episode -- see episode_index), also while it streams from peers, from the
+    torrent's own record when it has no bytes here yet.
 
     Found the way it was learned (_matching_files: by name and size) among the files that carry an
     index: one match is the file, none or several is nothing -- not here yet, or no way to tell
@@ -462,9 +512,12 @@ def _recorded_index(entry: dict, recorded: dict) -> int | None:
     folder whose first file is a text file would play the text. The torrent's resume record, which
     the engine saves every 30 s by default, gives the file its index.
     """
-    found = [f for f in _matching_files(entry, recorded["size"], recorded["name"])
+    files = _offerable_files(entry) if arriving else None
+    found = [f for f in _matching_files(entry, recorded["size"], recorded["name"], files)
              if isinstance(f.get("index"), int)]
-    return found[0]["index"] if len(found) == 1 and is_complete(found[0]) else None
+    if len(found) != 1:
+        return None
+    return found[0]["index"] if arriving or is_complete(found[0]) else None
 
 
 def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
@@ -477,14 +530,19 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
     actually play, not a row of everything that matched by name.
 
     A label learned at playback records the file it was learned from, and for the label's own video
-    that file is the answer -- once complete, and nothing in its place. Anything else is worked out
-    from the torrent's files: an episode by its name, and a label with no file by the fallback.
+    that file is the answer, and nothing in its place. Anything else is worked out from the
+    torrent's files: an episode by its name, and a label with no file by the fallback.
+
+    An episode is offered while it is still arriving, streaming from peers; a film only once
+    complete (see episode_index). A copy that is all here comes first: Stremio plays the first row
+    of the played row's binge group.
     """
     parts = meta_id.split(":")
     base = parts[0]
     season = int(parts[1]) if len(parts) > 2 and parts[1].isdecimal() else None
     episode = int(parts[2]) if len(parts) > 2 and parts[2].isdecimal() else None
-    out: list[dict] = []
+    here: list[dict] = []
+    arriving: list[dict] = []
     for e in state.get("entries", []):
         if not is_title(e):
             continue
@@ -494,10 +552,11 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
         own = _label_matches(label, base, season, episode)
         recorded = labelsmod.file_record(label.get("file"))
         stream = None
+        idx = None
         if own and recorded is not None:
             # Neither a name that reads as this episode nor the torrent's main file: a guess could
             # only ever be right where the recorded file already is.
-            idx = _recorded_index(e, recorded)
+            idx = _recorded_index(e, recorded, arriving=season is not None)
             if idx is not None:
                 stream = stream_for(e, origin, idx)
         else:
@@ -510,10 +569,13 @@ def streams_for_meta_id(state: dict, meta_id: str, origin: str) -> list[dict]:
                 if idx is not None:
                     stream = stream_for(e, origin, idx)
             if stream is None and own and (season is None or _label_alone_names_the_file(e)):
-                stream = stream_for(e, origin)
+                idx = playable_index(e, arriving=season is not None)
+                if idx is not None:
+                    stream = stream_for(e, origin, idx)
         if stream is not None:
-            out.append(stream)
-    return out
+            chosen = _file_at(e, idx)
+            (arriving if chosen is not None and not is_complete(chosen) else here).append(stream)
+    return here + arriving
 
 
 def find_entry(state: dict, info_hash: str) -> dict | None:
