@@ -316,7 +316,12 @@ class _ColdHandle(_FakeHandle):
         self._paused = False
 
     def boost_piece(self, p, ms, keep_existing=False):
-        self.calls.append(("boost_piece", p, keep_existing))
+        # A deadline: libtorrent's time-critical mode, one block at a time from the peers it
+        # reserves for it. The head does not arrive within these tests' patience that way.
+        self.calls.append(("boost_piece", p))
+
+    def prioritize_pieces(self, pieces, prio=7):
+        self.calls.append(("prioritize_pieces", list(pieces), prio))
         if not self._paused:
             self._present = True
 
@@ -327,15 +332,16 @@ _MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 200
 def test_a_cold_heads_piece_is_asked_for_before_the_wait(tmp_path):
     # The wait polled for the head's piece without asking for it, so a cold torrent's first
     # /hlsv2/probe waited out the whole first-piece timeout and answered 504. The piece is now
-    # rushed the way a viewer's own read would, but never over a viewer's deadline (keep_existing),
-    # and without refocus, which would drop the window of someone already watching.
+    # asked for at top priority, without a deadline: libtorrent fetches a deadlined piece one block
+    # at a time, which from one upload-capped seeder took a minute for a 1 MiB head. And without
+    # refocus, which would drop the window of someone already watching.
     (tmp_path / "movie.mp4").write_bytes(_MP4)
     h = _ColdHandle("movie.mp4", len(_MP4))
     r = _req(first_piece_timeout=2)
     r.app.state.engine = _FakeEngine(str(tmp_path), h)
     url = f"http://127.0.0.1:11470/{IH}/0"
     assert media_fetch.resolve_media_input(r, url) == url
-    assert h.calls[:2] == [("focus_file", 0), ("boost_piece", 0, True)]
+    assert h.calls[:2] == [("focus_file", 0), ("prioritize_pieces", [0], 7)]
     assert ("refocus",) not in h.calls
 
 
@@ -348,7 +354,7 @@ def test_a_paused_torrent_is_resumed_for_a_head_it_does_not_have(tmp_path):
     r.app.state.engine = _FakeEngine(str(tmp_path), h)
     url = f"http://127.0.0.1:11470/{IH}/0"
     assert media_fetch.resolve_media_input(r, url) == url
-    assert h.calls[:3] == [("focus_file", 0), ("resume",), ("boost_piece", 0, True)]
+    assert h.calls[:3] == [("focus_file", 0), ("resume",), ("prioritize_pieces", [0], 7)]
 
 
 class _SplitHeadHandle(_FakeHandle):
