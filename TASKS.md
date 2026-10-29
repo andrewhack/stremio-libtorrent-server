@@ -81,11 +81,14 @@ what "done" looks like, so it can be picked up without context.
 
 ## Streaming & transcoding
 
-- [ ] **The head check before ffprobe waits for a piece nobody asked for.** The manifest refusal
-  (1.6.20) waits for the file's first piece without boosting it, so a cold torrent's first
-  `/hlsv2/probe` can wait out the whole first-piece timeout and answer 504. *Done =* the head piece
-  is prioritised before the wait, the wait stays fail-closed, and a trace on a cold torrent shows
-  the probe answering as soon as the piece lands.
+- [x] **The head check before ffprobe asks for the piece it waits on (1.6.50).** The manifest
+  refusal (1.6.20) waited for the file's first piece without asking for it, so a cold torrent's
+  first `/hlsv2/probe` answered whenever rarest-first happened to fetch that piece, or 504 after the
+  first-piece timeout. The check now focuses the file, resumes a torrent the seed policy paused,
+  and sets the head piece to top priority -- not a deadline, which libtorrent serves one block at a
+  time from the peers it reserves for it. The wait stays fail-closed. Traced on a cold torrent from
+  one upload-capped seeder: before, 504 after 120 s with a quarter of the file downloaded but not
+  its first piece; after, the probe answers about a second after the first byte arrives.
 
 - [x] **Transcoding a torrent still downloading no longer ends at the first long stall (1.6.38).**
   The byte route ends a response when a piece misses its timeout, and ffmpeg took a body shorter
@@ -110,12 +113,14 @@ what "done" looks like, so it can be picked up without context.
 - [ ] **Sometimes a play does not start while its download runs.** Reported in use: the library
   shows the file downloading past 30% and the player still has not started; going back to the
   title and playing again starts at once. Not traced, and no pattern found yet. Two known
-  mechanisms look like this from the outside. A transcoded play whose `/hlsv2/probe` waits out the
-  first-piece timeout (the head-check item above) leaves the client gone while the download goes
-  on. A re-check of a torrent that lost its resume data looks like a download on the library page,
-  which has no checking state. Neither leaves a trace: the hlsv2 504s are not logged. *Done =* the
-  hlsv2 504s are logged once each, a stuck start is traced to its cause, and that cause is fixed or
-  shown to be the head-check item.
+  mechanisms look like this from the outside. A transcoded play whose `/hlsv2/probe` waited out the
+  first-piece timeout (the head-check item above, fixed in 1.6.50) left the client gone while the
+  download went on: its trace on a cold torrent shows exactly this, a quarter of the file down and
+  the probe answering 504, logged as `media source head unavailable`. A re-check of a torrent that
+  lost its resume data looks like a download on the library page, which has no checking state. The
+  other hlsv2 504s (`probe timed out`, `transcode did not start`) are not logged. *Done =* those
+  504s are logged once each, and a stuck start on 1.6.50 or later is traced to its cause and fixed,
+  or none recurs.
 
 ## Library UI
 
