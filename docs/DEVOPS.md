@@ -25,6 +25,12 @@ whose first bytes never arrived. The line names a torrent by infohash and file i
 source only as external, because its URL can carry a token. The GPU is optional at
 the orchestration level too, so a missing/broken NVIDIA driver never blocks startup.
 
+The programs the container runs come from the base image: nginx, node, openssl, curl, ffmpeg and
+ffprobe, plus a few coreutils. `docker/check-runtime-tools.sh` fails the image build, naming
+any that are missing, so a base rebuilt without one cannot ship. The variables the compose files
+read are listed, empty, in `.env.example`. Copy it to `.env` (ignored by git and by the build) to
+set them in a file; `.env` can hold the VPN private key, so it stays out of commits.
+
 **Recommended — durable launcher** (auto-detects GPU, degrades to VAAPI/CPU, safe to re-run):
 ```sh
 docker build -t stremio-libtorrent-server:dev .

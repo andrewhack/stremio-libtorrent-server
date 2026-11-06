@@ -283,9 +283,13 @@ what "done" looks like, so it can be picked up without context.
   certificate arrives, records the reason in `cert-status.json`, logs one plain line per attempt,
   and `/health` reports `certStatus` (degraded while waiting).
 
-- [ ] **Image and repo hygiene.** `.env` is not gitignored and there is no `.env.example`; the image
-  relies on `openssl` and `curl` arriving with the base without checking. *Done =* `.env` ignored
-  and an example committed; a build-time check for the tools the entrypoint needs.
+- [x] **Image and repo hygiene (1.6.56).** `.env` was not gitignored and there was no
+  `.env.example`; the image relied on `openssl` and `curl` arriving with the base without checking.
+  `.env` is now ignored by git and by the build context, and `.env.example` lists every variable
+  the compose files read, empty, kept complete by a test that reads the compose files.
+  `docker/check-runtime-tools.sh` fails the build, naming what is missing, unless the base
+  provides every program the container runs: nginx, node, openssl, curl, timeout, sed, date, tr,
+  ffmpeg and ffprobe.
 
 ## Tooling & docs
 

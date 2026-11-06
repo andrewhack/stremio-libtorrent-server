@@ -4,5 +4,6 @@
 **/*.pyc
 .pytest_cache
 .ruff_cache
+.env
 docs
 tests

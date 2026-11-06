@@ -18,3 +18,5 @@ CLAUDE.md
 # probe captures and monitor runtime state, never part of the product.
 compat/out/
 monitor/state/
+# A deployment's own compose variables (it can hold a VPN private key). .env.example lists them.
+.env

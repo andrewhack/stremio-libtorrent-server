@@ -16,6 +16,9 @@ WORKDIR /srv/app
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 COPY docker ./docker
+# The programs the entrypoint and the server run all come from the base. Fails the build, naming
+# them, if a base rebuild dropped one, rather than shipping an image that fails at startup.
+RUN sh docker/check-runtime-tools.sh
 # Pin Python 3.12: libtorrent 2.0.11 only publishes cp312/cp313 wheels (no 3.14).
 RUN uv sync --no-dev --python 3.12 && chmod +x docker/entrypoint.sh
 # The web player's loader seeds the streaming-server URL once and then keeps the user's pick; the

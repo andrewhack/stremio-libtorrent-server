@@ -89,7 +89,7 @@ docker run -d --name stremio --restart unless-stopped \
   `https://192-168-1-50.519b6502d940.stremio.rocks:12470` *(replace `192-168-1-50` with your internal IP, dots written as dashes)*.
 
 Sign into Stremio, add your addons, press play. 🍿
-*(Prefer a file? Grab [`compose.hub.yaml`](compose.hub.yaml) → `IPADDRESS=YOUR_SERVER_IP docker compose -f compose.hub.yaml up -d`.)*
+*(Prefer a file? Grab [`compose.hub.yaml`](compose.hub.yaml) → `IPADDRESS=YOUR_SERVER_IP docker compose -f compose.hub.yaml up -d`. To keep the variables in a file instead, copy [`.env.example`](.env.example) to `.env` beside it.)*
 
 ---
 
