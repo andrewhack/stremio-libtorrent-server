@@ -6,6 +6,7 @@ server byte-for-byte — the player follows whatever URIs we publish.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.parse
 from pathlib import Path
@@ -22,6 +23,26 @@ from stremiosrv.transcode.probe import ProbeTimeoutError, probe_media
 router = APIRouter(prefix="/hlsv2")
 
 _M3U8 = "application/vnd.apple.mpegurl"
+
+# How long the playlist route waits for a new encode's first playlist before answering 504.
+_START_WAIT = 25
+
+# The converter's logger: once the server runs it has a handler of its own, so these lines reach
+# the log beside the other [transcode] lines. Each 504 below logs one line. A player that gives up
+# on a 504 looks from the outside like a play that never started, and without the line there is
+# nothing to match such a report against.
+logger = logging.getLogger("stremiosrv.transcode")
+
+
+def _source(request: Request, media_url: str) -> str:
+    """How a log line names the media. Our own torrent stream by infohash and file, as the head
+    check in media_fetch does; anything else only as external, because its URL can carry a token
+    (a debrid link) and its host says where someone streams from."""
+    if is_own_media_url(request, media_url):
+        parts = urllib.parse.urlsplit(media_url).path.strip("/").split("/")
+        if len(parts) >= 2:
+            return f"[{parts[0].lower()} file {parts[1]}]"
+    return "an external source"
 
 
 def _converter(request: Request):
@@ -75,6 +96,8 @@ def probe(mediaURL: str, request: Request) -> dict:
     try:
         pr = probe_media(media)
     except ProbeTimeoutError as e:
+        logger.warning("transcode: ffprobe timed out on %s; /hlsv2/probe answered 504",
+                       _source(request, mediaURL))
         raise HTTPException(status_code=504, detail="probe timed out") from e
     if "hls" in (pr.get("format", {}).get("name") or ""):
         raise HTTPException(status_code=415, detail="playlist inputs are not accepted")
@@ -98,6 +121,9 @@ def master(
     try:
         pr = probe_media(media)
     except ProbeTimeoutError as e:
+        # %r: the job id comes straight from the URL, and a newline in it must not forge a line.
+        logger.warning("transcode: ffprobe timed out on %s; the playlist of job %r answered 504",
+                       _source(request, mediaURL), job_id)
         raise HTTPException(status_code=504, detail="probe timed out") from e
     if "hls" in (pr.get("format", {}).get("name") or ""):
         raise HTTPException(status_code=415, detail="playlist inputs are not accepted")
@@ -107,8 +133,10 @@ def master(
     except ValueError as e:
         raise HTTPException(status_code=400, detail="invalid job id") from e
     # An encode that fails on the GPU before its first playlist is restarted in software meanwhile.
-    if not _wait_file(d / first_playlist(dec), 25,
+    if not _wait_file(d / first_playlist(dec), _START_WAIT,
                       while_waiting=lambda: conv.retry_in_software(job_id)):
+        logger.warning("transcode: job %r did not start within %d s (no playlist written); "
+                       "answered 504 for %s", job_id, _START_WAIT, _source(request, mediaURL))
         raise HTTPException(status_code=504, detail="transcode did not start")
     return FileResponse(d / "master.m3u8", media_type=_M3U8)
 

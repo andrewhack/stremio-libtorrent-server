@@ -18,7 +18,11 @@ The image **always starts**, with or without a GPU — it autodetects the transc
 (NVIDIA → `nvenc-linux`, else the first VAAPI render node that encodes a few test frames of H.264 →
 `vaapi-renderD<n>`, else CPU/libx264). Each render node's result is printed at startup
 (`[transcode] VAAPI: …`). A hardware encode that fails before its first segment is restarted in
-software, and the failed attempt's log is kept beside it as `ffmpeg-hw.log`. The GPU is optional at
+software, and the failed attempt's log is kept beside it as `ffmpeg-hw.log`. A transcode request
+the server answers with 504 logs one line saying why. The `[transcode]` lines cover ffprobe timing
+out and a job that wrote no playlist within 25 s; `media source head unavailable` covers a torrent
+whose first bytes never arrived. The line names a torrent by infohash and file index, and any other
+source only as external, because its URL can carry a token. The GPU is optional at
 the orchestration level too, so a missing/broken NVIDIA driver never blocks startup.
 
 **Recommended — durable launcher** (auto-detects GPU, degrades to VAAPI/CPU, safe to re-run):

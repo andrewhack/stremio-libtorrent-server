@@ -130,10 +130,10 @@ what "done" looks like, so it can be picked up without context.
   first-piece timeout (the head-check item above, fixed in 1.6.50) left the client gone while the
   download went on: its trace on a cold torrent shows exactly this, a quarter of the file down and
   the probe answering 504, logged as `media source head unavailable`. A re-check of a torrent that
-  lost its resume data looks like a download on the library page, which has no checking state. The
-  other hlsv2 504s (`probe timed out`, `transcode did not start`) are not logged. *Done =* those
-  504s are logged once each, and a stuck start on 1.6.50 or later is traced to its cause and fixed,
-  or none recurs.
+  lost its resume data looks like a download on the library page, which has no checking state.
+  Since 1.6.54 the other hlsv2 504s (`probe timed out`, `transcode did not start`) log one
+  `[transcode]` line each as well, so every way the transcode path can turn a player away leaves a
+  line. *Done =* a stuck start on 1.6.50 or later is traced to its cause and fixed, or none recurs.
 
 ## Library UI
 

@@ -195,6 +195,115 @@ def test_the_master_playlist_answers_504_when_ffprobe_times_out(monkeypatch):
     assert r.status_code == 504
 
 
+# --- each of those 504s leaves one log line. A player that gives up on a 504 looks, from the
+# outside, like a play that never started; without the line, the stuck-start item in TASKS.md had
+# nothing to match a report against. The head-check 504 (media_fetch) already logged its own.
+
+_OWN = "http://127.0.0.1:11470/aabbccddeeff00112233445566778899aabbccdd/3"
+_EXTERNAL = "https://cdn.example/v.mkv?token=s3cret"
+
+
+def _transcode_log(monkeypatch, caplog):
+    """Capture the transcode logger even after the GC loop has given it its own handler, which
+    turns propagation off for the rest of the process."""
+    import logging
+
+    monkeypatch.setattr(logging.getLogger("stremiosrv.transcode"), "propagate", True)
+    caplog.set_level(logging.WARNING, logger="stremiosrv.transcode")
+
+
+def _lines(caplog):
+    return [r.getMessage() for r in caplog.records if r.name == "stremiosrv.transcode"]
+
+
+def test_a_probe_timeout_on_the_probe_route_is_logged_once(monkeypatch, caplog):
+    from stremiosrv.api import hls
+
+    _transcode_log(monkeypatch, caplog)
+    monkeypatch.setattr(hls, "probe_media", _times_out)
+    monkeypatch.setattr(hls, "resolve_media_input", lambda request, url: url)
+    c = TestClient(create_app())
+    assert c.get("/hlsv2/probe", params={"mediaURL": _OWN}).status_code == 504
+    lines = _lines(caplog)
+    assert len(lines) == 1
+    assert "timed out" in lines[0] and "504" in lines[0]
+    assert "aabbccddeeff00112233445566778899aabbccdd file 3" in lines[0]
+
+
+def test_a_probe_timeout_on_the_playlist_route_is_logged_once(monkeypatch, caplog):
+    from stremiosrv.api import hls
+
+    _transcode_log(monkeypatch, caplog)
+    monkeypatch.setattr(hls, "probe_media", _times_out)
+    monkeypatch.setattr(hls, "resolve_media_input", lambda request, url: url)
+    app = create_app()
+    app.state.converter = _FakeConv()
+    r = TestClient(app).get("/hlsv2/job1/master.m3u8", params={"mediaURL": _OWN})
+    assert r.status_code == 504
+    lines = _lines(caplog)
+    assert len(lines) == 1
+    assert "timed out" in lines[0] and "job1" in lines[0]
+    assert "aabbccddeeff00112233445566778899aabbccdd file 3" in lines[0]
+
+
+def test_a_transcode_that_never_starts_is_logged_once(monkeypatch, caplog, tmp_path):
+    from stremiosrv.api import hls
+
+    _transcode_log(monkeypatch, caplog)
+    monkeypatch.setattr(hls, "probe_media", lambda url: {
+        "format": {"name": "matroska"}, "samples": {},
+        "streams": [{"track": "video", "codec": "hevc", "width": 1920}]})
+    monkeypatch.setattr(hls, "resolve_media_input", lambda request, url: url)
+    monkeypatch.setattr(hls, "_wait_file", lambda path, timeout, while_waiting=None: False)
+
+    class Conv:
+        def ensure_job(self, job_id, media_url, decision, key=None):
+            return tmp_path
+
+        def retry_in_software(self, job_id):
+            return False
+
+    app = create_app()
+    app.state.converter = Conv()
+    r = TestClient(app).get("/hlsv2/job1/master.m3u8", params={"mediaURL": _OWN})
+    assert r.status_code == 504
+    lines = _lines(caplog)
+    assert len(lines) == 1
+    assert "did not start" in lines[0] and "job1" in lines[0]
+    assert "aabbccddeeff00112233445566778899aabbccdd file 3" in lines[0]
+
+
+def test_a_newline_in_the_job_id_cannot_forge_a_log_line(monkeypatch, caplog):
+    """The job id is the client's: it reaches this line before anything has vetted it."""
+    from stremiosrv.api import hls
+
+    _transcode_log(monkeypatch, caplog)
+    monkeypatch.setattr(hls, "probe_media", _times_out)
+    monkeypatch.setattr(hls, "resolve_media_input", lambda request, url: url)
+    app = create_app()
+    app.state.converter = _FakeConv()
+    r = TestClient(app).get("/hlsv2/a%0Aforged/master.m3u8", params={"mediaURL": _OWN})
+    assert r.status_code == 504
+    lines = _lines(caplog)
+    assert len(lines) == 1 and "\n" not in lines[0]
+
+
+def test_an_external_source_is_logged_without_its_url(monkeypatch, caplog):
+    """An external mediaURL often carries a token in its query (a debrid link), and its host says
+    where someone streams from. The line says only that the source was external."""
+    from stremiosrv.api import hls
+
+    _transcode_log(monkeypatch, caplog)
+    monkeypatch.setattr(hls, "probe_media", _times_out)
+    monkeypatch.setattr(hls, "resolve_media_input", lambda request, url: url)
+    c = TestClient(create_app())
+    assert c.get("/hlsv2/probe", params={"mediaURL": _EXTERNAL}).status_code == 504
+    lines = _lines(caplog)
+    assert len(lines) == 1
+    assert "external source" in lines[0]
+    assert "s3cret" not in lines[0] and "cdn.example" not in lines[0]
+
+
 # --- Task 7: resolve_media_input wired in, protocol whitelist, HLS-format refusal (Minor 8) ---
 
 
