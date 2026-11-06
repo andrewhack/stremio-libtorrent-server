@@ -39,11 +39,15 @@ else
     echo "[launch] NVIDIA not usable -> falling back to VAAPI/CPU"
 fi
 
-# Intel VAAPI render node, if present (independent of NVIDIA).
-if [ -e /dev/dri ]; then
-    GPU_ARGS="$GPU_ARGS --device /dev/dri:/dev/dri"
-    echo "[launch] /dev/dri present -> VAAPI enabled"
-fi
+# Intel/AMD VAAPI: each render node, if any (independent of NVIDIA). Render nodes only, not the
+# whole directory: VAAPI needs nothing else, and mapping the cards too is refused in some
+# unprivileged containers. DRI overrides where the host's DRM nodes are.
+DRI="${DRI:-/dev/dri}"
+for node in "$DRI"/renderD*; do
+    [ -e "$node" ] || continue   # no match: the pattern itself comes back
+    GPU_ARGS="$GPU_ARGS --device $node:/dev/dri/${node##*/}"
+    echo "[launch] $node present -> VAAPI enabled"
+done
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 

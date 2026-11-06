@@ -36,7 +36,7 @@ exit 0
 """
 
 
-def _run(tmp_path: Path) -> subprocess.CompletedProcess:
+def _run(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProcess:
     (tmp_path / "bin").mkdir()
     stub = tmp_path / "bin" / "docker"
     stub.write_text(STUB, newline="\n")
@@ -50,6 +50,7 @@ def _run(tmp_path: Path) -> subprocess.CompletedProcess:
         DATA="/data-never-touched",
         IPADDRESS="",  # skip the host-IP probe: the script uses ${IPADDRESS-...}, not :-
     )
+    env.update(extra_env)
     return subprocess.run(
         ["sh", "-c", 'PATH="$PWD/bin:$PATH"; export PATH; exec sh ./launch.sh'],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
@@ -75,3 +76,37 @@ def test_the_launcher_runs_the_container_with_health_labels_and_log_limits(tmp_p
     assert "--label" in argv and "monitor.enabled=true" in argv
     assert "monitor.health.port=11470" in argv
     assert "--log-opt" in argv
+
+
+# --- VAAPI: render nodes only. Handing in the whole DRM directory, cards included, is refused in
+# some unprivileged containers, and VAAPI needs only a render node. DRI points the launcher at a
+# stand-in directory here, as it can on a host whose DRM nodes live elsewhere.
+
+
+def _devices(tmp_path: Path, dri: Path) -> list[str]:
+    proc = _run(tmp_path, DRI=dri.as_posix())
+    assert proc.returncode == 0, proc.stderr
+    argv = next(i for i in _invocations(tmp_path) if i[:2] == ["run", "-d"])
+    return [argv[n + 1] for n, a in enumerate(argv) if a == "--device"]
+
+
+def test_the_launcher_hands_in_each_render_node_and_no_card(tmp_path):
+    dri = tmp_path / "dri"
+    dri.mkdir()
+    for node in ("card0", "renderD128", "renderD129"):
+        (dri / node).write_text("")
+    d = dri.as_posix()
+    assert _devices(tmp_path, dri) == [f"{d}/renderD128:/dev/dri/renderD128",
+                                       f"{d}/renderD129:/dev/dri/renderD129"]
+
+
+def test_the_launcher_hands_in_no_device_without_a_render_node(tmp_path):
+    dri = tmp_path / "dri"
+    dri.mkdir()
+    (dri / "card0").write_text("")
+    assert _devices(tmp_path, dri) == []
+
+
+def test_the_launcher_hands_in_no_device_on_a_host_without_drm(tmp_path):
+    """An NVIDIA-only or GPU-less host has no DRM directory at all: still a clean start."""
+    assert _devices(tmp_path, tmp_path / "no-such-dir") == []

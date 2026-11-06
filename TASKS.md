@@ -260,9 +260,12 @@ what "done" looks like, so it can be picked up without context.
   docs' advice to forward the client address cannot take effect). *Done =* an opt-in trusted-proxy
   setting that believes those headers only from the listed addresses; unchanged when unset.
 
-- [ ] **The GPU overlays assume `/dev/dri`.** `compose.gpu.yaml` maps it even for NVIDIA-only hosts
-  that have none, and mapping the whole directory fails in some unprivileged containers. *Done =*
-  the NVIDIA overlay needs no DRM node, and VAAPI maps render nodes only.
+- [x] **The GPU overlays no longer assume `/dev/dri` (after 1.6.56; compose and host files, no
+  image change).** `compose.gpu.yaml` mapped it even for NVIDIA-only hosts that have none, and
+  mapping the whole directory fails in some unprivileged containers. The NVIDIA overlay now maps
+  no DRM node; a new `compose.vaapi.yaml` hands in one render node (`VAAPI_DEVICE`), and the two
+  combine on a host with both GPUs. `launch.sh` hands in each render node rather than the
+  directory.
 
 - [ ] **BitTorrent cannot be bound to one interface.** *Done =* a setting that pins listening and
   outgoing BitTorrent traffic to a named interface (a VPN tunnel), unset by default.

@@ -1,12 +1,11 @@
 # NVIDIA GPU overlay — apply ON TOP of compose.yaml only on hosts with the NVIDIA container runtime:
 #   docker compose -f compose.yaml -f compose.gpu.yaml up -d
-# Without this overlay the base compose still runs (VAAPI/CPU). This overlay hard-requires the
-# nvidia runtime, so only use it where NVENC is actually available.
+# Without this overlay the base compose still runs (CPU). This overlay hard-requires the
+# nvidia runtime, so only use it where NVENC is actually available. NVENC comes through the
+# runtime and needs no DRM node; for an Intel/AMD GPU as well, add compose.vaapi.yaml too.
 services:
   stremio-libtorrent-server:
     runtime: nvidia
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
-    devices:
-      - /dev/dri:/dev/dri   # Intel VAAPI render node (NVENC comes via the nvidia runtime)

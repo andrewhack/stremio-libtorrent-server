@@ -1,0 +1,10 @@
+# Intel/AMD GPU (VAAPI) overlay — apply ON TOP of compose.yaml on hosts with a render node:
+#   docker compose -f compose.yaml -f compose.vaapi.yaml up -d
+# Combine it with compose.gpu.yaml on a host with both GPUs. It maps one render node, not the
+# whole /dev/dri: VAAPI needs nothing else, and mapping the cards too is refused in some
+# unprivileged containers. Set VAAPI_DEVICE if yours is not renderD128 (`ls /dev/dri`); the
+# server tries every render node it is given at startup and logs which one it uses.
+services:
+  stremio-libtorrent-server:
+    devices:
+      - "${VAAPI_DEVICE:-/dev/dri/renderD128}:${VAAPI_DEVICE:-/dev/dri/renderD128}"
