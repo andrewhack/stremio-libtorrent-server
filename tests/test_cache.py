@@ -654,3 +654,34 @@ def test_a_refused_evictor_keeps_trying(tmp_path, monkeypatch):
     except SystemExit:
         pass
     assert len(sleeps) == 3, "gave up instead of re-checking the claim"
+
+
+# --- the free-space reserve: one rule, on the server, that the download route, /health and the
+# library page all read. It lived only in the page, so anything that called the API directly could
+# fill the disk out from under the resume files, the transcode segments and the logs.
+
+GIB = 1024 ** 3
+
+
+def test_the_disk_reserve_is_the_larger_of_a_floor_and_a_fraction():
+    from stremiosrv import cache as cachemod
+
+    assert cachemod.disk_reserve(40 * 10**9) == 2 * GIB      # 2% of 40 GB is under the floor
+    assert cachemod.disk_reserve(2 * 10**12) == 40 * 10**9    # 2% of 2 TB is worth holding back
+    assert cachemod.disk_reserve(0) == 2 * GIB                # a disk that could not be measured
+
+
+def test_usage_reports_the_reserve_beside_the_free_space(tmp_path, monkeypatch):
+    from stremiosrv import cache as cachemod
+
+    monkeypatch.setattr(cachemod, "disk_space", lambda root: (60 * 10**9, 2 * 10**12))
+    u = cachemod.usage(str(tmp_path), 0)
+    assert (u["diskFree"], u["diskTotal"], u["diskReserve"]) == (60 * 10**9, 2 * 10**12, 40 * 10**9)
+
+
+def test_an_unmeasurable_disk_reads_as_empty_with_the_floor_reserve(tmp_path, monkeypatch):
+    from stremiosrv import cache as cachemod
+
+    monkeypatch.setattr(cachemod, "disk_space", lambda root: None)
+    u = cachemod.usage(str(tmp_path), 0)
+    assert (u["diskFree"], u["diskTotal"], u["diskReserve"]) == (0, 0, 2 * GIB)

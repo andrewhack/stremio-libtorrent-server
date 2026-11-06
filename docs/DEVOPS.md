@@ -122,8 +122,11 @@ Stremio UI playing through our engine — no separate client needed.
   binds an inbound listener**, so forwarding 6881 to the host improves peer connectivity and speeds.
 
 ### Health & monitoring
-- `GET /health` follows the ITCOM contract: `200` healthy / `503` degraded, body
-  `{"status": "...", "components": {...}}`.
+- `GET /health` follows the ITCOM contract: `200` healthy / `503` degraded or unhealthy, body
+  `{"status": "...", "components": {...}}`. Components: `http`; `cert` while a certificate is
+  present (see `monitoring.md`); `disk` once the cache directory exists, `degraded` while its free
+  space is inside the reserve the library holds back (the larger of 2 GiB and 2% of the disk) and
+  `down`, making the server unhealthy, when it cannot be measured.
 - The compose service carries `monitor.*` labels for AHM auto-discovery, plus a Docker `healthcheck`.
 
 ### CI/CD

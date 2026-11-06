@@ -1166,9 +1166,10 @@ const LIB = (() => {
   const sizeVerdict = (size, b) => {
     b = b || {};
     if (b.diskFree == null || !b.cacheSize) return 'ok';   // nothing to judge against
-    // A floor for a small disk, a fraction for a large one: 2% of a 2 TB disk is worth holding
-    // back, and 2% of a 16 GB one is not.
-    const reserve = Math.max(2 * 1024 ** 3, Math.ceil((b.diskTotal || 0) * 0.02));
+    // The server's reserve (a floor for a small disk, a fraction for a large one), which its
+    // download route enforces too. Read from the state rather than worked out again here, so the
+    // page and the server cannot disagree about where the line is.
+    const reserve = b.diskReserve || 0;
     // Downloads already running have claimed space they have not written yet. It is in neither
     // `df` nor the cache total, so judging a new download on those alone approves things there
     // will be no room for once everything in flight has finished -- which is exactly when the

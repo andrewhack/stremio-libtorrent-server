@@ -272,6 +272,27 @@ def _wanted_file(body: DownloadBody) -> dict | None:
     return {"season": season, "episode": episode}
 
 
+def _refuse_inside_reserve(cache_root: str, eng) -> None:
+    """Refuse a new download while the disk is already inside its free-space reserve.
+
+    Not the pin guard: a download is evictable cache, so the cache budget is not held back beside
+    it, only the reserve the server cannot do without (cache.disk_reserve). What running downloads
+    still need counts as taken. A fresh magnet has no size until its metadata arrives, so this is
+    the check the server can make without one; the page also refuses a release whose reported size
+    would cross the reserve. Checked before the add, so nothing starts on a refused click. A disk
+    that cannot be measured refuses nothing here: /health reports it down."""
+    space = cachemod.disk_space(cache_root)
+    if space is None:
+        return
+    disk_free, total = space
+    free = max(0, disk_free - statemod.committed_bytes(eng.tracked_status() or []))
+    reserve = cachemod.disk_reserve(total)
+    if free < reserve:
+        # Flat body, the same as Keep's, which the page already reads ("Needs X, Y free").
+        raise HTTPException(status_code=409, detail={"error": "insufficient_space",
+                                                     "needed": reserve, "free": free})
+
+
 @router.post("/api/download", dependencies=[Depends(require_session)])
 def download(body: DownloadBody, request: Request) -> dict:
     """Start a full download of a magnet the PAGE resolved.
@@ -283,6 +304,7 @@ def download(body: DownloadBody, request: Request) -> dict:
     if not body.magnet.startswith("magnet:"):
         raise HTTPException(status_code=400, detail="a magnet URI is required")
     eng = _engine_or_503(request)
+    _refuse_inside_reserve(_settings(request).cache_root, eng)
     try:
         handle = eng.add(body.magnet)
     except Exception as e:  # noqa: BLE001 - a magnet libtorrent cannot parse is a bad request
@@ -292,8 +314,9 @@ def download(body: DownloadBody, request: Request) -> dict:
     # Wanted, not pinned. A download is the same operation as playback -- "this file is wanted" --
     # and pinning it would hand it an eviction exemption nobody asked for, which is how a season
     # pack came to sit far above the cache budget with the evictor unable to touch it. Keeping a
-    # title is a separate, manual act, and there is no disk guard here for the same reason there is
-    # none on playback: the evictor is what manages space.
+    # title is a separate, manual act, and the pin guard does not apply here for the same reason
+    # it does not on playback: the evictor is what manages space. The only refusal is the reserve
+    # above, which keeps the disk itself from filling.
     eng.want(info_hash, _wanted_file(body))
     if body.label:
         labelsmod.put(_settings(request).cache_root, info_hash, body.label)

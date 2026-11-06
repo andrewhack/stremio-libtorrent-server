@@ -373,3 +373,53 @@ def test_pin_requires_a_session(tmp_path, monkeypatch):
     s = Settings(library_ui=True, cache_root=str(tmp_path))
     c = TestClient(create_app(settings=s, engine=FakeEngine()), base_url="https://testserver")
     assert c.post("/library/api/pin", json={"infoHash": IH}, headers=HTTPS).status_code == 401
+
+
+# --- the free-space reserve, on the server. The page held it back, the route did not, so anything
+# calling the API directly could fill the disk. A fresh magnet has no size until its metadata
+# arrives, so what the server can refuse without one is a disk already inside the reserve; the
+# size check stays the page's, with the size the addon reported.
+
+GIB = 1024 ** 3
+
+
+def _disk(monkeypatch, free, total=100 * GIB):
+    from stremiosrv import cache as cachemod
+
+    monkeypatch.setattr(cachemod, "disk_space", lambda root: (free, total))
+
+
+def test_a_download_is_refused_when_the_disk_is_already_inside_its_reserve(ctx, monkeypatch):
+    c, eng, _ = ctx
+    _disk(monkeypatch, free=1 * GIB)          # on a 100 GiB disk the reserve is the 2 GiB floor
+    r = c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
+    assert r.status_code == 409
+    assert r.json() == {"error": "insufficient_space", "needed": 2 * GIB, "free": 1 * GIB}
+    assert eng.added == [] and eng.wanted == [], "nothing may start on a refused download"
+
+
+def test_what_running_downloads_still_need_counts_as_taken(tmp_path, monkeypatch):
+    eng = FakeEngine()
+    eng.tracked_status = lambda: [{"infoHash": "f" * 40, "remaining": 2 * GIB}]
+    c = _signed_in(tmp_path, monkeypatch, eng)
+    _disk(monkeypatch, free=3 * GIB)
+    r = c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
+    assert r.status_code == 409 and r.json()["free"] == 1 * GIB
+    assert eng.added == []
+
+
+def test_a_download_with_room_above_the_reserve_starts(ctx, monkeypatch):
+    c, eng, _ = ctx
+    _disk(monkeypatch, free=3 * GIB)
+    r = c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
+    assert r.status_code == 200 and eng.added == [MAGNET]
+
+
+def test_a_disk_that_cannot_be_measured_does_not_refuse_a_download(ctx, monkeypatch):
+    """/health reports it down; refusing every download as well would add nothing."""
+    from stremiosrv import cache as cachemod
+
+    c, eng, _ = ctx
+    monkeypatch.setattr(cachemod, "disk_space", lambda root: None)
+    r = c.post("/library/api/download", json={"magnet": MAGNET}, headers=HTTPS)
+    assert r.status_code == 200 and eng.added == [MAGNET]

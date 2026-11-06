@@ -5,6 +5,7 @@ from importlib.metadata import version as _pkg_version
 
 from fastapi import APIRouter, Request, Response
 
+from stremiosrv import cache as cachemod
 from stremiosrv.certcheck import cert_days_left
 
 router = APIRouter()
@@ -32,13 +33,29 @@ def _cert_status(cache_root: str) -> dict | None:
     return {k: data.get(k) for k in _CERT_STATUS_KEYS}
 
 
+def _disk(cache_root: str) -> str | None:
+    """The cache disk. Inside its free-space reserve (cache.disk_reserve) new downloads are refused
+    and the writes the server cannot do without are close to failing: degraded. A cache root that
+    cannot be measured: down. None when there is no cache root yet, as for a dev or test run, which
+    stays healthy just as one without a certificate does."""
+    if not os.path.isdir(cache_root):
+        return None
+    space = cachemod.disk_space(cache_root)
+    if space is None:
+        return "down"
+    free, total = space
+    return "ok" if free >= cachemod.disk_reserve(total) else "degraded"
+
+
 @router.get("/health")
 def health(request: Request, response: Response) -> dict:
     """ITCOM health contract: 200 healthy / 503 degraded|unhealthy.
 
     Components reflect real dependencies. The `cert` component is reported only when a TLS cert is
     actually present (so dev/test stays healthy), and flags a lapsing trusted cert before it expires
-    — early warning for the shared `*.stremio.rocks` wildcard (or a bring-your-own cert).
+    — early warning for the shared `*.stremio.rocks` wildcard (or a bring-your-own cert). The
+    `disk` component is reported once the cache root exists (see _disk). Any component `down`
+    makes the server unhealthy; anything else short of ok, degraded.
     """
     components = {"http": "ok"}
     extra: dict = {}
@@ -59,6 +76,12 @@ def health(request: Request, response: Response) -> dict:
             # one: TVs and the desktop app cannot connect. That is degraded, whatever its day count.
             if cert_status["state"] == "waiting":
                 components["cert"] = "degraded"
-    status = "healthy" if all(v == "ok" for v in components.values()) else "degraded"
+        disk = _disk(settings.cache_root)
+        if disk is not None:
+            components["disk"] = disk
+    if all(v == "ok" for v in components.values()):
+        status = "healthy"
+    else:
+        status = "unhealthy" if "down" in components.values() else "degraded"
     response.status_code = 200 if status == "healthy" else 503
     return {"status": status, "components": components, "version": _VERSION, **extra}

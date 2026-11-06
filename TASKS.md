@@ -206,10 +206,14 @@ what "done" looks like, so it can be picked up without context.
   it holds, measured as the evictor does) plus the 10% slack: an empty cache gets the old reserve,
   and a pin that would fill the disk is still refused.
 
-- [ ] **The free-space reserve lives only in the page.** The download button holds back the larger
-  of 2 GiB and 2% of the disk, but `POST /library/api/download` itself has no guard, and `/health`
-  says nothing about the disk. *Done =* the reserve is enforced by the server too (a 409 like
-  Keep's), the page reads it from the state, and `/health` has a `disk` component.
+- [x] **The free-space reserve is the server's (1.6.55).** The download button held back the larger
+  of 2 GiB and 2% of the disk, but `POST /library/api/download` itself had no guard, and `/health`
+  said nothing about the disk. The rule now lives on the server (`cache.disk_reserve`) and the
+  state reports it as `diskReserve`, which the page reads instead of working out its own. The route
+  answers 409 (Keep's flat body) while free space, less what running downloads still need, is
+  already inside the reserve. A fresh magnet has no size until its metadata arrives, so judging the
+  file's own size stays the page's, with the size the addon reports. `/health` has a `disk`
+  component: degraded inside the reserve, down (unhealthy) when the disk cannot be measured.
 
 - [ ] **No way to play a title from the library page.** *Done =* a card (and each file of a pack)
   offers Watch, opening it in the bundled player through its own deep link.

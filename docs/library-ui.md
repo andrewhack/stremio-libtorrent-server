@@ -147,8 +147,12 @@ carries the episode's name too, is never fetched in its place. When nothing narr
 example, the whole torrent. The page's buttons and its episode ticks read the same file.
 
 A download is **ordinary cache**: fetched in full, then managed like anything the server has
-streamed, so the evictor may reclaim it once the cache is over budget. The page offers the button
-only while the disk can spare the file and still keep the larger of 2 GiB and 2% of itself free.
+streamed, so the evictor may reclaim it once the cache is over budget. The server holds back a
+free-space reserve, the larger of 2 GiB and 2% of the disk, and reports it in the state. The page
+offers the button only while the disk can spare the file and still keep that reserve free. The
+server refuses a download itself (409, with how much it needs) while free space, less what running
+downloads still need, is already inside the reserve. It cannot judge the file's size: a magnet has
+none until its metadata arrives, so the size check is the page's, using the size the addon reports.
 While anything is being watched, background downloads yield the bandwidth
 (`STREMIOSRV_IDLE_DOWNLOAD_RATE_LIMIT`).
 

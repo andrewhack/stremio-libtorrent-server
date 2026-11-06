@@ -107,6 +107,7 @@ def test_cache_usage(tmp_path):
 def test_cache_usage_missing_dir_is_safe():
     assert usage("/no/such/dir", budget=42) == {
         "cacheUsed": 0, "cacheSize": 42, "transcodeUsed": 0, "diskFree": 0, "diskTotal": 0,
+        "diskReserve": 2 * 1024 ** 3,  # an unmeasured disk still holds back the floor
     }
 
 

@@ -582,7 +582,8 @@ def test_the_card_states_both_completeness_and_keptness():
 def test_a_release_that_cannot_fit_is_refused():
     """No room on the DISK is the only case that disables the button."""
     src = _fits_src()
-    b = "{diskFree: 60e9, diskTotal: 80e9, cacheUsed: 0, cacheSize: 19327352832}"
+    b = ("{diskFree: 60e9, diskTotal: 80e9, diskReserve: 2147483648, cacheUsed: 0, "
+         "cacheSize: 19327352832}")
     assert _run_js(src, f"sizeVerdict(4.5e9, {b})") == "ok"
     assert _run_js(src, f"sizeVerdict(59e9, {b})") == "nodisk"
 
@@ -595,20 +596,24 @@ def test_the_download_gate_does_not_reserve_the_cache_budget_the_way_a_pin_does(
     the release, so a 10 GB file was greyed out on a box with 61 GB free.
     """
     src = _fits_src()
-    b = "{diskFree: 61e9, diskTotal: 72e9, cacheUsed: 30e9, cacheSize: 51539607552}"
+    b = ("{diskFree: 61e9, diskTotal: 72e9, diskReserve: 2147483648, cacheUsed: 30e9, "
+         "cacheSize: 51539607552}")
     assert _run_js(src, f"sizeVerdict(10e9, {b})") != "nodisk"
     # The reserve is real, though: a release that would leave the disk bare is still refused.
     assert _run_js(src, f"sizeVerdict(60e9, {b})") == "nodisk"
 
 
-def test_the_reserve_scales_with_the_disk():
-    """A flat floor is too little to hold back on a large disk and too much on a small one, so it
-    is the larger of the two. Nothing fits when free space is already inside it."""
+def test_the_page_applies_the_reserve_the_server_reports():
+    """The reserve is the server's rule (cache.disk_reserve, tested there), and the download route
+    enforces it too, so the page must not work out a second copy that could drift from it. The
+    same 2 TB disk with 30 GB free is refused under the 40 GB reserve the server reports for it and
+    admitted under a smaller one: only the reported value can make that difference."""
     src = _fits_src()
-    big = "{diskFree: 30e9, diskTotal: 2e12, cacheUsed: 0, cacheSize: 19327352832}"
-    assert _run_js(src, f"sizeVerdict(0, {big})") == "nodisk"      # 2% of 2 TB is 40 GB
-    small = "{diskFree: 30e9, diskTotal: 40e9, cacheUsed: 0, cacheSize: 19327352832}"
-    assert _run_js(src, f"sizeVerdict(1e9, {small})") == "ok"      # 2% of 40 GB is under the floor
+    big = ("{diskFree: 30e9, diskTotal: 2e12, diskReserve: 40e9, cacheUsed: 0, "
+           "cacheSize: 19327352832}")
+    assert _run_js(src, f"sizeVerdict(0, {big})") == "nodisk"
+    small = big.replace("diskReserve: 40e9", "diskReserve: 2147483648")
+    assert _run_js(src, f"sizeVerdict(1e9, {small})") == "ok"
 
 
 def test_a_release_that_overruns_the_budget_is_offered_with_a_warning():
@@ -631,10 +636,10 @@ def test_an_unknown_release_size_is_not_treated_as_refusal():
     the free space was still clickable.
     """
     src = _fits_src()
-    roomy = "{diskFree: 60e9, cacheUsed: 0, cacheSize: 19327352832}"
+    roomy = "{diskFree: 60e9, diskReserve: 2147483648, cacheUsed: 0, cacheSize: 19327352832}"
     assert _run_js(src, f"sizeVerdict(0, {roomy})") == "ok"
     assert _run_js(src, "sizeVerdict(5e9, {})") == "ok"          # nothing to judge against
-    cramped = "{diskFree: 1e9, cacheUsed: 0, cacheSize: 19327352832}"
+    cramped = "{diskFree: 1e9, diskReserve: 2147483648, cacheUsed: 0, cacheSize: 19327352832}"
     assert _run_js(src, f"sizeVerdict(0, {cramped})") == "nodisk"
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -251,6 +252,29 @@ def scan_cache(root: str, protected: frozenset[str] = PROTECTED) -> list[dict]:
     return items
 
 
+DISK_RESERVE_FLOOR = 2 * 1024 ** 3
+DISK_RESERVE_FRACTION = 0.02
+
+
+def disk_space(root: str) -> tuple[int, int] | None:
+    """(free, total) bytes of the disk the cache lives on, or None when it cannot be measured."""
+    try:
+        du = shutil.disk_usage(root)
+    except OSError:
+        return None
+    return du.free, du.total
+
+
+def disk_reserve(total: int) -> int:
+    """Free space a new download may not eat into, so the disk keeps room for what the server
+    cannot do without: resume records, transcode segments, the logs.
+
+    The larger of a floor and a fraction: 2% of a 2 TB disk is worth holding back, and 2% of a
+    16 GB one is not. One rule, here, read by the download route, by /health and (through the
+    library state) by the page, which used to work out a copy of its own."""
+    return max(DISK_RESERVE_FLOOR, math.ceil(total * DISK_RESERVE_FRACTION))
+
+
 def usage(root: str, budget: int) -> dict:
     """Cache footprint vs budget + free disk — for the appliance suggestion advisor.
 
@@ -267,14 +291,10 @@ def usage(root: str, budget: int) -> dict:
     """
     used = sum(i["size"] for i in scan_cache(root))
     transcode, _ = _stat_tree(os.path.join(root, "transcode"))
-    try:
-        du = shutil.disk_usage(root)
-        free, total = du.free, du.total
-    except OSError:
-        free, total = 0, 0
+    free, total = disk_space(root) or (0, 0)
     return {
         "cacheUsed": used, "cacheSize": budget, "transcodeUsed": transcode,
-        "diskFree": free, "diskTotal": total,
+        "diskFree": free, "diskTotal": total, "diskReserve": disk_reserve(total),
     }
 
 

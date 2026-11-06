@@ -66,3 +66,40 @@ def test_without_ipaddress_nothing_is_added(tmp_path):
 def test_a_broken_status_file_changes_nothing(tmp_path, broken):
     r = _health(tmp_path, broken)
     assert r.status_code == 200 and "certStatus" not in r.json()
+
+
+# --- the disk. Inside the free-space reserve the server refuses new downloads and is close to
+# failing the writes it cannot do without (resume records, transcode segments), so it is degraded.
+
+GIB = 1024 ** 3
+
+
+def _disk_health(tmp_path, monkeypatch, space):
+    from stremiosrv import cache as cachemod
+
+    monkeypatch.setattr(cachemod, "disk_space", lambda root: space)
+    return TestClient(create_app(settings=Settings(cache_root=str(tmp_path)))).get("/health")
+
+
+def test_a_disk_with_room_above_its_reserve_is_ok(tmp_path, monkeypatch):
+    r = _disk_health(tmp_path, monkeypatch, (20 * GIB, 72 * GIB))
+    assert r.status_code == 200 and r.json()["components"]["disk"] == "ok"
+
+
+def test_a_disk_inside_its_reserve_is_degraded(tmp_path, monkeypatch):
+    r = _disk_health(tmp_path, monkeypatch, (1 * GIB, 72 * GIB))   # reserve: the 2 GiB floor
+    assert r.status_code == 503
+    assert r.json()["status"] == "degraded" and r.json()["components"]["disk"] == "degraded"
+
+
+def test_a_cache_root_that_cannot_be_measured_is_down(tmp_path, monkeypatch):
+    r = _disk_health(tmp_path, monkeypatch, None)
+    assert r.status_code == 503
+    assert r.json()["status"] == "unhealthy" and r.json()["components"]["disk"] == "down"
+
+
+def test_no_disk_component_without_a_cache_root(tmp_path, monkeypatch):
+    """As with the certificate: a server with no cache root yet (a dev or test run) stays healthy
+    rather than reporting a disk it does not use."""
+    r = _disk_health(tmp_path / "missing", monkeypatch, None)
+    assert r.status_code == 200 and "disk" not in r.json()["components"]

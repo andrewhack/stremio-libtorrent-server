@@ -420,8 +420,13 @@ def build(cache_root: str, engine, budget: int = 0) -> dict:
     # cache.usage already reports the budget as `cacheSize`; adding a second key for it would give
     # one number two names, which is how the two spellings drift apart.
     usage = cachemod.usage(cache_root, budget)
-    # What downloads in flight have already claimed but not yet written. Neither `df` nor the cache
-    # total can see it, so judging the next download on those alone approves things there will be
-    # no room for by the time everything already running has finished.
-    usage["committed"] = sum(int(p.get("remaining") or 0) for p in pins.values())
+    usage["committed"] = committed_bytes(pins.values())
     return {"entries": entries, "budget": usage}
+
+
+def committed_bytes(statuses) -> int:
+    """What downloads in flight have already claimed but not yet written, from the engine's
+    tracked status. Neither `df` nor the cache total can see it, so judging the next download on
+    those alone approves things there will be no room for by the time everything already running
+    has finished. Shared by the state (for the page) and the download route's own guard."""
+    return sum(int(p.get("remaining") or 0) for p in statuses)
